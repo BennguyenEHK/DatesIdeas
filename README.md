@@ -81,9 +81,15 @@ npm test          # unit tests
 npx tsc --noEmit  # types
 npm run build     # production build
 
-npm run dev       # then, in another shell:
-npm run test:e2e  # two simulated peers complete a handshake against the real database
+npm run dev        # then, in another shell:
+npm run test:e2e   # two simulated peers complete a handshake against the real database
+npm run turn:check # proves the TURN relay actually allocates, not just that it returns credentials
 ```
+
+`turn:check` performs a real RFC 5766 Allocate handshake and only passes if
+Cloudflare hands back a relayed address — the same thing a browser needs before
+it can route a call through the relay. Returning credentials is not proof the
+relay works; this is.
 
 `test:e2e` drives the same HTTP routes the browser uses: both peers post a join,
 each polls and sees only the other's messages, offer/answer/ICE flow through, the

@@ -12,7 +12,8 @@
     "db:migrate": "node scripts/migrate.mjs",
     "db:status": "node scripts/db-status.mjs",
     "db:inspect": "node scripts/inspect.mjs",
-    "test:e2e": "node scripts/e2e-signal.mjs"
+    "test:e2e": "node scripts/e2e-signal.mjs",
+    "turn:check": "node scripts/turn-check.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.0.1",
