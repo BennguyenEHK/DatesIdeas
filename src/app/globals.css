@@ -1,26 +1,135 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   DatesIdea — visual direction
+
+   Themed on La La Land, but deliberately not the obvious reading of it. The
+   generic answer is a purple-to-amber gradient behind a starfield; that is the
+   poster, not the film. What the film actually looks like is saturated blocks
+   of color sitting against a twilight blue sky, framed in CinemaScope.
+
+   So the signature here is structural, not decorative: the call page is a
+   widescreen film still, and every piece of interface lives in the letterbox
+   bars above and below it. Decoration cannot creep onto the video, because
+   there is nowhere on the video for it to live.
+
+   Palette   twilight ground, one warm horizon glow, one saturated yellow
+   Type      Poiret One (art deco) for identity, Inter for everything useful
+   Motion    one film-opening moment on load, then stillness
+--------------------------------------------------------------------------- */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Ground — the Griffith Park sky, blue rather than black. */
+  --night: #131a38;
+  --dusk: #1e2148;
+  --letterbox: #080b1c;
+
+  /* Warmth — the streetlamp and the marquee. */
+  --lamp: #e8b94a;
+  --dress: #f2c230;
+
+  /* Decoration only. Fails text contrast on the night ground by design. */
+  --neon: #c74b6d;
+
+  /* Text */
+  --cream: #f5efe0;
+  --mist: #a8b2d8;
+
+  --edge: rgba(245, 239, 224, 0.14);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-night: var(--night);
+  --color-dusk: var(--dusk);
+  --color-letterbox: var(--letterbox);
+  --color-lamp: var(--lamp);
+  --color-dress: var(--dress);
+  --color-neon: var(--neon);
+  --color-cream: var(--cream);
+  --color-mist: var(--mist);
+  --color-edge: var(--edge);
+
+  --font-display: var(--font-poiret), ui-serif, Georgia, serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* A night-time app. A light mode would fight the material, so there isn't one. */
+html {
+  color-scheme: dark;
+  background: var(--night);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--night);
+  color: var(--cream);
+  font-family: var(--font-sans);
+}
+
+/* The monogram: gold letters, the join between them in neon. Decorative use
+   of neon only — it never carries text a person has to read. */
+.monogram {
+  font-family: var(--font-display);
+  color: var(--lamp);
+  letter-spacing: 0.14em;
+  line-height: 1;
+}
+.monogram .join {
+  color: var(--neon);
+  font-weight: 400;
+}
+
+/* The film-opening moment: bars close in from the edges, once, on load. */
+@keyframes bar-in-top {
+  from {
+    transform: translateY(-100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes bar-in-bottom {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.bar-top {
+  animation: bar-in-top 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.bar-bottom {
+  animation: bar-in-bottom 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.rise {
+  animation: rise 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.rise-late {
+  animation: rise 900ms cubic-bezier(0.22, 1, 0.36, 1) 220ms both;
+}
+
+:focus-visible {
+  outline: 2px solid var(--lamp);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar-top,
+  .bar-bottom,
+  .rise,
+  .rise-late,
+  .twinkle {
+    animation: none !important;
+  }
 }
