@@ -188,10 +188,15 @@ Four gestures in v1:
 | Heart hands | Both hands present; thumb tips and index tips converging below a distance threshold, hands adjacent |
 | Peace | Index + middle extended, ring + pinky curled |
 | Thumbs up | Thumb extended and vertical, other four curled |
-| Big smile | Mouth-corner spread over inter-ocular distance, above threshold |
+| Big smile | `mouthSmileLeft` / `mouthSmileRight` ARKit blendshape score above threshold |
 
-All distances are normalized by a scale reference (inter-ocular distance for face, wrist-
-to-middle-knuckle for hands) so thresholds hold regardless of how close someone sits.
+MediaPipe's `FaceLandmarker` emits 52 ARKit-style blendshapes when
+`outputFaceBlendshapes: true`. Reading `mouthSmileLeft/Right` is more robust than
+deriving mouth geometry from raw landmarks and removes an entire class of
+normalization bug — use it rather than hand-rolling the smile metric.
+
+Hand distances are normalized by a per-hand scale reference (wrist to middle-finger MCP)
+so thresholds hold regardless of how close someone sits to the camera.
 
 **Hysteresis is mandatory.** A raw threshold fires ~30x/second and turns the screen into
 a strobe. Rules: gesture must hold **300ms continuously** to fire, then a **3s cooldown**
