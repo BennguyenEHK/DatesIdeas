@@ -24,6 +24,8 @@ export interface PeerApi {
   state: ConnState;
   /** True when the selected candidate pair goes through a TURN relay. */
   relayed: boolean;
+  /** False when this peer negotiated receive-only and cannot send video. */
+  sending: boolean;
   rtt: number;
   mediaError: string | null;
   clock: SyncedClock | null;
@@ -50,6 +52,11 @@ export function usePeerConnection(
   // The clock is state, not just a ref: consumers must re-render when it
   // appears, or they hold a null clock for the life of the session.
   const [clock, setClock] = useState<SyncedClock | null>(null);
+  // False until getUserMedia has either resolved or been refused. Signalling
+  // waits on this: a peer that announces itself before it knows what it can
+  // send may be offered to, and would answer `recvonly`.
+  const [mediaSettled, setMediaSettled] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -113,12 +120,15 @@ export function usePeerConnection(
         stream = s;
         setMediaError(null);
         setLocalStream(s);
+        setMediaSettled(true);
       })
       .catch((err: DOMException) => {
         if (cancelled) return;
         // Join anyway: a receive-only session is better than a dead page.
         setMediaError(err.name === "NotAllowedError" ? "denied" : "unavailable");
         setLocalStream(null);
+        // A refusal is still a decision — proceed receive-only rather than hang.
+        setMediaSettled(true);
       });
 
     return () => {
@@ -134,7 +144,9 @@ export function usePeerConnection(
 
     if (localStream) {
       for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+      setSending(true);
     } else {
+      setSending(false);
       // No camera: still negotiate receive-only transceivers.
       pc.addTransceiver("video", { direction: "recvonly" });
       pc.addTransceiver("audio", { direction: "recvonly" });
@@ -210,6 +222,7 @@ export function usePeerConnection(
     // Once the media path is up the handshake is over; polling drops to a
     // slow heartbeat kept only for renegotiation.
     state === "connected",
+    mediaSettled,
   );
   useEffect(() => {
     sendSignalRef.current = signaling.send;
@@ -234,6 +247,10 @@ export function usePeerConnection(
     pendingIce.current = [];
     setRemoteStream(null);
     setState("idle");
+    // Re-arm the media gate so the next attempt cannot announce itself
+    // before its camera is ready.
+    setMediaSettled(false);
+    setSending(false);
     setAttempt((a) => a + 1);
   }, []);
 
@@ -242,6 +259,7 @@ export function usePeerConnection(
     remoteStream,
     state,
     relayed,
+    sending,
     rtt,
     mediaError,
     clock,

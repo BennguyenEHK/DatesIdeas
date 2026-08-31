@@ -96,6 +96,7 @@ export function RoomClient({ code }: { code: string }) {
           <ConnectionStatus
             state={peer.state}
             relayed={peer.relayed}
+            sending={peer.sending}
             rtt={peer.rtt}
             gestureReady={gesture.ready}
             gestureError={gesture.error}

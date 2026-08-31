@@ -52,6 +52,7 @@ export function useSignaling(
   code: string,
   handlers: SignalingHandlers,
   paired: boolean,
+  mediaSettled: boolean,
 ) {
   const [status, setStatus] = useState<SignalStatus>("connecting");
   const handlersRef = useRef(handlers);
@@ -82,6 +83,16 @@ export function useSignaling(
   );
 
   useEffect(() => {
+    // Do not announce until we know what we can send.
+    //
+    // Announcing early is what caused one-way video: the other peer offers
+    // immediately, and the offer is answered before getUserMedia resolves, so
+    // the answerer negotiates `recvonly` transceivers and can never send —
+    // even once its camera appears, because the connection is already built.
+    // "Settled" includes a denied camera; that is a legitimate receive-only
+    // session, and the point is only that the decision has been made.
+    if (!mediaSettled) return;
+
     const identity = getIdentity();
     const joinedAt = Date.now();
     const me: PeerInfo = { identity, joinedAt };
@@ -165,7 +176,7 @@ export function useSignaling(
     };
     // `status` is read but must not restart the loop; the poll re-reads it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [code]);
+  }, [code, mediaSettled]);
 
   return { send, status };
 }

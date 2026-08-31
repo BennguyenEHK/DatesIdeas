@@ -25,6 +25,7 @@ function Item({ children }: { children: React.ReactNode }) {
 export function ConnectionStatus({
   state,
   relayed,
+  sending,
   rtt,
   gestureReady,
   gestureError,
@@ -32,6 +33,7 @@ export function ConnectionStatus({
 }: {
   state: ConnState;
   relayed: boolean;
+  sending: boolean;
   rtt: number;
   gestureReady: boolean;
   gestureError: string | null;
@@ -48,6 +50,14 @@ export function ConnectionStatus({
 
       {/* Honest about the path. Never imply a direct link when there isn't one. */}
       {state === "connected" && relayed && <Item>via relay</Item>}
+
+      {/* A receive-only session used to fail silently: your partner saw both
+          tiles while you saw only yourself. Say it out loud instead. */}
+      {state === "connected" && !sending && (
+        <span className="text-[var(--neon)]">
+          They can&apos;t see you — your camera wasn&apos;t ready. Reconnect to fix.
+        </span>
+      )}
 
       {gestureError ? (
         <Item>Gestures unavailable here — you&apos;ll still see theirs</Item>
