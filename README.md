@@ -66,13 +66,29 @@ travels peer-to-peer and polling drops to a slow heartbeat kept only so an ICE
 restart can be negotiated if the network drops. Rows are transport, not records
 — they are swept 15 minutes after they are written.
 
+## Database
+
+```bash
+npm run db:migrate   # apply neon/migrations/*.sql (idempotent, safe to re-run)
+npm run db:inspect   # print the live schema
+npm run db:status    # row counts and recent sessions
+```
+
 ## Testing
 
 ```bash
 npm test          # unit tests
 npx tsc --noEmit  # types
 npm run build     # production build
+
+npm run dev       # then, in another shell:
+npm run test:e2e  # two simulated peers complete a handshake against the real database
 ```
+
+`test:e2e` drives the same HTTP routes the browser uses: both peers post a join,
+each polls and sees only the other's messages, offer/answer/ICE flow through, the
+cursor prevents redelivery, and a session opens, closes, and reads back with its
+reaction totals intact.
 
 The logic-bearing parts — clock offset selection, gesture thresholds and
 hysteresis, the glare tiebreak, message decoding — are pure functions and are
