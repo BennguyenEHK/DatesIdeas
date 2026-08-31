@@ -40,8 +40,11 @@ testing needs the deployed URL.
 
 - [ ] After a session ends, it appears on `/` with a plausible duration
 - [ ] Reaction totals roughly match what was triggered
-- [ ] Meme counts are written once at session end, not per gesture — check the
-      Supabase logs for exactly one UPDATE per session
+- [ ] Meme counts are written once at session end, not per gesture — check for
+      exactly one UPDATE per session against `sessions`
+- [ ] Close the tab rather than navigating away: the session still closes
+      (this is the `sendBeacon` path, and it is the common case)
+- [ ] `select count(*) from signals` stays small — handshake rows are swept
 
 ## Appearance
 

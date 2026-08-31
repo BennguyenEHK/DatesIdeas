@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import { getSupabase } from "@/lib/signaling/supabaseClient";
 import { getIdentity, getDisplayName } from "./identity";
 import { MemeCounter } from "./aggregate";
 import type { MemeId } from "@/lib/rtc/protocol";
@@ -14,15 +13,14 @@ export interface SessionRow {
 }
 
 export async function listSessions(code: string): Promise<SessionRow[]> {
-  const { data, error } = await getSupabase()
-    .from("sessions")
-    .select("id, started_at, ended_at, memes_sent")
-    .eq("couple_code", code)
-    .not("ended_at", "is", null)
-    .order("started_at", { ascending: false })
-    .limit(50);
-  if (error) return [];
-  return (data ?? []) as SessionRow[];
+  try {
+    const res = await fetch(`/api/sessions?code=${encodeURIComponent(code)}`);
+    if (!res.ok) return [];
+    const body = (await res.json()) as { sessions: SessionRow[] };
+    return body.sessions ?? [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -39,36 +37,51 @@ export function useSession(code: string, connected: boolean) {
 
   useEffect(() => {
     if (!connected) return;
-    const sb = getSupabase();
     let cancelled = false;
 
     void (async () => {
-      await sb.from("couples").upsert({ code }, { onConflict: "code" });
-      const { data } = await sb
-        .from("sessions")
-        .insert({ couple_code: code })
-        .select("id")
-        .single();
-      if (cancelled || !data) return;
-      sessionId.current = data.id as string;
-      await sb.from("participants").upsert({
-        session_id: data.id,
-        identity: getIdentity(),
-        name: getDisplayName(),
-      });
+      try {
+        const res = await fetch("/api/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            code,
+            identity: getIdentity(),
+            name: getDisplayName(),
+          }),
+        });
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as { id: string };
+        sessionId.current = body.id;
+      } catch {
+        // History is a nicety. Never let it interfere with the call.
+      }
     })();
 
     const close = () => {
       const id = sessionId.current;
       if (!id) return;
       sessionId.current = null;
-      void sb
-        .from("sessions")
-        .update({
-          ended_at: new Date().toISOString(),
-          memes_sent: counter.current.snapshot(),
-        })
-        .eq("id", id);
+      const payload = JSON.stringify({ id, memes: counter.current.snapshot() });
+
+      // On unload, fetch is cancelled but sendBeacon survives — and closing
+      // the tab is the common way a date night ends, so this is the path that
+      // has to work. sendBeacon can only POST, which is why closing has its
+      // own endpoint rather than being a PATCH on /api/sessions.
+      const beacon = navigator.sendBeacon?.bind(navigator);
+      if (beacon) {
+        beacon(
+          "/api/sessions/close",
+          new Blob([payload], { type: "application/json" }),
+        );
+        return;
+      }
+      void fetch("/api/sessions/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        keepalive: true,
+      }).catch(() => {});
     };
 
     window.addEventListener("beforeunload", close);
@@ -79,7 +92,5 @@ export function useSession(code: string, connected: boolean) {
     };
   }, [code, connected]);
 
-  // sessionId stays internal: it is a ref, and reading it during render
-  // would hand callers a stale value.
   return { recordMeme };
 }

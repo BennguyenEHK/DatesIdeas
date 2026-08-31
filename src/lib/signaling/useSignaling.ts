@@ -1,8 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RealtimeChannel } from "@supabase/supabase-js";
-import { getSupabase } from "./supabaseClient";
 import { getIdentity } from "@/lib/history/identity";
 
 export interface PeerInfo {
@@ -35,39 +33,77 @@ export interface SignalingHandlers {
   onIce: (candidate: RTCIceCandidateInit) => void;
 }
 
-export function useSignaling(code: string, handlers: SignalingHandlers) {
+/** Fast while the handshake is in flight; slow once it is done. */
+const POLL_PAIRING_MS = 500;
+const POLL_IDLE_MS = 5000;
+/** A join older than this is a leftover from a previous sitting. */
+const JOIN_FRESHNESS_MS = 2 * 60 * 1000;
+
+/**
+ * WebRTC signalling over a polled Postgres table.
+ *
+ * Neon has no realtime channel, and this handshake does not need one: it is
+ * about four messages over a few seconds, after which every byte travels
+ * peer-to-peer and this hook goes quiet. Polling drops to a slow heartbeat
+ * once paired, which is only kept at all so an ICE restart can be negotiated
+ * if the network drops mid-call.
+ */
+export function useSignaling(
+  code: string,
+  handlers: SignalingHandlers,
+  paired: boolean,
+) {
   const [status, setStatus] = useState<SignalStatus>("connecting");
-  const channelRef = useRef<RealtimeChannel | null>(null);
   const handlersRef = useRef(handlers);
-  // Refs are written in an effect, never during render.
+  const cursorRef = useRef(0);
+  const identityRef = useRef<string | null>(null);
+  const seenPeerRef = useRef<string | null>(null);
+  const pairedRef = useRef(paired);
+
   useEffect(() => {
     handlersRef.current = handlers;
+    pairedRef.current = paired;
   });
+
+  const send = useCallback(
+    (msg: SignalMessage) => {
+      const from = identityRef.current;
+      if (!from) return;
+      void fetch("/api/signal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, from, payload: msg }),
+        keepalive: true,
+      }).catch(() => {
+        /* a dropped signal is retried by the peer's next poll */
+      });
+    },
+    [code],
+  );
 
   useEffect(() => {
     const identity = getIdentity();
     const joinedAt = Date.now();
     const me: PeerInfo = { identity, joinedAt };
+    identityRef.current = identity;
+    cursorRef.current = 0;
+    seenPeerRef.current = null;
 
-    const channel = getSupabase().channel(`room:${code}`, {
-      config: { broadcast: { self: false } },
-    });
-    channelRef.current = channel;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
 
-    channel.on("broadcast", { event: "signal" }, ({ payload }) => {
-      const msg = payload as SignalMessage;
-      if ("from" in msg && msg.from === identity) return;
-
+    function handle(msg: SignalMessage) {
       switch (msg.kind) {
         case "join": {
+          // Ignore our own echo and anything left over from an earlier sitting.
+          if (msg.identity === identity) return;
+          if (Date.now() - msg.joinedAt > JOIN_FRESHNESS_MS) return;
+          // Both peers see each other's join row, so guard against acting twice.
+          if (seenPeerRef.current === msg.identity) return;
+          seenPeerRef.current = msg.identity;
+
           const them = { identity: msg.identity, joinedAt: msg.joinedAt };
           setStatus("paired");
-          // Re-announce so a peer who joined first learns about us too.
-          channel.send({
-            type: "broadcast",
-            event: "signal",
-            payload: { kind: "join", identity, joinedAt } satisfies SignalMessage,
-          });
           handlersRef.current.onPeer(them, shouldOffer(me, them));
           break;
         }
@@ -81,31 +117,55 @@ export function useSignaling(code: string, handlers: SignalingHandlers) {
           handlersRef.current.onIce(msg.candidate);
           break;
       }
-    });
+    }
 
-    channel.subscribe((s) => {
-      if (s === "SUBSCRIBED") {
-        setStatus("waiting");
-        channel.send({
-          type: "broadcast",
-          event: "signal",
-          payload: { kind: "join", identity, joinedAt } satisfies SignalMessage,
-        });
-      } else if (s === "CHANNEL_ERROR" || s === "TIMED_OUT") {
-        setStatus("error");
+    async function poll() {
+      if (stopped) return;
+      try {
+        const res = await fetch(
+          `/api/signal?code=${encodeURIComponent(code)}` +
+            `&from=${encodeURIComponent(identity)}&after=${cursorRef.current}`,
+        );
+        if (res.ok) {
+          const body = (await res.json()) as {
+            signals: SignalMessage[];
+            cursor: number;
+          };
+          cursorRef.current = body.cursor;
+          for (const msg of body.signals) handle(msg);
+          if (!stopped && status === "connecting") setStatus("waiting");
+        } else if (!stopped) {
+          setStatus("error");
+        }
+      } catch {
+        // Transient failure. Keep polling; the next tick usually succeeds.
       }
-    });
+      if (stopped) return;
+      timer = setTimeout(poll, pairedRef.current ? POLL_IDLE_MS : POLL_PAIRING_MS);
+    }
+
+    // Announce ourselves, then start listening for the other side.
+    void fetch("/api/signal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code,
+        from: identity,
+        payload: { kind: "join", identity, joinedAt } satisfies SignalMessage,
+      }),
+    })
+      .then(() => setStatus("waiting"))
+      .catch(() => setStatus("error"));
+
+    void poll();
 
     return () => {
-      channel.unsubscribe();
-      channelRef.current = null;
+      stopped = true;
+      clearTimeout(timer);
     };
+    // `status` is read but must not restart the loop; the poll re-reads it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
-
-  // Stable identity: callers hold onto this across renders.
-  const send = useCallback((msg: SignalMessage) => {
-    channelRef.current?.send({ type: "broadcast", event: "signal", payload: msg });
-  }, []);
 
   return { send, status };
 }

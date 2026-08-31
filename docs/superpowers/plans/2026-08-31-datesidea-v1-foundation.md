@@ -10,6 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-31-datesidea-foundation-design.md`
 
+> **Superseded in part.** This plan was written against Supabase and executed as
+> written. The backend was afterwards moved to Neon (Lakebase Postgres): Supabase
+> Realtime signalling became a polled `signals` table behind Next.js route
+> handlers, and the browser no longer talks to the database at all. Tasks 7 and 10
+> below therefore describe code that has since been replaced. The **spec** is
+> current; this plan is kept as the record of how v1 was built.
+
 ## Global Constraints
 
 - **Exactly two participants.** No code path may assume more. No SFU, no media server.

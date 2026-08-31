@@ -43,17 +43,28 @@ npm run dev
 
 You need two services, both free to start:
 
-**Supabase** — create a project in a region between the two participants, run
-`supabase/migrations/0001_init.sql` in the SQL editor, then copy the project URL
-and anon key into `.env.local`.
+**Neon (Lakebase Postgres)** — create a project in a region between the two
+participants, run `neon/migrations/0001_init.sql` against it, then put the
+connection string in `.env.local` as `DATABASE_URL`.
 
 **Cloudflare Realtime TURN** — create a TURN key in the Cloudflare dashboard and
 copy the Key ID and API token in. Without TURN, peers behind symmetric NAT or a
 mobile carrier will fail to connect at all; the app tells you when it has fallen
 back to plain STUN rather than hiding it.
 
-The `CLOUDFLARE_*` variables must never be given a `NEXT_PUBLIC_` prefix — they
-are minted server-side by `/api/turn` and must not reach the browser.
+No variable in this app carries a `NEXT_PUBLIC_` prefix, and none should. The
+browser never talks to Postgres: `DATABASE_URL` and the Cloudflare credentials
+are read only inside route handlers, and `src/lib/db.ts` imports `server-only`
+so an accidental client import fails the build instead of leaking a credential.
+
+### How signalling works
+
+Neon is Postgres, not a realtime bus, so the WebRTC handshake runs through a
+`signals` table that each peer polls. That sounds slower than it is: the
+handshake is about four messages over a few seconds, after which every byte
+travels peer-to-peer and polling drops to a slow heartbeat kept only so an ICE
+restart can be negotiated if the network drops. Rows are transport, not records
+— they are swept 15 minutes after they are written.
 
 ## Testing
 
@@ -70,7 +81,7 @@ a written checklist instead: [docs/manual-qa.md](docs/manual-qa.md).
 
 ## Deploying
 
-Push to Vercel and set the four environment variables in project settings.
+Push to Vercel and set the three environment variables in project settings.
 `getUserMedia` requires HTTPS, which Vercel provides. Testing across two machines
 needs the deployed URL — `localhost` is a secure context only on the machine
 serving it.

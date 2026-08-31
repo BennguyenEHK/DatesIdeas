@@ -169,7 +169,9 @@ export function usePeerConnection(
     return pc;
   }, [localStream, wireDataChannel]);
 
-  const signaling = useSignaling(code, {
+  const signaling = useSignaling(
+    code,
+    {
     onPeer: async (_peer: PeerInfo, iOffer: boolean) => {
       if (!iOffer || offeredRef.current) return;
       offeredRef.current = true;
@@ -204,7 +206,11 @@ export function usePeerConnection(
       }
       await pc.addIceCandidate(candidate).catch(() => {});
     },
-  });
+    },
+    // Once the media path is up the handshake is over; polling drops to a
+    // slow heartbeat kept only for renegotiation.
+    state === "connected",
+  );
   useEffect(() => {
     sendSignalRef.current = signaling.send;
   });

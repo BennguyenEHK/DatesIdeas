@@ -10,21 +10,20 @@ function required(name: string, value: string | undefined): string {
   return value;
 }
 
-export interface PublicEnv {
-  supabaseUrl: string;
-  supabaseAnonKey: string;
+export interface ServerEnv {
+  databaseUrl: string;
 }
 
-/** Browser-safe configuration. Never add a secret to this function. */
-export function publicEnv(): PublicEnv {
+/**
+ * Server-only configuration.
+ *
+ * There is deliberately no browser-visible counterpart. Neon's connection
+ * string is a credential, not a publishable key: the client never talks to
+ * Postgres at all, so nothing here may ever be prefixed with NEXT_PUBLIC_ or
+ * imported from a client component.
+ */
+export function serverEnv(): ServerEnv {
   return {
-    supabaseUrl: required(
-      "NEXT_PUBLIC_SUPABASE_URL",
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-    ),
-    supabaseAnonKey: required(
-      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    ),
+    databaseUrl: required("DATABASE_URL", process.env.DATABASE_URL),
   };
 }

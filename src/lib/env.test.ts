@@ -1,36 +1,22 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { publicEnv, MissingEnvError } from "./env";
+import { serverEnv, MissingEnvError } from "./env";
 
-const KEYS = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_ANON_KEY"] as const;
-const saved: Record<string, string | undefined> = {};
+const saved = process.env.DATABASE_URL;
 
 afterEach(() => {
-  for (const k of KEYS) {
-    if (saved[k] === undefined) delete process.env[k];
-    else process.env[k] = saved[k];
-  }
+  if (saved === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = saved;
 });
 
-function setEnv(url?: string, key?: string) {
-  for (const k of KEYS) saved[k] = process.env[k];
-  if (url === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
-  else process.env.NEXT_PUBLIC_SUPABASE_URL = url;
-  if (key === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  else process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = key;
-}
-
-describe("publicEnv", () => {
-  it("returns the configured values", () => {
-    setEnv("https://x.supabase.co", "anon-key");
-    expect(publicEnv()).toEqual({
-      supabaseUrl: "https://x.supabase.co",
-      supabaseAnonKey: "anon-key",
-    });
+describe("serverEnv", () => {
+  it("returns the configured connection string", () => {
+    process.env.DATABASE_URL = "postgres://user:pw@host/db";
+    expect(serverEnv()).toEqual({ databaseUrl: "postgres://user:pw@host/db" });
   });
 
   it("throws MissingEnvError naming the absent variable", () => {
-    setEnv(undefined, "anon-key");
-    expect(() => publicEnv()).toThrow(MissingEnvError);
-    expect(() => publicEnv()).toThrow(/NEXT_PUBLIC_SUPABASE_URL/);
+    delete process.env.DATABASE_URL;
+    expect(() => serverEnv()).toThrow(MissingEnvError);
+    expect(() => serverEnv()).toThrow(/DATABASE_URL/);
   });
 });

@@ -22,8 +22,8 @@ overlays on both screens.
 | Devices | Laptop/desktop both sides | Full ML budget: both MediaPipe models at 30fps, GPU delegate. |
 | Movie source | Local file, both sides | No DRM problem, no bandwidth cost. Only timestamps cross the wire. |
 | Photos (v3) | Download locally only | No photo storage in v1–v3 schema, but leave room. |
-| History | Required | Supabase Postgres session log. Auth-free. |
-| Host | Vercel | Serverless: **cannot** hold WebSockets. Signaling lives in Supabase Realtime. |
+| History | Required | Neon Postgres session log. Auth-free. |
+| Host | Vercel | Serverless: **cannot** hold WebSockets. Signalling is a polled Postgres table. |
 
 ### 2.1 Non-goals for v1
 
@@ -37,14 +37,21 @@ notifications, no passwords. Each is cheap to add later; each would slow v1 now.
 ### 3.1 Stack
 
 - **Frontend:** Next.js 16 (App Router, `src/`, TypeScript), Tailwind v4, Framer Motion.
-- **Signaling:** Supabase Realtime broadcast channel (`room:<code>`).
-- **History:** Supabase Postgres.
+- **Signalling:** a polled `signals` table, via Next.js route handlers.
+- **History:** Neon Lakebase Postgres, via Next.js route handlers.
 - **TURN:** Cloudflare Calls, ephemeral credentials minted server-side.
 - **ML:** `@mediapipe/tasks-vision` in a Web Worker, GPU delegate.
 - **Transport:** `RTCPeerConnection` + a single ordered `RTCDataChannel`.
 
-Media never touches a server. The only server-side code is one route handler that mints
-TURN credentials, plus thin Supabase reads/writes for history.
+Media never touches a server. Server-side code is limited to four route handlers: one
+mints TURN credentials, one relays the handshake, and two record history.
+
+**Why not a realtime channel.** Neon is Postgres, not a pub/sub bus. It offers a
+WebSocket-capable Functions runtime, but that is public beta, restricted to `us-east-2`,
+and runs several isolates in parallel — so two peers can land on different isolates and
+never see each other, a failure that does not reproduce locally. For a handshake of four
+messages over a few seconds, a polled table is both simpler and more robust. Polling runs
+at 500ms while pairing and drops to 5s once connected, kept only for ICE restart.
 
 ### 3.2 File layout
 
@@ -54,10 +61,13 @@ src/
     page.tsx                      # create / resume the couple room
     room/[code]/page.tsx          # the date room
     api/turn/route.ts             # mints short-lived TURN credentials
+    api/signal/route.ts           # post + poll handshake messages
+    api/sessions/route.ts         # list and open sessions
+    api/sessions/close/route.ts   # close a session (sendBeacon target)
   lib/
+    db.ts                         # Neon client, server-only
     signaling/
-      supabaseClient.ts
-      useSignaling.ts             # room channel, offer/answer/ICE exchange
+      useSignaling.ts             # polls /api/signal; offer/answer/ICE exchange
     rtc/
       usePeerConnection.ts        # RTCPeerConnection lifecycle + ICE restart
       useDataChannel.ts           # typed send/receive over protocol.ts
@@ -71,7 +81,7 @@ src/
       useGestureDetection.ts      # frame pump + worker bridge
       gestures.ts                 # threshold + hysteresis logic (pure)
     history/
-      useSession.ts               # session lifecycle -> Supabase
+      useSession.ts               # session lifecycle -> route handlers
       identity.ts                 # device-local identity token
   components/
     VideoStage.tsx                # side-by-side local + remote
@@ -91,16 +101,16 @@ TypeScript then flags every unhandled site. This is what keeps v2–v5 cheap.
 
 1. A opens `/`. If no room is stored locally, one is created: a 6-character code
    (nanoid, unambiguous alphabet — no `0/O`, `1/I/l`). Stored in `localStorage`.
-2. A navigates to `/room/ABC123` and subscribes to Supabase Realtime `room:ABC123`.
-3. B opens the same URL, subscribes, broadcasts `peer-joined`.
-4. Offer / answer / trickled ICE candidates cross the Realtime channel.
-5. On `connectionstate === "connected"`, the DataChannel opens and the Realtime
-   channel is retained only for reconnection signaling.
+2. A navigates to `/room/ABC123` and posts a `join` row, then begins polling.
+3. B opens the same URL and posts its own `join`. Each sees the other's row.
+4. Offer / answer / trickled ICE candidates are written as rows and polled for.
+5. On `connectionstate === "connected"`, polling drops to a 5s heartbeat kept
+   only so an ICE restart can be negotiated.
 
 ### 4.2 Why no auth
 
 Two people. A code in a URL that they text each other **is** the auth story. Adding
-Supabase Auth would mean a user table, email flows, and password reset — all ceremony
+real accounts would mean a user table, email flows, and password reset — all ceremony
 for a two-person app. Identity for history is a `localStorage` UUID plus a display name.
 
 ### 4.3 Glare
@@ -247,6 +257,15 @@ create table sessions (
   memes_sent  jsonb not null default '{}'::jsonb
 );
 
+-- Handshake transport. Rows live seconds and are swept after 15 minutes.
+create table signals (
+  id            bigserial primary key,
+  room_code     text not null,
+  from_identity uuid not null,
+  payload       jsonb not null,
+  created_at    timestamptz not null default now()
+);
+
 create table participants (
   session_id  uuid not null references sessions(id) on delete cascade,
   identity    uuid not null,
@@ -272,8 +291,12 @@ v1 history surface. Photo gallery is deliberately deferred to v3.
 
 ### 8.4 Security
 
-RLS on all three tables, keyed on knowing the couple code. The code is the capability.
-Anon key only; no service role key ever reaches the client.
+The browser never reaches Postgres. `DATABASE_URL` is a server secret read only inside
+route handlers, and `src/lib/db.ts` imports `server-only` so a client import fails the
+build. There is therefore no RLS and no anon role — the authorization boundary is the
+route handler, which validates the room code and identity shape on every request.
+
+The room code remains the capability: knowing it is what grants access.
 
 ---
 
@@ -304,7 +327,7 @@ control messages, a second unordered channel can be added — not before.
 | Camera/mic denied | Join anyway, audio-only or receive-only; never hard-fail |
 | MediaPipe unavailable | Disable gesture sending; still receive partner's memes |
 | Simultaneous join (glare) | Earlier join timestamp is the offerer; UUID lexicographic tiebreak |
-| Supabase unreachable | Room cannot be established; explicit error, retry button |
+| Signalling route fails | Poll retries on the next tick; sustained failure shows an error with a retry button |
 | Clock samples all high-jitter | Use best available sample; surface a warning in status UI |
 
 ---
@@ -333,12 +356,12 @@ Runner: Vitest.
 ## 12. Deployment
 
 - **Vercel** — Next.js app. HTTPS is required for `getUserMedia`; Vercel provides it.
-- **Supabase** — free tier; Realtime for signaling, Postgres for history. Region chosen
+- **Neon** — Lakebase Postgres for both history and the signalling table. Region chosen
   between the two participants rather than next to either.
 - **Cloudflare Calls** — TURN, anycast, region-agnostic.
 
-Env vars: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
-`CLOUDFLARE_CALLS_APP_ID`, `CLOUDFLARE_CALLS_APP_SECRET` (server-only).
+Env vars, all server-only — nothing in this app is `NEXT_PUBLIC_`: `DATABASE_URL`,
+`CLOUDFLARE_TURN_KEY_ID`, `CLOUDFLARE_TURN_API_TOKEN`.
 
 Cross-machine testing requires the deployed URL; `localhost` is a secure context for
 single-machine dev only.
