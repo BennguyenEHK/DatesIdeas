@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 /** Credentials are per-request and short-lived; caching them would be wrong. */
 export const dynamic = "force-dynamic";
 
