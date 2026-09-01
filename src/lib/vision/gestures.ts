@@ -21,9 +21,22 @@ const PUCKER_EXIT = 0.35;
 const WINK_CLOSED = 0.5;
 const WINK_OPEN = 0.3;
 const WINK_GAP = 0.4;
+/**
+ * Deliberately looser than WINK_GAP. Closing one eye raises that cheek, and
+ * the smile blendshape keys off cheek raise — so a wink pushes the smile score
+ * up whether you meant it or not. Any asymmetry at all disqualifies the other
+ * face gestures, even asymmetry too slight to call a wink: better to read
+ * nothing than to read a wink as a smile.
+ *
+ * Symmetric, not open. An ordinary blink closes both eyes and must not
+ * interrupt a smile that is midway through its hold.
+ */
+const EYES_ASYMMETRIC = 0.25;
 /** Wrist separation for palms pressed together, in units of hand scale. */
-const PRAY_ENTER = 1.0;
-const PRAY_EXIT = 1.4;
+const PRAY_ENTER = 0.8;
+const PRAY_EXIT = 1.2;
+/** How far above the wrist the fingertips must sit for hands to read as raised. */
+const PRAY_UPRIGHT = 0.6;
 /** Palm-to-mouth distance, in units of hand scale. */
 const COVER_ENTER = 1.6;
 const COVER_EXIT = 2.1;
@@ -78,9 +91,15 @@ function isPray(hands: HandSummary[], threshold: number): boolean {
   const flat = (h: HandSummary) =>
     h.extended.index && h.extended.middle && h.extended.ring && h.extended.pinky;
   if (!flat(a) || !flat(b)) return false;
-  // Fingertips above the wrists: hands raised, not resting flat on a desk.
-  if (a.indexTip.y >= a.wrist.y || b.indexTip.y >= b.wrist.y) return false;
-  return dist(a.wrist, b.wrist) / scale < threshold;
+  // Clearly upright, not merely tilted: two open hands held anywhere near each
+  // other would otherwise qualify, and hands are near each other constantly.
+  const upright = (h: HandSummary) => h.wrist.y - h.indexTip.y > PRAY_UPRIGHT * scale;
+  if (!upright(a) || !upright(b)) return false;
+  // Pressed together along their whole length, not just at the wrists.
+  return (
+    dist(a.wrist, b.wrist) / scale < threshold &&
+    dist(a.indexTip, b.indexTip) / scale < threshold
+  );
 }
 
 /**
@@ -91,6 +110,42 @@ function isWink(frame: VisionFrame): boolean {
   const shut = Math.max(frame.blinkLeft, frame.blinkRight);
   const open = Math.min(frame.blinkLeft, frame.blinkRight);
   return shut >= WINK_CLOSED && open <= WINK_OPEN && shut - open >= WINK_GAP;
+}
+
+/** One eye doing something the other is not. Disqualifies every other face read. */
+function eyesAsymmetric(frame: VisionFrame): boolean {
+  return Math.abs(frame.blinkLeft - frame.blinkRight) >= EYES_ASYMMETRIC;
+}
+
+/**
+ * Gestures that cannot both have been meant, most specific first. When more
+ * than one in a set fires, only the first survives.
+ *
+ * Declared as data rather than buried in each detector because the conflicts
+ * are between gestures, not inside them — and because every one of these was
+ * found by someone pulling a face at a camera, not by reading the code.
+ */
+const EXCLUSIVE: readonly (readonly MemeId[])[] = [
+  // One face, one expression.
+  ["wink", "blowKiss", "smile"],
+  // Both bring a hand up to the mouth.
+  ["blowKiss", "handsOverMouth"],
+  // Prayer hands rest at the chin, close enough to read as covering the mouth.
+  ["pray", "handsOverMouth"],
+  // Two palms together put the fingertips together, exactly like a heart.
+  ["heart", "pray"],
+  // A wink must never ride along with anything else on the face.
+  ["wink", "handsOverMouth"],
+];
+
+/** Drops any gesture shadowed by a more specific one firing at the same time. */
+function resolveConflicts(found: Set<MemeId>): Set<MemeId> {
+  for (const group of EXCLUSIVE) {
+    const winner = group.find((id) => found.has(id));
+    if (winner === undefined) continue;
+    for (const id of group) if (id !== winner) found.delete(id);
+  }
+  return found;
 }
 
 /** A hand raised over the mouth, rather than raised anywhere else. */
@@ -122,12 +177,17 @@ export function detectRaw(
 ): Set<MemeId> {
   const out = new Set<MemeId>();
 
-  if (frame.smileScore >= (active.has("smile") ? SMILE_EXIT : SMILE_ENTER)) {
+  // Every other face gesture requires the eyes to agree with each other. This
+  // is what keeps a wink from also reading as a smile or a kiss.
+  const symmetric = !eyesAsymmetric(frame);
+
+  if (symmetric && frame.smileScore >= (active.has("smile") ? SMILE_EXIT : SMILE_ENTER)) {
     out.add("smile");
   }
   // A kiss face is not a smile: requiring the smile to be low keeps one from
   // riding along on the other.
   if (
+    symmetric &&
     frame.puckerScore >= (active.has("blowKiss") ? PUCKER_EXIT : PUCKER_ENTER) &&
     frame.smileScore < SMILE_ENTER
   ) {
@@ -140,7 +200,10 @@ export function detectRaw(
   if (isPray(frame.hands, active.has("pray") ? PRAY_EXIT : PRAY_ENTER)) {
     out.add("pray");
   }
-  if (isHandsOverMouth(frame, active.has("handsOverMouth") ? COVER_EXIT : COVER_ENTER)) {
+  if (
+    symmetric &&
+    isHandsOverMouth(frame, active.has("handsOverMouth") ? COVER_EXIT : COVER_ENTER)
+  ) {
     out.add("handsOverMouth");
   }
   for (const h of frame.hands) {
@@ -148,7 +211,7 @@ export function detectRaw(
     if (isThumbsUp(h)) out.add("thumbsUp");
     if (isThumbsDown(h)) out.add("thumbsDown");
   }
-  return out;
+  return resolveConflicts(out);
 }
 
 interface GestureState {

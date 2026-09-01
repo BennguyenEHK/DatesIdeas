@@ -148,8 +148,8 @@ describe("detectRaw", () => {
   it("detects prayer: two flat palms together, pointing up", () => {
     const f = frame({
       hands: [
-        hand({ extended: FLAT, wrist: { x: 0.49, y: 0.7 }, indexTip: { x: 0.49, y: 0.4 } }),
-        hand({ extended: FLAT, wrist: { x: 0.51, y: 0.7 }, indexTip: { x: 0.51, y: 0.4 } }),
+        hand({ extended: FLAT, wrist: { x: 0.49, y: 0.70 }, indexTip: { x: 0.49, y: 0.40 } }),
+        hand({ extended: FLAT, wrist: { x: 0.51, y: 0.70 }, indexTip: { x: 0.51, y: 0.40 } }),
       ],
     });
     expect(detectRaw(f, none).has("pray")).toBe(true);
@@ -215,6 +215,102 @@ describe("detectRaw", () => {
       hands: [hand({ wrist: { x: 0.5, y: 0.55 }, indexTip: { x: 0.5, y: 0.48 } })],
     });
     expect(detectRaw(f, none).has("handsOverMouth")).toBe(false);
+  });
+
+  it("does not read a wink as a smile", () => {
+    // The reported bug. Closing one eye raises that cheek, and the smile
+    // blendshape keys off cheek raise, so a real wink arrives with a high
+    // smile score attached. The eyes have to settle it.
+    const f = frame({ blinkLeft: 0.9, blinkRight: 0.05, smileScore: 0.8 });
+    const got = detectRaw(f, none);
+    expect(got.has("wink")).toBe(true);
+    expect(got.has("smile")).toBe(false);
+  });
+
+  it("does not read a wink as a kiss", () => {
+    const f = frame({ blinkLeft: 0.05, blinkRight: 0.9, puckerScore: 0.8 });
+    const got = detectRaw(f, none);
+    expect(got.has("wink")).toBe(true);
+    expect(got.has("blowKiss")).toBe(false);
+  });
+
+  it("does not read a wink as hands over mouth", () => {
+    const f = frame({
+      blinkLeft: 0.9,
+      blinkRight: 0.05,
+      mouth: { x: 0.5, y: 0.5 },
+      hands: [hand({ wrist: { x: 0.5, y: 0.55 }, indexTip: { x: 0.5, y: 0.48 } })],
+    });
+    const got = detectRaw(f, none);
+    expect(got.has("wink")).toBe(true);
+    expect(got.has("handsOverMouth")).toBe(false);
+  });
+
+  it("suppresses other face gestures even when the wink is too slight to fire", () => {
+    // Half-closed one eye: not enough to call a wink, but plenty to raise the
+    // cheek. Reading nothing beats reading it as a smile.
+    const f = frame({ blinkLeft: 0.35, blinkRight: 0.02, smileScore: 0.8 });
+    const got = detectRaw(f, none);
+    expect(got.has("wink")).toBe(false);
+    expect(got.has("smile")).toBe(false);
+  });
+
+  it("still smiles through an ordinary blink", () => {
+    // Both eyes shut is symmetric, so it is a blink, not a wink. Interrupting
+    // a smile every few seconds would make it nearly impossible to trigger.
+    const f = frame({ blinkLeft: 0.9, blinkRight: 0.9, smileScore: 0.8 });
+    const got = detectRaw(f, none);
+    expect(got.has("smile")).toBe(true);
+    expect(got.has("wink")).toBe(false);
+  });
+
+  it("does not read prayer hands as a hand over the mouth", () => {
+    // Prayer hands rest at the chin, which puts a palm inside the
+    // hands-over-mouth radius. Prayer is the more specific pose.
+    const f = frame({
+      mouth: { x: 0.5, y: 0.45 },
+      hands: [
+        hand({ extended: FLAT, wrist: { x: 0.49, y: 0.70 }, indexTip: { x: 0.49, y: 0.40 } }),
+        hand({ extended: FLAT, wrist: { x: 0.51, y: 0.70 }, indexTip: { x: 0.51, y: 0.40 } }),
+      ],
+    });
+    const got = detectRaw(f, none);
+    expect(got.has("pray")).toBe(true);
+    expect(got.has("handsOverMouth")).toBe(false);
+  });
+
+  it("does not read two open hands merely near each other as prayer", () => {
+    // Hands sit near each other constantly. Only a clearly upright pair, held
+    // together along their whole length, is a prayer.
+    const tilted = frame({
+      hands: [
+        hand({ extended: FLAT, wrist: { x: 0.45, y: 0.60 }, indexTip: { x: 0.45, y: 0.57 } }),
+        hand({ extended: FLAT, wrist: { x: 0.55, y: 0.60 }, indexTip: { x: 0.55, y: 0.57 } }),
+      ],
+    });
+    expect(detectRaw(tilted, none).has("pray")).toBe(false);
+  });
+
+  it("does not read splayed hands as prayer when only the wrists touch", () => {
+    const splayed = frame({
+      hands: [
+        hand({ extended: FLAT, wrist: { x: 0.49, y: 0.70 }, indexTip: { x: 0.30, y: 0.40 } }),
+        hand({ extended: FLAT, wrist: { x: 0.51, y: 0.70 }, indexTip: { x: 0.70, y: 0.40 } }),
+      ],
+    });
+    expect(detectRaw(splayed, none).has("pray")).toBe(false);
+  });
+
+  it("still lets a hand gesture and a face gesture fire together", () => {
+    // Exclusion is between conflicting readings only. Smiling while making a
+    // peace sign is two things at once, and both are meant.
+    const f = frame({
+      smileScore: 0.8,
+      hands: [hand({ extended: { thumb: false, index: true, middle: true, ring: false, pinky: false } })],
+    });
+    const got = detectRaw(f, none);
+    expect(got.has("smile")).toBe(true);
+    expect(got.has("peace")).toBe(true);
   });
 
   it("applies a looser threshold to an already-active gesture (hysteresis)", () => {
