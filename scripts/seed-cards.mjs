@@ -3,6 +3,7 @@
  * Loads neon/seed/cards.json into the card_game table.
  *
  *   node scripts/seed-cards.mjs
+ *   node scripts/seed-cards.mjs --check     # compare files and database only
  *   node scripts/seed-cards.mjs --replace   # clear the table first
  *
  * Safe to re-run: `on conflict (text) do nothing` means importing an updated
@@ -71,6 +72,37 @@ if (problems.length) {
 }
 
 const sql = neon(loadDatabaseUrl());
+
+const norm = (t) => t.trim().toLowerCase().replace(/['’]/g, "");
+
+/**
+ * Reports rows in the database that no seed file contains.
+ *
+ * The importer only ever adds, so a card can outlive the file it came from --
+ * an edited question leaves its old wording behind, and a rewritten seed file
+ * silently doubles the deck. Neither shows up as an error anywhere, which is
+ * exactly why it needs saying out loud.
+ */
+async function reportDrift() {
+  const rows = await sql`SELECT text FROM card_game`;
+  const inFiles = new Set(cards.map((c) => norm(c.text)));
+  const orphans = rows.filter((r) => !inFiles.has(norm(r.text)));
+  if (orphans.length === 0) {
+    console.log(`
+in step: all ${rows.length} rows are present in the seed files`);
+    return;
+  }
+  console.log(`
+DRIFT: ${orphans.length} row(s) in the database that no seed file has:`);
+  for (const o of orphans.slice(0, 15)) console.log(`  ${o.text}`);
+  if (orphans.length > 15) console.log(`  ... and ${orphans.length - 15} more`);
+  console.log("\nRe-run with --replace to make the database match the files.");
+}
+
+if (process.argv.includes("--check")) {
+  await reportDrift();
+  process.exit(0);
+}
 
 if (process.argv.includes("--replace")) {
   await sql`DELETE FROM card_game`;
