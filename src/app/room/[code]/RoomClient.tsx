@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { usePeerConnection } from "@/lib/rtc/usePeerConnection";
 import { useGestureDetection } from "@/lib/vision/useGestureDetection";
 import { useSession } from "@/lib/history/useSession";
@@ -8,10 +8,8 @@ import { Ambience } from "@/components/Ambience";
 import { Monogram } from "@/components/Monogram";
 import { VideoStage } from "@/components/VideoStage";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
-import type { ActiveMeme } from "@/components/MemeOverlay";
+import { useMemeQueue } from "@/lib/ui/useMemeQueue";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
-
-const MEME_LIFETIME_MS = 2200;
 
 /**
  * The call page is framed as a widescreen film still: every piece of interface
@@ -19,26 +17,21 @@ const MEME_LIFETIME_MS = 2200;
  * never creep onto the video itself.
  */
 export function RoomClient({ code }: { code: string }) {
-  const [localMemes, setLocalMemes] = useState<ActiveMeme[]>([]);
-  const [remoteMemes, setRemoteMemes] = useState<ActiveMeme[]>([]);
-  const keyRef = useRef(0);
+  const { memes, show } = useMemeQueue();
   const peerRef = useRef<ReturnType<typeof usePeerConnection> | null>(null);
-
-  const show = useCallback((id: MemeId, side: "local" | "remote") => {
-    const key = keyRef.current++;
-    const setter = side === "local" ? setLocalMemes : setRemoteMemes;
-    setter((cur) => [...cur, { key, id }]);
-    setTimeout(
-      () => setter((cur) => cur.filter((m) => m.key !== key)),
-      MEME_LIFETIME_MS,
-    );
-  }, []);
 
   const onMessage = useCallback(
     (msg: PeerMessage) => {
       if (msg.t !== "meme") return;
-      // Scheduled, not immediate: both screens land on the same instant.
-      peerRef.current?.clock?.scheduleAt(msg.showAt, () => show(msg.id, "remote"));
+      const clock = peerRef.current?.clock;
+      // Scheduled, not immediate: both screens land on the same instant. With
+      // no clock there is no shared instant to aim at, so show it now rather
+      // than dropping it.
+      if (!clock) {
+        show(msg.id);
+        return;
+      }
+      clock.scheduleAt(msg.showAt, () => show(msg.id));
     },
     [show],
   );
@@ -52,14 +45,20 @@ export function RoomClient({ code }: { code: string }) {
 
   const onGesture = useCallback(
     (id: MemeId) => {
+      session.recordMeme(id);
       const clock = peerRef.current?.clock;
-      if (!clock) return;
+      // No channel yet. Returning here used to swallow the gesture whole, so a
+      // working detector was indistinguishable from a broken one. Show it
+      // locally: they cannot see it, but you can see that it fired.
+      if (!clock) {
+        show(id);
+        return;
+      }
       const showAt = clock.now() + clock.leadTime();
       peerRef.current?.send({ t: "meme", id, showAt });
       // The sender schedules too. Rendering now would be faster but would break
       // the symmetry the design requires.
-      clock.scheduleAt(showAt, () => show(id, "local"));
-      session.recordMeme(id);
+      clock.scheduleAt(showAt, () => show(id));
     },
     [session, show],
   );
@@ -84,8 +83,7 @@ export function RoomClient({ code }: { code: string }) {
             <VideoStage
               local={peer.localStream}
               remote={peer.remoteStream}
-              localMemes={localMemes}
-              remoteMemes={remoteMemes}
+              memes={memes}
               mediaError={peer.mediaError}
             />
           </div>

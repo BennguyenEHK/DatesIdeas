@@ -104,7 +104,12 @@ self.onmessage = async (e: MessageEvent) => {
   const bitmap = msg.bitmap as ImageBitmap;
 
   try {
-    if (!face || !hands) return;
+    // Always answer, even when there is nothing to say. The client releases its
+    // in-flight slot on this reply; staying silent latches the pump shut.
+    if (!face || !hands) {
+      self.postMessage({ type: "idle" });
+      return;
+    }
     // detectForVideo rejects non-increasing timestamps.
     const ts = msg.timestamp <= lastTimestamp ? lastTimestamp + 1 : msg.timestamp;
     lastTimestamp = ts;
@@ -125,6 +130,10 @@ self.onmessage = async (e: MessageEvent) => {
       ),
     };
     self.postMessage({ type: "frame", frame });
+  } catch {
+    // A single bad frame must not end the session, but it must not be
+    // mistaken for a frame still in flight either.
+    self.postMessage({ type: "idle" });
   } finally {
     // Always release: a leaked ImageBitmap at 30fps exhausts GPU memory fast.
     bitmap.close();

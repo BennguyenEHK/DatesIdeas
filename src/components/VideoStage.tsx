@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { MemeOverlay, type ActiveMeme } from "./MemeOverlay";
+import { MemeOverlay } from "./MemeOverlay";
+import type { ActiveMeme } from "@/lib/ui/useMemeQueue";
 
 function Tile({
   stream,
@@ -61,17 +62,20 @@ function Tile({
   );
 }
 
+/**
+ * Both tiles receive the same meme list. A reaction is a shared moment, so it
+ * lands on your face and theirs at once rather than being pinned to whoever
+ * happened to make the gesture.
+ */
 export function VideoStage({
   local,
   remote,
-  localMemes,
-  remoteMemes,
+  memes,
   mediaError,
 }: {
   local: MediaStream | null;
   remote: MediaStream | null;
-  localMemes: ActiveMeme[];
-  remoteMemes: ActiveMeme[];
+  memes: ActiveMeme[];
   mediaError: string | null;
 }) {
   return (
@@ -81,7 +85,7 @@ export function VideoStage({
         mirrored
         muted
         label="You"
-        memes={localMemes}
+        memes={memes}
         placeholder={
           mediaError === "denied"
             ? "Your camera is blocked. You can still see and hear them — allow camera access in your browser to send video."
@@ -95,7 +99,7 @@ export function VideoStage({
         mirrored={false}
         muted={false}
         label="Them"
-        memes={remoteMemes}
+        memes={memes}
         placeholder="Waiting for them to arrive. Send them the code and this seat fills itself."
       />
     </div>
