@@ -4,6 +4,19 @@ import type { HandSummary, Point, VisionFrame } from "./types";
 export const HOLD_MS = 300;
 export const COOLDOWN_MS = 3000;
 
+/**
+ * A wink is over almost as soon as it starts — a couple of hundred
+ * milliseconds. Asking for the full hold turns it into a wink held open, which
+ * is a stare, and is why it felt so hard to trigger. Blinks cannot exploit the
+ * shorter window: they close both eyes, and the symmetry check rules them out
+ * regardless of how long they last.
+ */
+const HOLD_OVERRIDES: Partial<Record<MemeId, number>> = { wink: 150 };
+
+export function holdFor(id: MemeId): number {
+  return HOLD_OVERRIDES[id] ?? HOLD_MS;
+}
+
 /** Enter thresholds are strict; exit thresholds are loose. The gap is the hysteresis. */
 const SMILE_ENTER = 0.55;
 const SMILE_EXIT = 0.4;
@@ -11,16 +24,16 @@ const SMILE_EXIT = 0.4;
 const HEART_ENTER = 0.6;
 const HEART_EXIT = 0.95;
 /** Pursed lips. A kiss face and a smile are near mutually exclusive shapes. */
-const PUCKER_ENTER = 0.5;
-const PUCKER_EXIT = 0.35;
+const PUCKER_ENTER = 0.7;
+const PUCKER_EXIT = 0.5;
 /**
  * A wink is one eye shut while the other stays open. Both thresholds AND the
  * gap between them are required, so an ordinary blink — which closes both —
  * can never satisfy it.
  */
-const WINK_CLOSED = 0.5;
-const WINK_OPEN = 0.3;
-const WINK_GAP = 0.4;
+const WINK_CLOSED = 0.4;
+const WINK_OPEN = 0.35;
+const WINK_GAP = 0.3;
 /**
  * Deliberately looser than WINK_GAP. Closing one eye raises that cheek, and
  * the smile blendshape keys off cheek raise — so a wink pushes the smile score
@@ -248,7 +261,7 @@ export class GestureTracker {
         s.heldSince = t;
         continue;
       }
-      const heldLongEnough = t - s.heldSince >= HOLD_MS;
+      const heldLongEnough = t - s.heldSince >= holdFor(id);
       const alreadyFiredThisHold = s.firedAt !== null && s.firedAt >= s.heldSince;
       const coolingDown = s.firedAt !== null && t - s.firedAt < COOLDOWN_MS;
 

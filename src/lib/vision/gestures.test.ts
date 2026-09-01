@@ -4,6 +4,7 @@ import {
   GestureTracker,
   HOLD_MS,
   COOLDOWN_MS,
+  holdFor,
 } from "./gestures";
 import type { HandSummary, VisionFrame } from "./types";
 
@@ -102,14 +103,14 @@ describe("detectRaw", () => {
   });
 
   it("detects a blown kiss from pursed lips", () => {
-    expect(detectRaw(frame({ puckerScore: 0.7 }), none).has("blowKiss")).toBe(true);
+    expect(detectRaw(frame({ puckerScore: 0.85 }), none).has("blowKiss")).toBe(true);
     expect(detectRaw(frame({ puckerScore: 0.2 }), none).has("blowKiss")).toBe(false);
   });
 
   it("does not read a broad smile as a kiss", () => {
     // The two mouth shapes are near opposites; a frame reporting both is
     // ambiguous, and a smile is the far more likely reading.
-    const f = frame({ puckerScore: 0.7, smileScore: 0.8 });
+    const f = frame({ puckerScore: 0.85, smileScore: 0.8 });
     expect(detectRaw(f, none).has("blowKiss")).toBe(false);
     expect(detectRaw(f, none).has("smile")).toBe(true);
   });
@@ -200,7 +201,7 @@ describe("detectRaw", () => {
   it("reads a hand at the mouth with pursed lips as a kiss, not surprise", () => {
     // Blowing a kiss brings a hand up too. The lips decide which it is.
     const f = frame({
-      puckerScore: 0.7,
+      puckerScore: 0.85,
       mouth: { x: 0.5, y: 0.5 },
       hands: [hand({ wrist: { x: 0.5, y: 0.55 }, indexTip: { x: 0.5, y: 0.48 } })],
     });
@@ -215,6 +216,18 @@ describe("detectRaw", () => {
       hands: [hand({ wrist: { x: 0.5, y: 0.55 }, indexTip: { x: 0.5, y: 0.48 } })],
     });
     expect(detectRaw(f, none).has("handsOverMouth")).toBe(false);
+  });
+
+  it("ignores a mouth merely at rest", () => {
+    // 0.5 fired on an ordinary relaxed mouth, so a kiss now needs a real purse.
+    expect(detectRaw(frame({ puckerScore: 0.55 }), none).has("blowKiss")).toBe(false);
+  });
+
+  it("detects a wink that does not fully shut the eye", () => {
+    // Most people do not squeeze the eye closed. Demanding that they do is
+    // what made this the hardest gesture to trigger.
+    const soft = frame({ blinkLeft: 0.45, blinkRight: 0.05 });
+    expect(detectRaw(soft, none).has("wink")).toBe(true);
   });
 
   it("does not read a wink as a smile", () => {
@@ -372,6 +385,35 @@ describe("GestureTracker", () => {
     g.update(smiling(150));
     expect(g.update(smiling(150 + HOLD_MS - 1))).toEqual([]);
     expect(g.update(smiling(150 + HOLD_MS))).toEqual(["smile"]);
+  });
+
+  it("fires a wink on a shorter hold than the rest", () => {
+    // A real wink lasts a couple of hundred milliseconds. Requiring the full
+    // hold turns it into a wink held open, which is a stare.
+    const winking = (t: number) =>
+      frame({ timestamp: t, blinkLeft: 0.9, blinkRight: 0.05 });
+    const g = new GestureTracker();
+
+    expect(holdFor("wink")).toBeLessThan(HOLD_MS);
+    g.update(winking(0));
+    expect(g.update(winking(holdFor("wink") - 1))).toEqual([]);
+    expect(g.update(winking(holdFor("wink")))).toEqual(["wink"]);
+  });
+
+  it("keeps the standard hold for everything else", () => {
+    expect(holdFor("smile")).toBe(HOLD_MS);
+    expect(holdFor("heart")).toBe(HOLD_MS);
+    expect(holdFor("blowKiss")).toBe(HOLD_MS);
+  });
+
+  it("still refuses a blink however long it lasts", () => {
+    // The shorter wink window must not become a way in for blinks. Both eyes
+    // closed is symmetric, so no amount of holding it should ever fire.
+    const blinking = (t: number) =>
+      frame({ timestamp: t, blinkLeft: 0.9, blinkRight: 0.9 });
+    const g = new GestureTracker();
+    g.update(blinking(0));
+    expect(g.update(blinking(HOLD_MS * 3))).toEqual([]);
   });
 
   it("tracks gestures independently", () => {
