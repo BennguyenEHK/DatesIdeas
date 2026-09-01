@@ -101,3 +101,42 @@ describe("activity messages", () => {
     expect(decode(JSON.stringify({ ...msg, showAt: undefined }))).toBeNull();
   });
 });
+
+describe("media messages", () => {
+  const msg = {
+    t: "media" as const,
+    videoId: "dQw4w9WgXcQ",
+    positionSec: 42.5,
+    playing: true,
+    atSharedTime: 1_700_000,
+  };
+
+  it("round-trips playback state", () => {
+    expect(decode(encode(msg))).toEqual(msg);
+  });
+
+  it("round-trips clearing the video", () => {
+    const cleared = { ...msg, videoId: null, playing: false, positionSec: 0 };
+    expect(decode(encode(cleared))).toEqual(cleared);
+  });
+
+  it("keeps a paused state distinct from a playing one", () => {
+    // `playing` decides whether position advances with the clock, so losing it
+    // would leave one side racing ahead of a stopped video.
+    const paused = decode(encode({ ...msg, playing: false }));
+    expect(paused).not.toBeNull();
+    expect(paused && "playing" in paused && paused.playing).toBe(false);
+  });
+
+  it("rejects a state with no timestamp to anchor it", () => {
+    expect(decode(JSON.stringify({ ...msg, atSharedTime: undefined }))).toBeNull();
+  });
+
+  it("rejects a non-boolean playing flag", () => {
+    expect(decode(JSON.stringify({ ...msg, playing: "yes" }))).toBeNull();
+  });
+
+  it("rejects a non-numeric position", () => {
+    expect(decode(JSON.stringify({ ...msg, positionSec: "42" }))).toBeNull();
+  });
+});

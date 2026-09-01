@@ -23,9 +23,9 @@ export interface ActivityDef {
 
 export const ACTIVITIES: readonly ActivityDef[] = [
   { id: "cards", label: "Card game", icon: "🎴", kind: "companion", ready: true },
-  { id: "karaoke", label: "Karaoke", icon: "🎤", kind: "companion", ready: false },
-  // The only takeover: a film is the one thing that should be bigger than a
-  // face. Everything else here IS the faces.
+  // Takeover, like the movie: the song needs the frame, and the faces move to
+  // a column beside it so you can still see each other sing.
+  { id: "karaoke", label: "Karaoke", icon: "🎤", kind: "takeover", ready: true },
   { id: "movie", label: "Movie", icon: "🎬", kind: "takeover", ready: false },
   { id: "photobooth", label: "Photo booth", icon: "📸", kind: "companion", ready: false },
 ];

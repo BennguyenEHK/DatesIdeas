@@ -19,6 +19,11 @@ import { TakeoverStage } from "@/components/TakeoverStage";
 import { activity, activityKey, type ActivityId } from "@/lib/activities/registry";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
+import { KaraokePanel } from "@/components/KaraokePanel";
+import { YouTubePlayer } from "@/components/YouTubePlayer";
+import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
+import { tuneMicrophone } from "@/lib/media/micProfile";
+import type { PlayerHandle } from "@/lib/media/player";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
 
@@ -38,6 +43,18 @@ export function RoomClient({ code }: { code: string }) {
     true,
   );
   const peerRef = useRef<ReturnType<typeof usePeerConnection> | null>(null);
+  // Declared here, above the handlers that close over them. The playback hook
+  // needs the peer's clock, so it cannot exist until after those handlers are
+  // written -- only these two functions have to reach backwards, not the whole
+  // result, which would make every read of it a ref read.
+  const acceptMedia = useRef<((m: PeerMessage) => void) | null>(null);
+  const clearMedia = useRef<(() => void) | null>(null);
+  // Per session, never remembered. The question is whether headphones are on
+  // right now, and a stored yes from last week cannot answer that.
+  const [headphones, setHeadphones] = useState(false);
+  // State, not a ref: a state setter is a valid callback ref and keeps the
+  // player handle a plain value everywhere else.
+  const [player, setPlayer] = useState<PlayerHandle | null>(null);
 
   const { deck } = useDeck();
   const [card, setCard] = useState<Card | null>(null);
@@ -59,6 +76,13 @@ export function RoomClient({ code }: { code: string }) {
     if (!shouldReplace(activitySwap.current, { showAt, key })) return;
     activitySwap.current = { showAt, key };
     setCurrent(id);
+    // Leaving karaoke drops the song and forgets the headphone answer. Done
+    // here rather than in an effect watching `current`: this is the moment the
+    // activity changes, and reacting to it afterwards is a cascading render.
+    if (id !== "karaoke") {
+      setHeadphones(false);
+      clearMedia.current?.();
+    }
   }, []);
 
   const showCard = useCallback((next: Card, showAt: number) => {
@@ -70,6 +94,10 @@ export function RoomClient({ code }: { code: string }) {
 
   const onMessage = useCallback(
     (msg: PeerMessage) => {
+      if (msg.t === "media") {
+        acceptMedia.current?.(msg);
+        return;
+      }
       if (msg.t === "activity") {
         const clock = peerRef.current?.clock;
         if (!clock) {
@@ -130,8 +158,32 @@ export function RoomClient({ code }: { code: string }) {
     [session, mine],
   );
 
-  const gesture = useGestureDetection(peer.localStream, onGesture, gesturesOn);
+  const media = useSyncedPlayback(player, peer.clock, peer.send);
+  useEffect(() => {
+    acceptMedia.current = media.accept;
+    clearMedia.current = media.clear;
+  });
+
+  const karaoke = current === "karaoke";
+
+  // Gesture detection is paused during karaoke: your hands are busy holding a
+  // hairbrush, and MediaPipe on top of a video stream is real work for a
+  // laptop already running a call.
+  const gesture = useGestureDetection(
+    peer.localStream,
+    onGesture,
+    gesturesOn && !karaoke,
+  );
   const kind = current === null ? "companion" : activity(current).kind;
+
+  // Retune the live microphone for singing, and only once headphones are
+  // confirmed -- without them, echo cancellation is the only thing stopping
+  // your microphone sending back a second copy of the song.
+  useEffect(() => {
+    void tuneMicrophone(peer.localStream, karaoke && headphones);
+  }, [peer.localStream, karaoke, headphones]);
+
+
 
   const onSelectActivity = useCallback(
     (id: ActivityId | null) => {
@@ -192,7 +244,11 @@ export function RoomClient({ code }: { code: string }) {
                 remoteMemes={theirs.memes}
                 mediaError={peer.mediaError}
               >
-                <ActivityPlaceholder id={current} />
+                {karaoke ? (
+                  <YouTubePlayer ref={setPlayer} />
+                ) : (
+                  <ActivityPlaceholder id={current} />
+                )}
               </TakeoverStage>
             ) : (
               <>
@@ -228,6 +284,19 @@ export function RoomClient({ code }: { code: string }) {
             onToggleGestures={setGesturesOn}
             onRetry={peer.retry}
           />
+          {karaoke && (
+            <KaraokePanel
+              videoId={media.videoId}
+              playing={media.playing}
+              headphonesConfirmed={headphones}
+              onConfirmHeadphones={() => setHeadphones(true)}
+              onLoad={media.load}
+              onPlayPause={media.playPause}
+              onResync={media.resync}
+              onClear={media.clear}
+            />
+          )}
+
           {current === "cards" && (
             <CardControls
               mood={mood}

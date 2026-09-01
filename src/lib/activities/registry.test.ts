@@ -32,15 +32,20 @@ describe("activity registry", () => {
   it("marks exactly the built activities as ready", () => {
     // Guards against shipping a bubble that opens an empty stage. When karaoke
     // or the rest land, this list is what has to change with them.
-    expect(ACTIVITIES.filter((a) => a.ready).map((a) => a.id)).toEqual(["cards"]);
+    expect(ACTIVITIES.filter((a) => a.ready).map((a) => a.id)).toEqual([
+      "cards",
+      "karaoke",
+    ]);
   });
 
-  it("keeps the movie as the only takeover", () => {
-    // A film is the one thing that should be bigger than a face. Everything
-    // else here IS the faces, so it stays companion-sized.
-    expect(ACTIVITIES.filter((a) => a.kind === "takeover").map((a) => a.id)).toEqual(
-      ["movie"],
-    );
+  it("gives the frame only to what needs to be bigger than a face", () => {
+    // A song and a film both want the frame, and both keep the faces beside
+    // them. Cards and the photo booth ARE the faces, so they stay
+    // companion-sized with the activity beneath.
+    expect(ACTIVITIES.filter((a) => a.kind === "takeover").map((a) => a.id)).toEqual([
+      "karaoke",
+      "movie",
+    ]);
   });
 
   it("recognises known ids and rejects anything else", () => {

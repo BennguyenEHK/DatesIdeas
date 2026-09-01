@@ -29,7 +29,17 @@ export type PeerMessage =
   | { t: "card"; cardId: number; text: string; mood: Mood; showAt: number }
   // Which activity both screens are on. Shared, so an evening moves together.
   // `null` closes the activity and returns to plain video.
-  | { t: "activity"; id: ActivityId | null; showAt: number };
+  | { t: "activity"; id: ActivityId | null; showAt: number }
+  // Whole playback state rather than play/pause/seek events. A dropped event
+  // would leave the two players disagreeing forever with nothing to notice it;
+  // a repeated state is harmless and heals the disagreement by itself.
+  | {
+      t: "media";
+      videoId: string | null;
+      positionSec: number;
+      playing: boolean;
+      atSharedTime: number;
+    };
 
 export function encode(m: PeerMessage): string {
   return JSON.stringify(m);
@@ -81,6 +91,19 @@ export function decode(raw: string): PeerMessage | null {
     case "activity":
       return (m.id === null || isActivityId(m.id)) && isNum(m.showAt)
         ? { t: "activity", id: m.id as ActivityId | null, showAt: m.showAt }
+        : null;
+    case "media":
+      return isNum(m.positionSec) &&
+        typeof m.playing === "boolean" &&
+        isNum(m.atSharedTime) &&
+        (m.videoId === null || isStr(m.videoId))
+        ? {
+            t: "media",
+            videoId: m.videoId as string | null,
+            positionSec: m.positionSec,
+            playing: m.playing,
+            atSharedTime: m.atSharedTime,
+          }
         : null;
     default:
       return null;
