@@ -52,6 +52,7 @@ export function RoomClient({ code }: { code: string }) {
   // Per session, never remembered. The question is what you are listening on
   // right now, and a stored answer from last week cannot know that.
   const [audioMode, setAudioMode] = useState<AudioMode | null>(null);
+  const [videoError, setVideoError] = useState<number | null>(null);
   // State, not a ref: a state setter is a valid callback ref and keeps the
   // player handle a plain value everywhere else.
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
@@ -81,6 +82,7 @@ export function RoomClient({ code }: { code: string }) {
     // activity changes, and reacting to it afterwards is a cascading render.
     if (id !== "karaoke") {
       setAudioMode(null);
+      setVideoError(null);
       clearMedia.current?.();
     }
   }, []);
@@ -166,14 +168,10 @@ export function RoomClient({ code }: { code: string }) {
 
   const karaoke = current === "karaoke";
 
-  // Gesture detection is paused during karaoke: your hands are busy holding a
-  // hairbrush, and MediaPipe on top of a video stream is real work for a
-  // laptop already running a call.
-  const gesture = useGestureDetection(
-    peer.localStream,
-    onGesture,
-    gesturesOn && !karaoke,
-  );
+  // No karaoke exception. Pausing gestures there meant the status bar had a
+  // state it could not name and reported a warm-up that would never finish --
+  // and reactions are worth more mid-song than the CPU they cost.
+  const gesture = useGestureDetection(peer.localStream, onGesture, gesturesOn);
   const kind = current === null ? "companion" : activity(current).kind;
 
   // Retune the live microphone to match how the song is being heard. On
@@ -245,7 +243,7 @@ export function RoomClient({ code }: { code: string }) {
                 mediaError={peer.mediaError}
               >
                 {karaoke ? (
-                  <YouTubePlayer ref={setPlayer} />
+                  <YouTubePlayer ref={setPlayer} onError={setVideoError} />
                 ) : (
                   <ActivityPlaceholder id={current} />
                 )}
@@ -290,7 +288,13 @@ export function RoomClient({ code }: { code: string }) {
               playing={media.playing}
               audioMode={audioMode}
               onChooseAudio={setAudioMode}
-              onLoad={media.load}
+              videoError={videoError}
+              onLoad={(id) => {
+                // A new attempt starts clean; the last refusal was about the
+                // last video, not this one.
+                setVideoError(null);
+                media.load(id);
+              }}
               onPlayPause={media.playPause}
               onResync={media.resync}
               onClear={media.clear}

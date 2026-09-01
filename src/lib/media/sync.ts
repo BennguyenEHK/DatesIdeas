@@ -20,11 +20,15 @@ export interface PlaybackState {
  * How far out of step a player must be before it is worth seeking.
  *
  * Seeking is disruptive — it rebuffers and clicks the audio — so correcting
- * every small wobble sounds far worse than the wobble. A third of a second is
- * under the point where two people singing notice they are on different
- * words, and well above the jitter a player produces just by existing.
+ * every small wobble sounds far worse than the wobble.
+ *
+ * This was a third of a second, chosen for watching a film where it is
+ * invisible. For singing it is a third of a beat: the other person sings in
+ * time with their own copy, and every millisecond their copy is behind yours
+ * arrives as them dragging. Two players decoding the same file drift far
+ * slower than this, so the tighter figure costs almost no extra seeking.
  */
-export const DRIFT_TOLERANCE_SEC = 0.3;
+export const DRIFT_TOLERANCE_SEC = 0.12;
 
 /** Where the video should be right now, on the shared clock. */
 export function targetPosition(state: PlaybackState, nowShared: number): number {

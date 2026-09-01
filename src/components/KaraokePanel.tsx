@@ -14,6 +14,7 @@ import type { AudioMode } from "@/lib/media/micProfile";
 export function KaraokePanel(props: {
   videoId: string | null;
   playing: boolean;
+  videoError: number | null;
   audioMode: AudioMode | null;
   onChooseAudio: (mode: AudioMode) => void;
   onLoad: (videoId: string) => void;
@@ -24,6 +25,7 @@ export function KaraokePanel(props: {
   const {
     videoId,
     playing,
+    videoError,
     audioMode,
     onChooseAudio,
     onLoad,
@@ -36,8 +38,8 @@ export function KaraokePanel(props: {
     <section aria-label="Karaoke" className="w-full">
       {audioMode === null ? (
         <AudioGate onChoose={onChooseAudio} />
-      ) : videoId === null ? (
-        <SongPicker onLoad={onLoad} />
+      ) : videoId === null || videoError !== null ? (
+        <SongPicker onLoad={onLoad} videoError={videoError} />
       ) : (
         <Transport
           playing={playing}
@@ -114,7 +116,33 @@ function AudioSwitch({
   );
 }
 
-function SongPicker({ onLoad }: { onLoad: (videoId: string) => void }) {
+/**
+ * What YouTube's error numbers actually mean, in words that suggest a next
+ * step. 101 and 150 are the common one and the useful one to explain: plenty
+ * of official music uploads forbid embedding, and a karaoke channel's version
+ * of the same song almost always allows it.
+ */
+function videoErrorMessage(code: number): string {
+  switch (code) {
+    case 101:
+    case 150:
+      return "The uploader doesn't allow this video to play outside YouTube. Search the song plus “karaoke” — those versions almost always work.";
+    case 100:
+      return "That video is gone — removed, or set to private.";
+    case 5:
+      return "This browser couldn't play that one. Try a different upload.";
+    default:
+      return "That video wouldn't play here. Try a different link.";
+  }
+}
+
+function SongPicker({
+  onLoad,
+  videoError,
+}: {
+  onLoad: (videoId: string) => void;
+  videoError: number | null;
+}) {
   const [value, setValue] = useState("");
   const [error, setError] = useState(false);
   const inputId = useId();
@@ -183,6 +211,15 @@ function SongPicker({ onLoad }: { onLoad: (videoId: string) => void }) {
               ●
             </span>
             That doesn&rsquo;t look like a YouTube link — try pasting it again.
+          </p>
+        ) : videoError !== null ? (
+          // YouTube refused the video after it loaded, which is a different
+          // failure from a bad link and needs a different suggestion.
+          <p role="alert" className="text-[var(--cream)]">
+            <span aria-hidden className="mr-1 text-[var(--neon)]">
+              ●
+            </span>
+            {videoErrorMessage(videoError)}
           </p>
         ) : (
           <p className="text-[var(--mist)]">A karaoke or lyrics video works best.</p>

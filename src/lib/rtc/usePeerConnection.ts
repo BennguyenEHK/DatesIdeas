@@ -5,6 +5,7 @@ import { fetchIceServers } from "./iceServers";
 import { decode, encode, type PeerMessage } from "./protocol";
 import { SyncedClock } from "@/lib/sync/SyncedClock";
 import { selectPath, type PathInfo } from "./path";
+import { preferMusicAudio } from "./sdp";
 import { readJitter, jitterDelayMs, type JitterSample } from "./videoStats";
 import { getIdentity } from "@/lib/history/identity";
 import {
@@ -52,7 +53,9 @@ const ICE_SETTLE_GRACE_MS = 15_000;
 
 const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
-  audio: { echoCancellation: true, noiseSuppression: true },
+  // Two channels asked for so a stereo-capable input is not collapsed before
+  // it reaches the encoder. Most microphones are mono and will ignore it.
+  audio: { echoCancellation: true, noiseSuppression: true, channelCount: 2 },
 };
 
 export function usePeerConnection(
@@ -229,8 +232,12 @@ export function usePeerConnection(
       const pc = pcRef.current ?? (await buildConnection());
       wireDataChannel(pc.createDataChannel("sync", { ordered: true }));
       const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      sendSignalRef.current({ kind: "offer", sdp: offer.sdp!, from: getIdentity() });
+      // Rewritten before it is set, because there is no API for these: the
+      // browser negotiates audio for a phone call and this is the only place
+      // to ask it for music instead.
+      const offerSdp = preferMusicAudio(offer.sdp!);
+      await pc.setLocalDescription({ type: "offer", sdp: offerSdp });
+      sendSignalRef.current({ kind: "offer", sdp: offerSdp, from: getIdentity() });
     },
     onOffer: async (sdp) => {
       setState("connecting");
@@ -238,8 +245,9 @@ export function usePeerConnection(
       await pc.setRemoteDescription({ type: "offer", sdp });
       await drainIce(pc, pendingIce.current);
       const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      sendSignalRef.current({ kind: "answer", sdp: answer.sdp!, from: getIdentity() });
+      const answerSdp = preferMusicAudio(answer.sdp!);
+      await pc.setLocalDescription({ type: "answer", sdp: answerSdp });
+      sendSignalRef.current({ kind: "answer", sdp: answerSdp, from: getIdentity() });
     },
     onAnswer: async (sdp) => {
       const pc = pcRef.current;
@@ -357,8 +365,9 @@ async function restartIce(
   sendSignal: (m: SignalMessage) => void,
 ) {
   const offer = await pc.createOffer({ iceRestart: true });
-  await pc.setLocalDescription(offer);
-  sendSignal({ kind: "offer", sdp: offer.sdp!, from: getIdentity() });
+  const sdp = preferMusicAudio(offer.sdp!);
+  await pc.setLocalDescription({ type: "offer", sdp });
+  sendSignal({ kind: "offer", sdp, from: getIdentity() });
 }
 
 /**

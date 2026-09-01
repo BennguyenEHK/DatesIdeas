@@ -26,6 +26,15 @@ interface YTStateChangeEvent {
   data: number;
 }
 
+/**
+ * YouTube reports refusals here rather than by failing to load. Without a
+ * handler the iframe simply shows its own error card, which says nothing about
+ * what to do next.
+ */
+interface YTErrorEvent {
+  data: number;
+}
+
 interface YTPlayerOptions {
   height: string;
   width: string;
@@ -40,6 +49,7 @@ interface YTPlayerOptions {
   events: {
     onReady: (event: YTPlayerEvent) => void;
     onStateChange: (event: YTStateChangeEvent) => void;
+    onError: (event: YTErrorEvent) => void;
   };
 }
 
@@ -114,8 +124,9 @@ export const YouTubePlayer = forwardRef<
   {
     onReady?: () => void;
     onStateChange?: (playing: boolean) => void;
+    onError?: (code: number) => void;
   }
->(function YouTubePlayer({ onReady, onStateChange }, ref) {
+>(function YouTubePlayer({ onReady, onStateChange, onError }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayerInstance | null>(null);
   const readyRef = useRef(false);
@@ -125,9 +136,11 @@ export const YouTubePlayer = forwardRef<
   // fetch and player construction.
   const onReadyRef = useRef(onReady);
   const onStateChangeRef = useRef(onStateChange);
+  const onErrorRef = useRef(onError);
   useEffect(() => {
     onReadyRef.current = onReady;
     onStateChangeRef.current = onStateChange;
+    onErrorRef.current = onError;
   });
 
   useEffect(() => {
@@ -172,6 +185,10 @@ export const YouTubePlayer = forwardRef<
             ) {
               onStateChangeRef.current?.(false);
             }
+          },
+          onError: (event) => {
+            if (cancelled) return;
+            onErrorRef.current?.(event.data);
           },
         },
       });

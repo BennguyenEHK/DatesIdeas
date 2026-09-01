@@ -47,12 +47,19 @@ describe("targetPosition", () => {
 
 describe("needsCorrection", () => {
   it("ignores drift a player produces just by existing", () => {
-    expect(needsCorrection(30, 30.1)).toBe(false);
+    expect(needsCorrection(30, 30.05)).toBe(false);
   });
 
   it("corrects once the two would be on different words", () => {
     expect(needsCorrection(30, 31.5)).toBe(true);
     expect(needsCorrection(31.5, 30)).toBe(true);
+  });
+
+  it("corrects a gap a singer would feel as dragging", () => {
+    // A fifth of a second is a third of a beat at a normal tempo, and it is
+    // heard as the other person singing behind the music rather than as a
+    // sync problem.
+    expect(needsCorrection(30, 30.2)).toBe(true);
   });
 
   it("is symmetric about the tolerance", () => {
@@ -67,8 +74,8 @@ describe("needsCorrection", () => {
   it("keeps the tolerance well under a sung syllable", () => {
     // Seeking clicks the audio, so correcting every wobble sounds worse than
     // the wobble. This has to stay in the gap between those two failures.
-    expect(DRIFT_TOLERANCE_SEC).toBeGreaterThan(0.1);
-    expect(DRIFT_TOLERANCE_SEC).toBeLessThan(0.5);
+    expect(DRIFT_TOLERANCE_SEC).toBeGreaterThan(0.05);
+    expect(DRIFT_TOLERANCE_SEC).toBeLessThan(0.2);
   });
 });
 

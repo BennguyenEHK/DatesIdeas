@@ -72,11 +72,38 @@ describe("useSyncedPlayback", () => {
     );
     act(() => void vi.advanceTimersByTime(2100));
 
-    const pause = p.calls.lastIndexOf("pause");
-    const seek = p.calls.findIndex((c) => c.startsWith("seek:"));
-    expect(seek).toBeGreaterThan(-1);
-    expect(pause).toBeLessThan(seek);
+    const seeks = p.calls
+      .map((c, i) => (c.startsWith("seek:") ? i : -1))
+      .filter((i) => i >= 0);
+    expect(seeks.length).toBeGreaterThan(0);
+    // The invariant, stated per seek rather than across the whole run: the
+    // state is always applied immediately before the seek, never after it.
+    for (const i of seeks) expect(p.calls[i - 1]).toBe("pause");
     expect(p.calls).not.toContain("play");
+  });
+
+  it("reaches the player without waiting for the timer", () => {
+    // The fix for a song arriving late. A play that waits on a 2s tick is not
+    // a delay on a song, it is a different verse.
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}),
+    );
+
+    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    const before = p.calls.length;
+    act(() =>
+      result.current.accept({
+        t: "media",
+        videoId: "dQw4w9WgXcQ",
+        positionSec: 0,
+        playing: true,
+        atSharedTime: Date.now(),
+      } satisfies PeerMessage),
+    );
+    // No timer advanced at all.
+    expect(p.calls.length).toBeGreaterThan(before);
+    expect(p.calls).toContain("play");
   });
 
   it("does not touch a player that is not ready", () => {

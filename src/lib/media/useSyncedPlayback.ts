@@ -11,7 +11,13 @@ import {
 import type { SyncedClock } from "@/lib/sync/SyncedClock";
 import type { PeerMessage } from "@/lib/rtc/protocol";
 
-/** How often to check the player against the shared state. */
+/**
+ * How often to re-check the player for drift.
+ *
+ * Only a safety net. State CHANGES are applied the moment they arrive: waiting
+ * for this timer put up to two seconds between one person pressing play and
+ * the other hearing it, which on a song is not a delay but a different verse.
+ */
 const CORRECT_INTERVAL_MS = 2000;
 /**
  * How often to rebroadcast the state even when nothing changed.
@@ -121,6 +127,37 @@ export function useSyncedPlayback(
     broadcast(stateAt(null, 0, false, now()));
   }, [broadcast, now]);
 
+  /** Which video the player is actually showing, as opposed to asked to show. */
+  const loadedId = useRef<string | null>(null);
+
+  const applyState = useCallback(() => {
+    const p = player.current;
+    const cur = stateRef.current;
+    if (!p?.isReady()) return;
+
+    if (cur.videoId === null) {
+      loadedId.current = null;
+      p.pause();
+      return;
+    }
+
+    const want = targetPosition(cur, now());
+
+    if (loadedId.current !== cur.videoId) {
+      loadedId.current = cur.videoId;
+      p.load(cur.videoId, want);
+      return;
+    }
+
+    // Play/pause BEFORE seeking, not after. YouTube's seekTo starts playback
+    // when the video is merely cued rather than paused, so seeking first
+    // would blip the audio on a paused resync. Seeking an already-paused
+    // player leaves it paused, which is what makes this order safe.
+    if (cur.playing) p.play();
+    else p.pause();
+    if (needsCorrection(p.currentTime(), want)) p.seek(want);
+  }, [now]);
+
   const accept = useCallback((msg: PeerMessage) => {
     if (msg.t !== "media") return;
     const next: PlaybackState = {
@@ -133,40 +170,15 @@ export function useSyncedPlayback(
     stateRef.current = next;
   }, []);
 
-  // Drive the player towards the shared state, and keep restating it.
+  // Apply the moment the state changes, from either side. The interval below
+  // only exists to catch drift; a change waiting on a timer is a song where
+  // one person is two seconds into a verse the other has not started.
   useEffect(() => {
-    const loadedRef = { current: null as string | null };
+    applyState();
+  }, [state, applyState]);
 
-    const tick = () => {
-      const p = player.current;
-      const cur = stateRef.current;
-      if (!p?.isReady()) return;
-
-      if (cur.videoId === null) {
-        loadedRef.current = null;
-        p.pause();
-        return;
-      }
-
-      const want = targetPosition(cur, now());
-
-      if (loadedRef.current !== cur.videoId) {
-        loadedRef.current = cur.videoId;
-        p.load(cur.videoId, want);
-        return;
-      }
-
-      // Play/pause BEFORE seeking, not after. YouTube's seekTo starts playback
-      // when the video is merely cued rather than paused, so seeking first
-      // would blip the audio on a paused resync. Seeking an already-paused
-      // player leaves it paused, which is what makes this order safe.
-      if (cur.playing) p.play();
-      else p.pause();
-      if (needsCorrection(p.currentTime(), want)) p.seek(want);
-    };
-
-    const correcting = setInterval(tick, CORRECT_INTERVAL_MS);
-    tick();
+  useEffect(() => {
+    const correcting = setInterval(applyState, CORRECT_INTERVAL_MS);
 
     const beating = setInterval(() => {
       const cur = stateRef.current;
@@ -184,7 +196,7 @@ export function useSyncedPlayback(
       clearInterval(correcting);
       clearInterval(beating);
     };
-  }, [now]);
+  }, [applyState]);
 
   return {
     videoId: state.videoId,
