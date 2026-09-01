@@ -103,7 +103,7 @@ export function RoomClient({ code }: { code: string }) {
         <footer className="bar-bottom bg-[var(--letterbox)] px-5 py-3">
           <ConnectionStatus
             state={peer.state}
-            relayed={peer.relayed}
+            path={peer.path}
             sending={peer.sending}
             rtt={peer.rtt}
             gestureReady={gesture.ready}

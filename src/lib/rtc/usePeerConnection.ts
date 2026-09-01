@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchIceServers } from "./iceServers";
 import { decode, encode, type PeerMessage } from "./protocol";
 import { SyncedClock } from "@/lib/sync/SyncedClock";
+import { selectPath, type PathInfo } from "./path";
 import { getIdentity } from "@/lib/history/identity";
 import {
   useSignaling,
@@ -22,8 +23,8 @@ export interface PeerApi {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   state: ConnState;
-  /** True when the selected candidate pair goes through a TURN relay. */
-  relayed: boolean;
+  /** The route actually carrying the call, and what the browser says it costs. */
+  path: PathInfo | null;
   /** False when this peer negotiated receive-only and cannot send video. */
   sending: boolean;
   rtt: number;
@@ -32,6 +33,9 @@ export interface PeerApi {
   send: (m: PeerMessage) => void;
   retry: () => void;
 }
+
+/** ICE can migrate mid-call, so the route is re-checked rather than sampled once. */
+const PATH_POLL_MS = 3000;
 
 const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
@@ -45,7 +49,7 @@ export function usePeerConnection(
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [state, setState] = useState<ConnState>("idle");
-  const [relayed, setRelayed] = useState(false);
+  const [path, setPath] = useState<PathInfo | null>(null);
   const [rtt, setRtt] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -167,7 +171,6 @@ export function usePeerConnection(
       switch (pc.connectionState) {
         case "connected":
           setState("connected");
-          void reportRelayStatus(pc, setRelayed);
           break;
         case "disconnected":
           setState("reconnecting");
@@ -229,6 +232,25 @@ export function usePeerConnection(
   });
 
   useEffect(() => {
+    if (state !== "connected") return;
+    let cancelled = false;
+
+    const sample = async () => {
+      const pc = pcRef.current;
+      if (!pc) return;
+      const next = selectPath(await pc.getStats());
+      if (!cancelled) setPath(next);
+    };
+
+    void sample();
+    const id = setInterval(() => void sample(), PATH_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [state]);
+
+  useEffect(() => {
     return () => {
       clockRef.current?.stop();
       dcRef.current?.close();
@@ -246,6 +268,7 @@ export function usePeerConnection(
     offeredRef.current = false;
     pendingIce.current = [];
     setRemoteStream(null);
+    setPath(null);
     setState("idle");
     // Re-arm the media gate so the next attempt cannot announce itself
     // before its camera is ready.
@@ -258,7 +281,7 @@ export function usePeerConnection(
     localStream,
     remoteStream,
     state,
-    relayed,
+    path,
     sending,
     rtt,
     mediaError,
@@ -282,19 +305,4 @@ async function restartIce(
   const offer = await pc.createOffer({ iceRestart: true });
   await pc.setLocalDescription(offer);
   sendSignal({ kind: "offer", sdp: offer.sdp!, from: getIdentity() });
-}
-
-/** Report honestly whether media is flowing through a relay. */
-async function reportRelayStatus(
-  pc: RTCPeerConnection,
-  setRelayed: (v: boolean) => void,
-) {
-  const stats = await pc.getStats();
-  for (const report of stats.values()) {
-    if (report.type === "candidate-pair" && report.state === "succeeded") {
-      const local = stats.get(report.localCandidateId);
-      setRelayed(local?.candidateType === "relay");
-      return;
-    }
-  }
 }

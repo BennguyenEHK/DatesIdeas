@@ -1,6 +1,7 @@
 "use client";
 
 import type { ConnState } from "@/lib/rtc/usePeerConnection";
+import type { PathInfo } from "@/lib/rtc/path";
 
 const LABEL: Record<ConnState, string> = {
   idle: "Getting ready",
@@ -24,7 +25,7 @@ function Item({ children }: { children: React.ReactNode }) {
 
 export function ConnectionStatus({
   state,
-  relayed,
+  path,
   sending,
   rtt,
   gestureReady,
@@ -34,7 +35,7 @@ export function ConnectionStatus({
   onRetry,
 }: {
   state: ConnState;
-  relayed: boolean;
+  path: PathInfo | null;
   sending: boolean;
   rtt: number;
   gestureReady: boolean;
@@ -50,10 +51,21 @@ export function ConnectionStatus({
         {LABEL[state]}
       </span>
 
+      {/* Two numbers, deliberately. Ours is measured in JavaScript and so
+          includes any time the main thread spent busy; the browser's is taken
+          below JavaScript and is the network alone. A large gap between them
+          says the delay is our own doing, not the distance. */}
       {state === "connected" && rtt > 0 && <Item>{Math.round(rtt)}ms</Item>}
 
       {/* Honest about the path. Never imply a direct link when there isn't one. */}
-      {state === "connected" && relayed && <Item>via relay</Item>}
+      {state === "connected" && path && (
+        <Item>
+          <span className={path.relayed ? "text-[var(--neon)]" : undefined}>
+            {path.relayed ? "via relay" : "direct"}
+          </span>
+          {path.netRtt !== null && ` · net ${Math.round(path.netRtt)}ms`}
+        </Item>
+      )}
 
       {/* A receive-only session used to fail silently: your partner saw both
           tiles while you saw only yourself. Say it out loud instead. */}
