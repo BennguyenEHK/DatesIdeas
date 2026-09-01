@@ -30,8 +30,22 @@ describe("protocol", () => {
     expect(decode(JSON.stringify({ t: "meme", id: "banana", showAt: 1 }))).toBeNull();
   });
 
-  it("exposes exactly the four v1 meme ids", () => {
-    expect([...MEME_IDS]).toEqual(["heart", "peace", "thumbsUp", "smile"]);
+  it("exposes the full gesture vocabulary", () => {
+    expect([...MEME_IDS]).toEqual([
+      "heart",
+      "peace",
+      "thumbsUp",
+      "smile",
+      "blowKiss",
+      "handsOverMouth",
+      "wink",
+      "pray",
+      "thumbsDown",
+    ]);
+  });
+
+  it("has no duplicate ids", () => {
+    expect(new Set(MEME_IDS).size).toBe(MEME_IDS.length);
   });
 });
 

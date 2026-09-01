@@ -20,8 +20,20 @@ function hand(over: Partial<HandSummary> = {}): HandSummary {
 }
 
 function frame(over: Partial<VisionFrame> = {}): VisionFrame {
-  return { timestamp: 0, smileScore: 0, hands: [], ...over };
+  return {
+    timestamp: 0,
+    smileScore: 0,
+    puckerScore: 0,
+    blinkLeft: 0,
+    blinkRight: 0,
+    mouth: null,
+    hands: [],
+    ...over,
+  };
 }
+
+/** All four fingers out — a flat palm, as in a prayer. */
+const FLAT = { thumb: false, index: true, middle: true, ring: true, pinky: true };
 
 const none = new Set<never>();
 
@@ -87,6 +99,122 @@ describe("detectRaw", () => {
 
   it("does not detect heart with only one hand", () => {
     expect(detectRaw(frame({ hands: [hand()] }), none).has("heart")).toBe(false);
+  });
+
+  it("detects a blown kiss from pursed lips", () => {
+    expect(detectRaw(frame({ puckerScore: 0.7 }), none).has("blowKiss")).toBe(true);
+    expect(detectRaw(frame({ puckerScore: 0.2 }), none).has("blowKiss")).toBe(false);
+  });
+
+  it("does not read a broad smile as a kiss", () => {
+    // The two mouth shapes are near opposites; a frame reporting both is
+    // ambiguous, and a smile is the far more likely reading.
+    const f = frame({ puckerScore: 0.7, smileScore: 0.8 });
+    expect(detectRaw(f, none).has("blowKiss")).toBe(false);
+    expect(detectRaw(f, none).has("smile")).toBe(true);
+  });
+
+  it("detects a wink but never an ordinary blink", () => {
+    const wink = frame({ blinkLeft: 0.9, blinkRight: 0.05 });
+    expect(detectRaw(wink, none).has("wink")).toBe(true);
+
+    // Both eyes shut. This is the case that must never fire, or the overlay
+    // would flash every few seconds all evening.
+    const blink = frame({ blinkLeft: 0.9, blinkRight: 0.9 });
+    expect(detectRaw(blink, none).has("wink")).toBe(false);
+
+    const open = frame({ blinkLeft: 0.05, blinkRight: 0.05 });
+    expect(detectRaw(open, none).has("wink")).toBe(false);
+  });
+
+  it("detects a wink with either eye", () => {
+    expect(detectRaw(frame({ blinkLeft: 0.05, blinkRight: 0.9 }), none).has("wink")).toBe(
+      true,
+    );
+  });
+
+  it("detects thumbsDown only when the thumb points down", () => {
+    const down = frame({
+      hands: [hand({
+        extended: { thumb: true, index: false, middle: false, ring: false, pinky: false },
+        thumbTip: { x: 0.5, y: 0.9 },
+        wrist: { x: 0.5, y: 0.7 },
+      })],
+    });
+    expect(detectRaw(down, none).has("thumbsDown")).toBe(true);
+    expect(detectRaw(down, none).has("thumbsUp")).toBe(false);
+  });
+
+  it("detects prayer: two flat palms together, pointing up", () => {
+    const f = frame({
+      hands: [
+        hand({ extended: FLAT, wrist: { x: 0.49, y: 0.7 }, indexTip: { x: 0.49, y: 0.4 } }),
+        hand({ extended: FLAT, wrist: { x: 0.51, y: 0.7 }, indexTip: { x: 0.51, y: 0.4 } }),
+      ],
+    });
+    expect(detectRaw(f, none).has("pray")).toBe(true);
+  });
+
+  it("does not read flat palms lying down as a prayer", () => {
+    // Fingertips below the wrists: hands resting, not raised.
+    const f = frame({
+      hands: [
+        hand({ extended: FLAT, wrist: { x: 0.49, y: 0.4 }, indexTip: { x: 0.49, y: 0.7 } }),
+        hand({ extended: FLAT, wrist: { x: 0.51, y: 0.4 }, indexTip: { x: 0.51, y: 0.7 } }),
+      ],
+    });
+    expect(detectRaw(f, none).has("pray")).toBe(false);
+  });
+
+  it("tells a prayer from a heart", () => {
+    // The collision that made this rule necessary: two palms pressed together
+    // put the thumb tips AND index tips together, which is exactly the
+    // proximity test for a heart. Only the curled ring and pinky separate them.
+    const praying = frame({
+      hands: [
+        hand({ extended: FLAT, thumbTip: { x: 0.49, y: 0.5 }, indexTip: { x: 0.49, y: 0.4 }, wrist: { x: 0.49, y: 0.7 } }),
+        hand({ extended: FLAT, thumbTip: { x: 0.51, y: 0.5 }, indexTip: { x: 0.51, y: 0.4 }, wrist: { x: 0.51, y: 0.7 } }),
+      ],
+    });
+    const got = detectRaw(praying, none);
+    expect(got.has("pray")).toBe(true);
+    expect(got.has("heart")).toBe(false);
+  });
+
+  it("detects a hand raised over the mouth", () => {
+    const f = frame({
+      mouth: { x: 0.5, y: 0.5 },
+      hands: [hand({ wrist: { x: 0.5, y: 0.55 }, indexTip: { x: 0.5, y: 0.48 } })],
+    });
+    expect(detectRaw(f, none).has("handsOverMouth")).toBe(true);
+  });
+
+  it("does not fire for a hand raised somewhere else", () => {
+    const f = frame({
+      mouth: { x: 0.5, y: 0.5 },
+      hands: [hand({ wrist: { x: 0.1, y: 0.9 }, indexTip: { x: 0.1, y: 0.8 } })],
+    });
+    expect(detectRaw(f, none).has("handsOverMouth")).toBe(false);
+  });
+
+  it("reads a hand at the mouth with pursed lips as a kiss, not surprise", () => {
+    // Blowing a kiss brings a hand up too. The lips decide which it is.
+    const f = frame({
+      puckerScore: 0.7,
+      mouth: { x: 0.5, y: 0.5 },
+      hands: [hand({ wrist: { x: 0.5, y: 0.55 }, indexTip: { x: 0.5, y: 0.48 } })],
+    });
+    const got = detectRaw(f, none);
+    expect(got.has("blowKiss")).toBe(true);
+    expect(got.has("handsOverMouth")).toBe(false);
+  });
+
+  it("cannot detect a covered mouth with no face", () => {
+    const f = frame({
+      mouth: null,
+      hands: [hand({ wrist: { x: 0.5, y: 0.55 }, indexTip: { x: 0.5, y: 0.48 } })],
+    });
+    expect(detectRaw(f, none).has("handsOverMouth")).toBe(false);
   });
 
   it("applies a looser threshold to an already-active gesture (hysteresis)", () => {

@@ -11,6 +11,11 @@ const EMOJI: Record<MemeId, string> = {
   peace: "✌️",
   thumbsUp: "👍",
   smile: "😄",
+  blowKiss: "😘",
+  handsOverMouth: "🫢",
+  wink: "😉",
+  pray: "🙏",
+  thumbsDown: "👎",
 };
 
 /**

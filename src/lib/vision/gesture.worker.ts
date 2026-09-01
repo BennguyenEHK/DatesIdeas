@@ -77,15 +77,16 @@ function summarize(
   };
 }
 
-function smileFrom(blendshapes: { categoryName: string; score: number }[]): number {
-  let best = 0;
-  for (const b of blendshapes) {
-    if (b.categoryName === "mouthSmileLeft" || b.categoryName === "mouthSmileRight") {
-      best = Math.max(best, b.score);
-    }
-  }
-  return best;
+/** One lookup pass; the categories array is ~52 entries and read five times. */
+function blendshapeMap(
+  categories: { categoryName: string; score: number }[],
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const c of categories) out.set(c.categoryName, c.score);
+  return out;
 }
+
+const score = (m: Map<string, number>, name: string) => m.get(name) ?? 0;
 
 self.onmessage = async (e: MessageEvent) => {
   const msg = e.data;
@@ -117,11 +118,30 @@ self.onmessage = async (e: MessageEvent) => {
     const faceResult = face.detectForVideo(bitmap, ts);
     const handResult = hands.detectForVideo(bitmap, ts);
 
+    const shapes = faceResult.faceBlendshapes?.[0]
+      ? blendshapeMap(faceResult.faceBlendshapes[0].categories)
+      : new Map<string, number>();
+
+    // Landmarks 13 and 14 are the inner centres of the upper and lower lip;
+    // their midpoint is the mouth, and it stays put whether it is open or shut.
+    const lm = faceResult.faceLandmarks?.[0];
+    const upper = lm?.[13];
+    const lower = lm?.[14];
+    const mouth =
+      upper && lower
+        ? { x: (upper.x + lower.x) / 2, y: (upper.y + lower.y) / 2 }
+        : null;
+
     const frame: VisionFrame = {
       timestamp: ts,
-      smileScore: faceResult.faceBlendshapes?.[0]
-        ? smileFrom(faceResult.faceBlendshapes[0].categories)
-        : 0,
+      smileScore: Math.max(
+        score(shapes, "mouthSmileLeft"),
+        score(shapes, "mouthSmileRight"),
+      ),
+      puckerScore: score(shapes, "mouthPucker"),
+      blinkLeft: score(shapes, "eyeBlinkLeft"),
+      blinkRight: score(shapes, "eyeBlinkRight"),
+      mouth,
       hands: handResult.landmarks.map((lm, i) =>
         summarize(
           lm,

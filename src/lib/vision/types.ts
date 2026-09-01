@@ -31,5 +31,20 @@ export interface VisionFrame {
   timestamp: number;
   /** Max of the mouthSmileLeft / mouthSmileRight ARKit blendshapes, 0..1. */
   smileScore: number;
+  /** ARKit mouthPucker, 0..1. Pursed lips — a kiss. */
+  puckerScore: number;
+  /**
+   * ARKit eyeBlinkLeft / eyeBlinkRight, 0..1, kept separate on purpose: a
+   * wink is the DIFFERENCE between them, and a combined value cannot tell a
+   * wink from an ordinary blink.
+   */
+  blinkLeft: number;
+  blinkRight: number;
+  /**
+   * Centre of the mouth in normalized image coordinates, null when no face is
+   * found. Needed to tell a hand raised over the mouth from a hand raised
+   * anywhere else.
+   */
+  mouth: Point | null;
   hands: HandSummary[];
 }

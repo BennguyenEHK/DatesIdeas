@@ -1,7 +1,17 @@
 import { isMood, type Mood } from "@/lib/cards/types";
 import { isActivityId, type ActivityId } from "@/lib/activities/registry";
 
-export const MEME_IDS = ["heart", "peace", "thumbsUp", "smile"] as const;
+export const MEME_IDS = [
+  "heart",
+  "peace",
+  "thumbsUp",
+  "smile",
+  "blowKiss",
+  "handsOverMouth",
+  "wink",
+  "pray",
+  "thumbsDown",
+] as const;
 export type MemeId = (typeof MEME_IDS)[number];
 
 export function isMemeId(v: unknown): v is MemeId {
