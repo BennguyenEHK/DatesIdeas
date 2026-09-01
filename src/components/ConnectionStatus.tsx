@@ -29,6 +29,8 @@ export function ConnectionStatus({
   rtt,
   gestureReady,
   gestureError,
+  gesturesOn,
+  onToggleGestures,
   onRetry,
 }: {
   state: ConnState;
@@ -37,6 +39,8 @@ export function ConnectionStatus({
   rtt: number;
   gestureReady: boolean;
   gestureError: string | null;
+  gesturesOn: boolean;
+  onToggleGestures: (next: boolean) => void;
   onRetry: () => void;
 }) {
   return (
@@ -59,12 +63,32 @@ export function ConnectionStatus({
         </span>
       )}
 
+      {/* The status text IS the switch: whatever state you are in is the
+          thing you click. It is yours alone — their camera keeps reading
+          gestures either way, and you keep seeing what they send. */}
       {gestureError ? (
         <Item>Gestures unavailable here — you&apos;ll still see theirs</Item>
-      ) : gestureReady ? (
-        <Item>Gestures on</Item>
       ) : (
-        <Item>Warming up gestures</Item>
+        <button
+          onClick={() => onToggleGestures(!gesturesOn)}
+          aria-pressed={gesturesOn}
+          title={
+            gesturesOn
+              ? "Stop reading your camera for gestures"
+              : "Read your camera for gestures again"
+          }
+          className={`underline decoration-dotted underline-offset-4 transition-colors ${
+            gesturesOn
+              ? "text-[var(--mist)] decoration-[var(--mist)]/40 hover:text-[var(--cream)]"
+              : "text-[var(--mist)]/50 decoration-[var(--mist)]/25 hover:text-[var(--mist)]"
+          }`}
+        >
+          {!gesturesOn
+            ? "Gestures off"
+            : gestureReady
+              ? "Gestures on"
+              : "Warming up gestures"}
+        </button>
       )}
 
       {(state === "failed" || state === "reconnecting") && (

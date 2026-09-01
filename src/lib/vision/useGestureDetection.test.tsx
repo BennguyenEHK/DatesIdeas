@@ -98,13 +98,13 @@ afterEach(() => {
 
 describe("useGestureDetection", () => {
   it("builds exactly one worker and initializes it", async () => {
-    renderHook(() => useGestureDetection(stream, () => {}));
+    renderHook(() => useGestureDetection(stream, () => {}, true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     expect(FakeWorker.instances[0].posted[0]).toEqual({ type: "init" });
   });
 
   it("does NOT rebuild the worker when it reports ready", async () => {
-    const { result } = renderHook(() => useGestureDetection(stream, () => {}));
+    const { result } = renderHook(() => useGestureDetection(stream, () => {}, true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     const worker = FakeWorker.instances[0];
 
@@ -117,7 +117,7 @@ describe("useGestureDetection", () => {
   });
 
   it("sends no frames before the worker is ready", async () => {
-    renderHook(() => useGestureDetection(stream, () => {}));
+    renderHook(() => useGestureDetection(stream, () => {}, true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     const worker = FakeWorker.instances[0];
 
@@ -129,7 +129,7 @@ describe("useGestureDetection", () => {
   });
 
   it("pumps frames once the worker is ready", async () => {
-    renderHook(() => useGestureDetection(stream, () => {}));
+    renderHook(() => useGestureDetection(stream, () => {}, true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     const worker = FakeWorker.instances[0];
     act(() => worker.emit({ type: "ready" }));
@@ -139,7 +139,7 @@ describe("useGestureDetection", () => {
   });
 
   it("keeps pumping after each frame is answered", async () => {
-    renderHook(() => useGestureDetection(stream, () => {}));
+    renderHook(() => useGestureDetection(stream, () => {}, true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     const worker = FakeWorker.instances[0];
     act(() => worker.emit({ type: "ready" }));
@@ -154,7 +154,7 @@ describe("useGestureDetection", () => {
   it("recovers when the worker cannot process a frame", async () => {
     // The worker replies `idle` rather than staying silent. Without that reply
     // the pump latches on its first unanswered frame and never sends again.
-    renderHook(() => useGestureDetection(stream, () => {}));
+    renderHook(() => useGestureDetection(stream, () => {}, true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     const worker = FakeWorker.instances[0];
     act(() => worker.emit({ type: "ready" }));
@@ -169,7 +169,7 @@ describe("useGestureDetection", () => {
 
   it("reports gestures the tracker fires", async () => {
     const seen: string[] = [];
-    renderHook(() => useGestureDetection(stream, (id) => seen.push(id)));
+    renderHook(() => useGestureDetection(stream, (id) => seen.push(id), true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     const worker = FakeWorker.instances[0];
     act(() => worker.emit({ type: "ready" }));
@@ -186,7 +186,7 @@ describe("useGestureDetection", () => {
   });
 
   it("surfaces a worker failure instead of pretending gestures work", async () => {
-    const { result } = renderHook(() => useGestureDetection(stream, () => {}));
+    const { result } = renderHook(() => useGestureDetection(stream, () => {}, true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
 
     act(() =>
@@ -201,7 +201,7 @@ describe("useGestureDetection", () => {
       .requestVideoFrameCallback;
     vi.useFakeTimers();
     try {
-      renderHook(() => useGestureDetection(stream, () => {}));
+      renderHook(() => useGestureDetection(stream, () => {}, true));
       await vi.waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
       const worker = FakeWorker.instances[0];
       worker.emit({ type: "ready" });
@@ -214,15 +214,63 @@ describe("useGestureDetection", () => {
   });
 
   it("terminates the worker on unmount", async () => {
-    const { unmount } = renderHook(() => useGestureDetection(stream, () => {}));
+    const { unmount } = renderHook(() => useGestureDetection(stream, () => {}, true));
     await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
     unmount();
     expect(FakeWorker.instances[0].terminated).toBe(true);
   });
 
+  it("builds nothing while gestures are switched off", () => {
+    renderHook(() => useGestureDetection(stream, () => {}, false));
+    // Not merely muted: MediaPipe never starts, so the camera is not analysed
+    // and the laptop is not warmed for nothing.
+    expect(FakeWorker.instances).toHaveLength(0);
+  });
+
+  it("tears the worker down when switched off mid-call", async () => {
+    const { rerender } = renderHook(
+      ({ on }) => useGestureDetection(stream, () => {}, on),
+      { initialProps: { on: true } },
+    );
+    await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
+
+    rerender({ on: false });
+    expect(FakeWorker.instances[0].terminated).toBe(true);
+  });
+
+  it("rebuilds the worker when switched back on", async () => {
+    const { rerender } = renderHook(
+      ({ on }) => useGestureDetection(stream, () => {}, on),
+      { initialProps: { on: true } },
+    );
+    await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
+
+    rerender({ on: false });
+    rerender({ on: true });
+
+    await waitFor(() => expect(FakeWorker.instances).toHaveLength(2));
+    expect(FakeWorker.instances[1].terminated).toBe(false);
+    expect(FakeWorker.instances[1].posted[0]).toEqual({ type: "init" });
+  });
+
+  it("reports not-ready while switched off", async () => {
+    const { result, rerender } = renderHook(
+      ({ on }) => useGestureDetection(stream, () => {}, on),
+      { initialProps: { on: true } },
+    );
+    await waitFor(() => expect(FakeWorker.instances).toHaveLength(1));
+    act(() => FakeWorker.instances[0].emit({ type: "ready" }));
+    await waitFor(() => expect(result.current.ready).toBe(true));
+
+    rerender({ on: false });
+    // Claiming "on" with no worker behind it is the exact lie that made the
+    // original bug invisible.
+    await waitFor(() => expect(result.current.ready).toBe(false));
+  });
+
   it("does nothing without a video track", () => {
     const audioOnly = { getVideoTracks: () => [] } as unknown as MediaStream;
-    renderHook(() => useGestureDetection(audioOnly, () => {}));
+    renderHook(() => useGestureDetection(audioOnly, () => {}, true));
     expect(FakeWorker.instances).toHaveLength(0);
   });
 });

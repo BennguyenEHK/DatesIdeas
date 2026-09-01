@@ -14,10 +14,15 @@ const FALLBACK_INTERVAL_MS = 50;
  * Pumps frames from the local camera into the MediaPipe worker and turns the
  * results into gesture events. If the worker fails to start, gesture SENDING
  * is disabled and the session continues — the partner's memes still arrive.
+ *
+ * `enabled` is this device's own switch. Turning it off stops the analysis
+ * outright rather than muting its output, and it is never sent to the peer:
+ * the other side keeps making gestures, and this side keeps seeing them.
  */
 export function useGestureDetection(
   stream: MediaStream | null,
   onGesture: (id: MemeId) => void,
+  enabled: boolean,
 ) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +32,7 @@ export function useGestureDetection(
   });
 
   useEffect(() => {
+    if (!enabled) return;
     if (!stream || stream.getVideoTracks().length === 0) return;
 
     const worker = new Worker(new URL("./gesture.worker.ts", import.meta.url), {
@@ -116,8 +122,13 @@ export function useGestureDetection(
       if (interval) clearInterval(interval);
       video.srcObject = null;
       worker.terminate();
+      // The worker this readiness referred to is gone. Saying "on" with
+      // nothing behind it is the exact lie that hid the original bug — and
+      // it would also let a re-enabled switch claim readiness before the
+      // replacement worker had finished loading.
+      setReady(false);
     };
-  }, [stream]);
+  }, [stream, enabled]);
 
   return { ready, error };
 }

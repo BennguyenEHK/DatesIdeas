@@ -9,6 +9,7 @@ import { Monogram } from "@/components/Monogram";
 import { VideoStage } from "@/components/VideoStage";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { useMemeQueue } from "@/lib/ui/useMemeQueue";
+import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
 
 /**
@@ -17,7 +18,15 @@ import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
  * never creep onto the video itself.
  */
 export function RoomClient({ code }: { code: string }) {
-  const { memes, show } = useMemeQueue();
+  // One queue per tile: yours lands on your face, theirs on theirs.
+  const mine = useMemeQueue();
+  const theirs = useMemeQueue();
+  // This device's own switch. Never sent to the peer, so turning it off here
+  // leaves them free to keep gesturing — and leaves you still seeing them.
+  const [gesturesOn, setGesturesOn] = usePersistentToggle(
+    "datesidea.gestures",
+    true,
+  );
   const peerRef = useRef<ReturnType<typeof usePeerConnection> | null>(null);
 
   const onMessage = useCallback(
@@ -28,12 +37,12 @@ export function RoomClient({ code }: { code: string }) {
       // no clock there is no shared instant to aim at, so show it now rather
       // than dropping it.
       if (!clock) {
-        show(msg.id);
+        theirs.show(msg.id);
         return;
       }
-      clock.scheduleAt(msg.showAt, () => show(msg.id));
+      clock.scheduleAt(msg.showAt, () => theirs.show(msg.id));
     },
-    [show],
+    [theirs],
   );
 
   const peer = usePeerConnection(code, onMessage);
@@ -51,19 +60,19 @@ export function RoomClient({ code }: { code: string }) {
       // working detector was indistinguishable from a broken one. Show it
       // locally: they cannot see it, but you can see that it fired.
       if (!clock) {
-        show(id);
+        mine.show(id);
         return;
       }
       const showAt = clock.now() + clock.leadTime();
       peerRef.current?.send({ t: "meme", id, showAt });
       // The sender schedules too. Rendering now would be faster but would break
       // the symmetry the design requires.
-      clock.scheduleAt(showAt, () => show(id));
+      clock.scheduleAt(showAt, () => mine.show(id));
     },
-    [session, show],
+    [session, mine],
   );
 
-  const gesture = useGestureDetection(peer.localStream, onGesture);
+  const gesture = useGestureDetection(peer.localStream, onGesture, gesturesOn);
 
   return (
     <>
@@ -83,7 +92,8 @@ export function RoomClient({ code }: { code: string }) {
             <VideoStage
               local={peer.localStream}
               remote={peer.remoteStream}
-              memes={memes}
+              localMemes={mine.memes}
+              remoteMemes={theirs.memes}
               mediaError={peer.mediaError}
             />
           </div>
@@ -98,6 +108,8 @@ export function RoomClient({ code }: { code: string }) {
             rtt={peer.rtt}
             gestureReady={gesture.ready}
             gestureError={gesture.error}
+            gesturesOn={gesturesOn}
+            onToggleGestures={setGesturesOn}
             onRetry={peer.retry}
           />
         </footer>

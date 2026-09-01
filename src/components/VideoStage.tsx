@@ -63,19 +63,21 @@ function Tile({
 }
 
 /**
- * Both tiles receive the same meme list. A reaction is a shared moment, so it
- * lands on your face and theirs at once rather than being pinned to whoever
- * happened to make the gesture.
+ * Each tile gets its own meme list, so a reaction lands on the face that made
+ * it. Both people still see it — on your tile here, on their "Them" tile
+ * there — but it is never duplicated across both.
  */
 export function VideoStage({
   local,
   remote,
-  memes,
+  localMemes,
+  remoteMemes,
   mediaError,
 }: {
   local: MediaStream | null;
   remote: MediaStream | null;
-  memes: ActiveMeme[];
+  localMemes: ActiveMeme[];
+  remoteMemes: ActiveMeme[];
   mediaError: string | null;
 }) {
   return (
@@ -85,7 +87,7 @@ export function VideoStage({
         mirrored
         muted
         label="You"
-        memes={memes}
+        memes={localMemes}
         placeholder={
           mediaError === "denied"
             ? "Your camera is blocked. You can still see and hear them — allow camera access in your browser to send video."
@@ -99,7 +101,7 @@ export function VideoStage({
         mirrored={false}
         muted={false}
         label="Them"
-        memes={memes}
+        memes={remoteMemes}
         placeholder="Waiting for them to arrive. Send them the code and this seat fills itself."
       />
     </div>
