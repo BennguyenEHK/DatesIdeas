@@ -106,6 +106,7 @@ export function RoomClient({ code }: { code: string }) {
             path={peer.path}
             sending={peer.sending}
             rtt={peer.rtt}
+            jitterMs={peer.jitterMs}
             gestureReady={gesture.ready}
             gestureError={gesture.error}
             gesturesOn={gesturesOn}

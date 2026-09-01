@@ -12,7 +12,7 @@ export interface PathInfo {
 }
 
 /** RTCStatsReport is Map-like. Only these two members are needed. */
-interface StatsLike {
+export interface StatsLike {
   values(): Iterable<Record<string, unknown>>;
   get(id: string): Record<string, unknown> | undefined;
 }

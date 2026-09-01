@@ -28,6 +28,7 @@ export function ConnectionStatus({
   path,
   sending,
   rtt,
+  jitterMs,
   gestureReady,
   gestureError,
   gesturesOn,
@@ -38,6 +39,7 @@ export function ConnectionStatus({
   path: PathInfo | null;
   sending: boolean;
   rtt: number;
+  jitterMs: number | null;
   gestureReady: boolean;
   gestureError: string | null;
   gesturesOn: boolean;
@@ -101,6 +103,13 @@ export function ConnectionStatus({
               ? "Gestures on"
               : "Warming up gestures"}
         </button>
+      )}
+
+      {/* What the browser is holding video back by. Never shows up in `rtt`,
+          which times a text message, yet on a long link it can outweigh the
+          whole journey. Worth watching if the picture starts to stutter. */}
+      {state === "connected" && jitterMs !== null && (
+        <Item>buffer {Math.round(jitterMs)}ms</Item>
       )}
 
       {(state === "failed" || state === "reconnecting") && (

@@ -5,6 +5,7 @@ import { fetchIceServers } from "./iceServers";
 import { decode, encode, type PeerMessage } from "./protocol";
 import { SyncedClock } from "@/lib/sync/SyncedClock";
 import { selectPath, type PathInfo } from "./path";
+import { readJitter, jitterDelayMs, type JitterSample } from "./videoStats";
 import { getIdentity } from "@/lib/history/identity";
 import {
   useSignaling,
@@ -27,6 +28,12 @@ export interface PeerApi {
   path: PathInfo | null;
   /** False when this peer negotiated receive-only and cannot send video. */
   sending: boolean;
+  /**
+   * Milliseconds the average video frame spends waiting in the jitter buffer.
+   * Invisible to `rtt`, which times a text message and never touches it, yet
+   * on a long link it can cost more than crossing the ocean.
+   */
+  jitterMs: number | null;
   rtt: number;
   mediaError: string | null;
   clock: SyncedClock | null;
@@ -56,6 +63,7 @@ export function usePeerConnection(
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [state, setState] = useState<ConnState>("idle");
   const [path, setPath] = useState<PathInfo | null>(null);
+  const [jitterMs, setJitterMs] = useState<number | null>(null);
   const [rtt, setRtt] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -73,6 +81,7 @@ export function usePeerConnection(
   const [sending, setSending] = useState(false);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  const jitterRef = useRef<JitterSample | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const clockRef = useRef<SyncedClock | null>(null);
   const offeredRef = useRef(false);
@@ -157,7 +166,12 @@ export function usePeerConnection(
     pcRef.current = pc;
 
     if (localStream) {
-      for (const track of localStream.getTracks()) pc.addTrack(track, localStream);
+      for (const track of localStream.getTracks()) {
+        // A face talking, not a screen full of text: tell the encoder to keep
+        // motion smooth rather than hoarding bits for still detail.
+        if (track.kind === "video") track.contentHint = "motion";
+        pc.addTrack(track, localStream);
+      }
       setSending(true);
     } else {
       setSending(false);
@@ -166,7 +180,10 @@ export function usePeerConnection(
       pc.addTransceiver("audio", { direction: "recvonly" });
     }
 
-    pc.ontrack = (e) => setRemoteStream(e.streams[0] ?? null);
+    pc.ontrack = (e) => {
+      setRemoteStream(e.streams[0] ?? null);
+      shortenJitterBuffer(e.receiver);
+    };
     pc.ondatachannel = (e) => wireDataChannel(e.channel);
     pc.onicecandidate = (e) => {
       if (e.candidate) {
@@ -264,8 +281,15 @@ export function usePeerConnection(
     const sample = async () => {
       const pc = pcRef.current;
       if (!pc) return;
-      const next = selectPath(await pc.getStats());
-      if (!cancelled) setPath(next);
+      const stats = await pc.getStats();
+      if (cancelled) return;
+      setPath(selectPath(stats));
+
+      const sample = readJitter(stats);
+      if (sample) {
+        setJitterMs(jitterDelayMs(jitterRef.current, sample));
+        jitterRef.current = sample;
+      }
     };
 
     void sample();
@@ -295,6 +319,8 @@ export function usePeerConnection(
     pendingIce.current = [];
     setRemoteStream(null);
     setPath(null);
+    setJitterMs(null);
+    jitterRef.current = null;
     setIceSettled(false);
     setState("idle");
     // Re-arm the media gate so the next attempt cannot announce itself
@@ -310,6 +336,7 @@ export function usePeerConnection(
     state,
     path,
     sending,
+    jitterMs,
     rtt,
     mediaError,
     clock,
@@ -332,4 +359,24 @@ async function restartIce(
   const offer = await pc.createOffer({ iceRestart: true });
   await pc.setLocalDescription(offer);
   sendSignal({ kind: "offer", sdp: offer.sdp!, from: getIdentity() });
+}
+
+/**
+ * Ask for the shortest jitter buffer the browser will give us.
+ *
+ * The buffer trades delay for smoothness, and the default leans hard towards
+ * smoothness — often 50-200ms of held-back video. Zero is a request, not an
+ * order: the browser still grows the buffer when the network turns rough,
+ * which is exactly the safety net worth keeping. Chrome 124+; older browsers
+ * simply keep their default.
+ */
+function shortenJitterBuffer(receiver: RTCRtpReceiver): void {
+  try {
+    if ("jitterBufferTarget" in receiver) {
+      (receiver as RTCRtpReceiver & { jitterBufferTarget: number | null })
+        .jitterBufferTarget = 0;
+    }
+  } catch {
+    // Some builds expose the property but reject the assignment.
+  }
 }
