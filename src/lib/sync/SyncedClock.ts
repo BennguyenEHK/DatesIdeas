@@ -16,6 +16,12 @@ export function selectSample(samples: ClockSample[]): ClockSample | null {
 }
 
 export const LEAD_BUFFER_MS = 50;
+/**
+ * No legitimate schedule reaches this far out — leadTime is one-way plus 50ms,
+ * a few hundred milliseconds even on a bad link. Anything beyond it means the
+ * timebase is wrong, and firing late beats leaving the peer staring at nothing.
+ */
+export const MAX_SCHEDULE_MS = 2000;
 const DEFAULT_SAMPLES = 7;
 const SAMPLE_INTERVAL_MS = 120;
 const RESYNC_INTERVAL_MS = 30_000;
@@ -37,6 +43,7 @@ export class SyncedClock {
   private timers = new Set<ReturnType<typeof setTimeout>>();
   private resyncTimer: ReturnType<typeof setInterval> | null = null;
   private _lateFires = 0;
+  private _wildFires = 0;
 
   constructor(opts: SyncedClockOptions) {
     this.send = opts.send;
@@ -59,10 +66,27 @@ export class SyncedClock {
   get lateFires(): number {
     return this._lateFires;
   }
+  /** Schedules so far out they can only mean a broken clock. */
+  get wildFires(): number {
+    return this._wildFires;
+  }
 
-  /** Shared timebase. Equal on both peers to within one-way jitter. */
+  /**
+   * Shared timebase: the midpoint between the two machines' clocks.
+   *
+   * HALF the offset, deliberately. `offset` is how far ahead the peer's clock
+   * runs, so `localNow() + offset` would be this peer's estimate of the OTHER
+   * one's clock — which reads B's clock on A and A's clock on B. That is not
+   * shared at all. A sender would compute `showAt` against the receiver's
+   * clock while the receiver measured it against the sender's, putting the
+   * meme late by the entire difference between two laptop clocks.
+   *
+   * Taking half lands both peers on the same instant: A reports a + skew/2,
+   * B reports b - skew/2, and those are the same moment. It stays correct
+   * however far the two machines have drifted apart.
+   */
   now(): number {
-    return this.localNow() + this.offset;
+    return this.localNow() + this.offset / 2;
   }
 
   /** How far ahead to schedule so the peer receives the instruction in time. */
@@ -74,6 +98,13 @@ export class SyncedClock {
     const delay = sharedTime - this.now();
     if (delay <= 0) {
       this._lateFires += 1;
+      fn();
+      return;
+    }
+    // Defence in depth behind the midpoint fix: never hold a reaction back for
+    // a length of time that could only come from a broken clock.
+    if (delay > MAX_SCHEDULE_MS) {
+      this._wildFires += 1;
       fn();
       return;
     }

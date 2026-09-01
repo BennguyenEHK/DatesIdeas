@@ -36,6 +36,12 @@ export interface PeerApi {
 
 /** ICE can migrate mid-call, so the route is re-checked rather than sampled once. */
 const PATH_POLL_MS = 3000;
+/**
+ * How long to keep signalling fast after the first route works, if ICE never
+ * says it has finished. Without a cap a browser that stays at "connected"
+ * would poll twice a second for the whole call.
+ */
+const ICE_SETTLE_GRACE_MS = 15_000;
 
 const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
@@ -60,6 +66,10 @@ export function usePeerConnection(
   // waits on this: a peer that announces itself before it knows what it can
   // send may be offered to, and would answer `recvonly`.
   const [mediaSettled, setMediaSettled] = useState(false);
+  // "connected" means one route works, NOT that ICE has stopped looking for a
+  // better one. Slowing the candidate exchange at that point can strand the
+  // call on a relay it would otherwise have escaped.
+  const [iceSettled, setIceSettled] = useState(false);
   const [sending, setSending] = useState(false);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -167,6 +177,14 @@ export function usePeerConnection(
         });
       }
     };
+    pc.oniceconnectionstatechange = () => {
+      const ice = pc.iceConnectionState;
+      // "completed" is the real finish line: every check is done and the final
+      // pair is nominated. Only then is there nothing left to exchange.
+      if (ice === "completed" || ice === "failed" || ice === "closed") {
+        setIceSettled(true);
+      }
+    };
     pc.onconnectionstatechange = () => {
       switch (pc.connectionState) {
         case "connected":
@@ -222,14 +240,22 @@ export function usePeerConnection(
       await pc.addIceCandidate(candidate).catch(() => {});
     },
     },
-    // Once the media path is up the handshake is over; polling drops to a
-    // slow heartbeat kept only for renegotiation.
-    state === "connected",
+    // Not `state === "connected"`: ICE keeps hunting for a better route after
+    // the first one succeeds, and a late-arriving direct candidate must not be
+    // held back by a five-second poll. Slow down only once ICE is finished.
+    iceSettled,
     mediaSettled,
   );
   useEffect(() => {
     sendSignalRef.current = signaling.send;
   });
+
+  useEffect(() => {
+    if (state !== "connected" || iceSettled) return;
+    // Safety net for browsers that never report "completed".
+    const id = setTimeout(() => setIceSettled(true), ICE_SETTLE_GRACE_MS);
+    return () => clearTimeout(id);
+  }, [state, iceSettled]);
 
   useEffect(() => {
     if (state !== "connected") return;
@@ -269,6 +295,7 @@ export function usePeerConnection(
     pendingIce.current = [];
     setRemoteStream(null);
     setPath(null);
+    setIceSettled(false);
     setState("idle");
     // Re-arm the media gate so the next attempt cannot announce itself
     // before its camera is ready.
