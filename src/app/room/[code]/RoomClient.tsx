@@ -170,7 +170,7 @@ export function RoomClient({ code }: { code: string }) {
       <Ambience />
       <div className="flex min-h-screen flex-1 flex-col">
         {/* Top letterbox bar */}
-        <header className="bar-top flex items-center justify-between bg-[var(--letterbox)] px-5 py-3">
+        <header className="bar-top flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-[var(--letterbox)] px-5 py-3">
           <Monogram size="compact" />
           <ActivityBar current={current} onSelect={onSelectActivity} />
           <span className="font-[family-name:var(--font-display)] text-sm tracking-[0.45em] text-[var(--lamp)]">

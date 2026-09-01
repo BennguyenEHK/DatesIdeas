@@ -10,15 +10,12 @@ import { ACTIVITIES, type ActivityId } from "@/lib/activities/registry";
 const NEUTRAL_ICON = "✨";
 const NEUTRAL_LABEL = "Activities";
 
-// Below 420px the full row cannot fit beside the monogram and the room code
-// without wrapping the header, so the bar is forced collapsed by CSS alone —
-// no resize listener, no hydration mismatch. Local `expanded` state still
-// exists above that width, it is just moot below it.
-//
-// The breakpoint is written out in full at every use rather than built from a
-// constant: Tailwind scans source text for whole class names, so an
-// interpolated `${WIDE}:flex` is never generated and the collapse silently
-// stops working while types, lint and build all still pass.
+// Collapsing is the reader's choice at every width, never forced by one.
+// A CSS breakpoint that hides the row below some size does not degrade the
+// menu, it removes it: the toggle still flips its own state, so the button
+// appears to work while the activities stay permanently unreachable. Four
+// 32px bubbles are ~146px, which fits a 360px phone beside the monogram and
+// the room code; the header wraps if it ever does not.
 
 function bubbleClass(selected: boolean, ready: boolean): string {
   const base =
@@ -62,9 +59,7 @@ export function ActivityBar({
         id={groupId}
         role="group"
         aria-label="Activities"
-        className={
-          expanded ? "hidden min-[420px]:flex items-center gap-1.5" : "hidden"
-        }
+        className={expanded ? "flex items-center gap-1.5" : "hidden"}
       >
         {ACTIVITIES.map((activityDef) => {
           const selected = activityDef.id === current;
@@ -127,19 +122,21 @@ export function ActivityBar({
         <span
           className={
             expanded
-              ? "inline-flex items-center gap-1.5 px-2 min-[420px]:hidden"
+              ? "hidden"
               : "inline-flex items-center gap-1.5 px-2"
           }
         >
           <span aria-hidden className="text-base">
             {triggerIcon}
           </span>
-          <span className="font-sans text-xs tracking-wide">{triggerLabel}</span>
+          <span className="hidden font-sans text-xs tracking-wide sm:inline">
+            {triggerLabel}
+          </span>
         </span>
 
         {/* The retract chevron: only meaningful once the row is actually on
             screen, i.e. expanded on a wide-enough viewport. */}
-        <span aria-hidden className={expanded ? "hidden min-[420px]:inline-flex px-2" : "hidden"}>
+        <span aria-hidden className={expanded ? "inline-flex px-2" : "hidden"}>
           <svg viewBox="0 0 16 16" className="h-3 w-3 rotate-180 fill-none stroke-current" strokeWidth={1.6}>
             <path d="M4 6l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
