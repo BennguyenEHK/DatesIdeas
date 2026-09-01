@@ -16,7 +16,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
-const MOODS = new Set(["light", "us", "deep"]);
+const MOODS = new Set(["light", "us", "deep", "dare"]);
 
 function loadDatabaseUrl() {
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
@@ -31,14 +31,25 @@ function loadDatabaseUrl() {
   return line.slice("DATABASE_URL=".length).trim();
 }
 
-const file = path.join(ROOT, "neon", "seed", "cards.json");
-if (!existsSync(file)) {
-  console.error(`missing ${file}`);
+// Every seed file in the folder, so questions and dares load together and are
+// checked for collisions against each other rather than only within a file.
+const SEED_DIR = path.join(ROOT, "neon", "seed");
+const files = ["cards.json", "dares.json"]
+  .map((f) => path.join(SEED_DIR, f))
+  .filter((f) => existsSync(f));
+
+if (files.length === 0) {
+  console.error(`no seed files in ${SEED_DIR}`);
   process.exit(1);
 }
 
-const cards = JSON.parse(readFileSync(file, "utf8"));
-if (!Array.isArray(cards)) throw new Error("cards.json must be an array");
+const cards = [];
+for (const f of files) {
+  const parsed = JSON.parse(readFileSync(f, "utf8"));
+  if (!Array.isArray(parsed)) throw new Error(`${path.basename(f)} must be an array`);
+  console.log(`${path.basename(f)}: ${parsed.length}`);
+  cards.push(...parsed);
+}
 
 // Validate before touching the database: a half-applied deck is worse than a
 // rejected one, and the failure is far easier to read here than from a
@@ -82,11 +93,13 @@ const [counts] = await sql`
     count(*)::int                                    AS total,
     count(*) FILTER (WHERE mood = 'light')::int      AS light,
     count(*) FILTER (WHERE mood = 'us')::int         AS us,
-    count(*) FILTER (WHERE mood = 'deep')::int       AS deep
+    count(*) FILTER (WHERE mood = 'deep')::int       AS deep,
+    count(*) FILTER (WHERE mood = 'dare')::int       AS dare
   FROM card_game
 `;
 
 console.log(
   `\nadded ${added} of ${cards.length}\n` +
-    `deck now: ${counts.total} (light ${counts.light}, us ${counts.us}, deep ${counts.deep})\n`,
+    `deck now: ${counts.total} (light ${counts.light}, us ${counts.us}, ` +
+    `deep ${counts.deep}, dare ${counts.dare})\n`,
 );

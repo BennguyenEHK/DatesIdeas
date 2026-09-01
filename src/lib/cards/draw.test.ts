@@ -10,6 +10,13 @@ const deck: Card[] = [
   { id: 5, text: "d1", mood: "deep" },
 ];
 
+/** Questions and dares in one pile, as the real deck is. */
+const mixedDeck: Card[] = [
+  ...deck,
+  { id: 6, text: "dare1", mood: "dare" },
+  { id: 7, text: "dare2", mood: "dare" },
+];
+
 /** Deterministic stand-in for Math.random, cycling through fixed values. */
 function fixedRandom(...values: number[]) {
   let i = 0;
@@ -78,6 +85,37 @@ describe("drawCard", () => {
     const one: Card[] = [{ id: 5, text: "d1", mood: "deep" }];
     const got = drawCard(one, new Set([5]), "deep", fixedRandom(0), 5);
     expect(got?.card.id).toBe(5);
+  });
+
+  it("pools dares and questions into one shuffle under 'all'", () => {
+    // The point of putting dares in the same deck: an evening can turn from a
+    // hard question to a silly task without either of you choosing to.
+    const seen = new Set<number>();
+    const moods = new Set<string>();
+    for (let i = 0; i < 300; i++) {
+      const got = drawCard(mixedDeck, seen, "all", Math.random);
+      if (!got) break;
+      moods.add(got.card.mood);
+      seen.add(got.card.id);
+      if (seen.size === mixedDeck.length) seen.clear();
+    }
+    expect(moods.has("dare")).toBe(true);
+    expect(moods.has("deep")).toBe(true);
+  });
+
+  it("draws only dares when the filter asks for them", () => {
+    for (const r of [0, 0.5, 0.99]) {
+      const got = drawCard(mixedDeck, new Set(), "dare", fixedRandom(r));
+      expect(got?.card.mood).toBe("dare");
+    }
+  });
+
+  it("never serves a question when the dare pile is spent", () => {
+    // Reshuffling has to stay inside the filter, or asking for a dare would
+    // quietly hand back a deep question instead.
+    const got = drawCard(mixedDeck, new Set([6, 7]), "dare", fixedRandom(0));
+    expect(got?.card.mood).toBe("dare");
+    expect(got?.reshuffled).toBe(true);
   });
 
   it("spreads draws across the eligible cards", () => {

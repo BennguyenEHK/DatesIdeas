@@ -1,4 +1,10 @@
-export const MOODS = ["light", "us", "deep"] as const;
+/**
+ * "dare" is a challenge rather than a question — you do it instead of
+ * answering it. It shares the deck on purpose: pooled into one shuffle, an
+ * evening can turn from a hard question to a silly task without either of you
+ * having to decide to change the subject.
+ */
+export const MOODS = ["light", "us", "deep", "dare"] as const;
 export type Mood = (typeof MOODS)[number];
 
 /**
@@ -23,4 +29,5 @@ export const MOOD_LABELS: Record<Mood, string> = {
   light: "Light",
   us: "Us",
   deep: "Deep",
+  dare: "Dare",
 };
