@@ -196,6 +196,16 @@ describe("detectRaw", () => {
     expect(detectRaw(f, none).has("handsOverMouth")).toBe(true);
   });
 
+  it("ignores a hand resting near the chin rather than over the mouth", () => {
+    // 1.6 hand-widths reached anything beside the face. A hand has to be
+    // genuinely at the mouth, not merely in the neighbourhood.
+    const f = frame({
+      mouth: { x: 0.5, y: 0.5 },
+      hands: [hand({ wrist: { x: 0.58, y: 0.64 }, indexTip: { x: 0.58, y: 0.56 } })],
+    });
+    expect(detectRaw(f, none).has("handsOverMouth")).toBe(false);
+  });
+
   it("does not fire for a hand raised somewhere else", () => {
     const f = frame({
       mouth: { x: 0.5, y: 0.5 },
@@ -232,7 +242,7 @@ describe("detectRaw", () => {
   it("detects a wink that does not fully shut the eye", () => {
     // Most people do not squeeze the eye closed. Demanding that they do is
     // what made this the hardest gesture to trigger.
-    const soft = frame({ blinkLeft: 0.45, blinkRight: 0.05 });
+    const soft = frame({ blinkLeft: 0.55, blinkRight: 0.05 });
     expect(detectRaw(soft, none).has("wink")).toBe(true);
   });
 
@@ -334,7 +344,7 @@ describe("detectRaw", () => {
     // Prayer hands rest at the chin, which puts a palm inside the
     // hands-over-mouth radius. Prayer is the more specific pose.
     const f = frame({
-      mouth: { x: 0.5, y: 0.45 },
+      mouth: { x: 0.5, y: 0.54 },
       hands: [
         hand({ extended: FLAT, wrist: { x: 0.49, y: 0.70 }, indexTip: { x: 0.49, y: 0.40 } }),
         hand({ extended: FLAT, wrist: { x: 0.51, y: 0.70 }, indexTip: { x: 0.51, y: 0.40 } }),

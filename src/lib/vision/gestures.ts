@@ -31,9 +31,9 @@ const PUCKER_EXIT = 0.65;
  * gap between them are required, so an ordinary blink — which closes both —
  * can never satisfy it.
  */
-const WINK_CLOSED = 0.4;
-const WINK_OPEN = 0.35;
-const WINK_GAP = 0.3;
+const WINK_CLOSED = 0.45;
+const WINK_OPEN = 0.32;
+const WINK_GAP = 0.35;
 /**
  * Deliberately looser than WINK_GAP. Closing one eye raises that cheek, and
  * the smile blendshape keys off cheek raise — so a wink pushes the smile score
@@ -46,10 +46,10 @@ const WINK_GAP = 0.3;
  */
 const EYES_ASYMMETRIC = 0.25;
 /** Wrist separation for palms pressed together, in units of hand scale. */
-const PRAY_ENTER = 0.8;
-const PRAY_EXIT = 1.2;
+const PRAY_ENTER = 0.95;
+const PRAY_EXIT = 1.35;
 /** How far above the wrist the fingertips must sit for hands to read as raised. */
-const PRAY_UPRIGHT = 0.6;
+const PRAY_UPRIGHT = 0.5;
 /**
  * How far the thumb must clear the wrist vertically. Sitting on the correct
  * side of it is not enough: in a finger heart the thumbs angle downwards just
@@ -57,8 +57,8 @@ const PRAY_UPRIGHT = 0.6;
  */
 const THUMB_CLEAR = 0.5;
 /** Palm-to-mouth distance, in units of hand scale. */
-const COVER_ENTER = 1.6;
-const COVER_EXIT = 2.1;
+const COVER_ENTER = 1.0;
+const COVER_EXIT = 1.4;
 
 function dist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
