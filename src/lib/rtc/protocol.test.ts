@@ -34,3 +34,34 @@ describe("protocol", () => {
     expect([...MEME_IDS]).toEqual(["heart", "peace", "thumbsUp", "smile"]);
   });
 });
+
+describe("card messages", () => {
+  const card = {
+    t: "card" as const,
+    cardId: 42,
+    text: "What did you think of me when we first met?",
+    mood: "us" as const,
+    showAt: 1_700_000_000_000,
+  };
+
+  it("round-trips a drawn card", () => {
+    expect(decode(encode(card))).toEqual(card);
+  });
+
+  it("rejects an unknown mood", () => {
+    // A mood outside the three would reach the UI and index nothing.
+    expect(decode(JSON.stringify({ ...card, mood: "spicy" }))).toBeNull();
+  });
+
+  it("rejects a missing question", () => {
+    expect(decode(JSON.stringify({ ...card, text: undefined }))).toBeNull();
+  });
+
+  it("rejects a non-numeric card id", () => {
+    expect(decode(JSON.stringify({ ...card, cardId: "42" }))).toBeNull();
+  });
+
+  it("rejects a card without a showAt", () => {
+    expect(decode(JSON.stringify({ ...card, showAt: undefined }))).toBeNull();
+  });
+});

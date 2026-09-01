@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePeerConnection } from "@/lib/rtc/usePeerConnection";
 import { useGestureDetection } from "@/lib/vision/useGestureDetection";
 import { useSession } from "@/lib/history/useSession";
@@ -9,6 +9,11 @@ import { Monogram } from "@/components/Monogram";
 import { VideoStage } from "@/components/VideoStage";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { useMemeQueue } from "@/lib/ui/useMemeQueue";
+import { QuestionCard } from "@/components/QuestionCard";
+import { CardControls } from "@/components/CardControls";
+import { useDeck } from "@/lib/cards/useDeck";
+import { drawCard, type MoodFilter } from "@/lib/cards/draw";
+import type { Card } from "@/lib/cards/types";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
 
@@ -29,8 +34,44 @@ export function RoomClient({ code }: { code: string }) {
   );
   const peerRef = useRef<ReturnType<typeof usePeerConnection> | null>(null);
 
+  const { deck } = useDeck();
+  const [card, setCard] = useState<Card | null>(null);
+  const [mood, setMood] = useState<MoodFilter>("all");
+  // Every card either of you draws counts as seen on both sides, so the two
+  // decks stay in step and neither of you is served a question twice.
+  const seenRef = useRef(new Set<number>());
+  // Both peers receive both messages when you tap Draw at the same instant.
+  // Keeping the later showAt makes that deterministic: each side computes the
+  // same winner independently, so they cannot end up on different questions.
+  const cardShownAt = useRef(-Infinity);
+
+  const cardRef = useRef<Card | null>(null);
+  useEffect(() => {
+    cardRef.current = card;
+  });
+
+  const showCard = useCallback((next: Card, showAt: number) => {
+    if (showAt < cardShownAt.current) return;
+    // Same instant: lowest id wins. Arbitrary, but both peers apply the same
+    // rule to the same two messages, which is all determinism requires.
+    if (showAt === cardShownAt.current && next.id > (cardRef.current?.id ?? -1)) return;
+    cardShownAt.current = showAt;
+    seenRef.current.add(next.id);
+    setCard(next);
+  }, []);
+
   const onMessage = useCallback(
     (msg: PeerMessage) => {
+      if (msg.t === "card") {
+        const next: Card = { id: msg.cardId, text: msg.text, mood: msg.mood };
+        const clock = peerRef.current?.clock;
+        if (!clock) {
+          showCard(next, msg.showAt);
+          return;
+        }
+        clock.scheduleAt(msg.showAt, () => showCard(next, msg.showAt));
+        return;
+      }
       if (msg.t !== "meme") return;
       const clock = peerRef.current?.clock;
       // Scheduled, not immediate: both screens land on the same instant. With
@@ -42,7 +83,7 @@ export function RoomClient({ code }: { code: string }) {
       }
       clock.scheduleAt(msg.showAt, () => theirs.show(msg.id));
     },
-    [theirs],
+    [theirs, showCard],
   );
 
   const peer = usePeerConnection(code, onMessage);
@@ -74,6 +115,26 @@ export function RoomClient({ code }: { code: string }) {
 
   const gesture = useGestureDetection(peer.localStream, onGesture, gesturesOn);
 
+  const onDraw = useCallback(() => {
+    const drawn = drawCard(deck, seenRef.current, mood, Math.random, card?.id);
+    if (!drawn) return;
+    if (drawn.reshuffled) seenRef.current.clear();
+
+    const clock = peerRef.current?.clock;
+    const showAt = clock ? clock.now() + clock.leadTime() : Date.now();
+    peerRef.current?.send({
+      t: "card",
+      cardId: drawn.card.id,
+      text: drawn.card.text,
+      mood: drawn.card.mood,
+      showAt,
+    });
+    // Scheduled on both sides, like the memes, so the question turns over at
+    // the same moment for both of you.
+    if (clock) clock.scheduleAt(showAt, () => showCard(drawn.card, showAt));
+    else showCard(drawn.card, showAt);
+  }, [deck, mood, card, showCard]);
+
   return (
     <>
       <Ambience />
@@ -96,6 +157,7 @@ export function RoomClient({ code }: { code: string }) {
               remoteMemes={theirs.memes}
               mediaError={peer.mediaError}
             />
+            <QuestionCard card={card} onDismiss={() => setCard(null)} />
           </div>
         </main>
 
@@ -112,6 +174,13 @@ export function RoomClient({ code }: { code: string }) {
             gesturesOn={gesturesOn}
             onToggleGestures={setGesturesOn}
             onRetry={peer.retry}
+          />
+          <CardControls
+            mood={mood}
+            onMood={setMood}
+            onDraw={onDraw}
+            disabled={deck.length === 0}
+            hasCard={card !== null}
           />
         </footer>
       </div>

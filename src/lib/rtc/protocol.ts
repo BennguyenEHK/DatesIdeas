@@ -1,3 +1,5 @@
+import { isMood, type Mood } from "@/lib/cards/types";
+
 export const MEME_IDS = ["heart", "peace", "thumbsUp", "smile"] as const;
 export type MemeId = (typeof MEME_IDS)[number];
 
@@ -9,7 +11,11 @@ export type PeerMessage =
   | { t: "hello"; identity: string; name: string }
   | { t: "ping"; t0: number }
   | { t: "pong"; t0: number; t1: number }
-  | { t: "meme"; id: MemeId; showAt: number };
+  | { t: "meme"; id: MemeId; showAt: number }
+  // The text rides along with the id. The id is what both sides track so a
+  // question is not drawn twice; the text means a peer whose deck fetch
+  // failed still shows the question instead of a blank card.
+  | { t: "card"; cardId: number; text: string; mood: Mood; showAt: number };
 
 export function encode(m: PeerMessage): string {
   return JSON.stringify(m);
@@ -47,6 +53,16 @@ export function decode(raw: string): PeerMessage | null {
     case "meme":
       return isMemeId(m.id) && isNum(m.showAt)
         ? { t: "meme", id: m.id, showAt: m.showAt }
+        : null;
+    case "card":
+      return isNum(m.cardId) && isStr(m.text) && isMood(m.mood) && isNum(m.showAt)
+        ? {
+            t: "card",
+            cardId: m.cardId,
+            text: m.text,
+            mood: m.mood,
+            showAt: m.showAt,
+          }
         : null;
     default:
       return null;
