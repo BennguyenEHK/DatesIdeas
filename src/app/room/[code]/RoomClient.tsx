@@ -14,6 +14,11 @@ import { CardControls } from "@/components/CardControls";
 import { useDeck } from "@/lib/cards/useDeck";
 import { drawCard, type MoodFilter } from "@/lib/cards/draw";
 import type { Card } from "@/lib/cards/types";
+import { ActivityBar } from "@/components/ActivityBar";
+import { TakeoverStage } from "@/components/TakeoverStage";
+import { activity, activityKey, type ActivityId } from "@/lib/activities/registry";
+import { shouldReplace } from "@/lib/sync/resolveSwap";
+import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
 
@@ -43,25 +48,37 @@ export function RoomClient({ code }: { code: string }) {
   // Both peers receive both messages when you tap Draw at the same instant.
   // Keeping the later showAt makes that deterministic: each side computes the
   // same winner independently, so they cannot end up on different questions.
-  const cardShownAt = useRef(-Infinity);
+  const cardSwap = useRef<{ showAt: number; key: number } | null>(null);
 
-  const cardRef = useRef<Card | null>(null);
-  useEffect(() => {
-    cardRef.current = card;
-  });
+  const [current, setCurrent] = useState<ActivityId | null>(null);
+  const activitySwap = useRef<{ showAt: number; key: number } | null>(null);
+
+  const applyActivity = useCallback((id: ActivityId | null, showAt: number) => {
+    // key -1 for "closed" keeps null orderable against the real activities.
+    const key = id === null ? -1 : activityKey(id);
+    if (!shouldReplace(activitySwap.current, { showAt, key })) return;
+    activitySwap.current = { showAt, key };
+    setCurrent(id);
+  }, []);
 
   const showCard = useCallback((next: Card, showAt: number) => {
-    if (showAt < cardShownAt.current) return;
-    // Same instant: lowest id wins. Arbitrary, but both peers apply the same
-    // rule to the same two messages, which is all determinism requires.
-    if (showAt === cardShownAt.current && next.id > (cardRef.current?.id ?? -1)) return;
-    cardShownAt.current = showAt;
+    if (!shouldReplace(cardSwap.current, { showAt, key: next.id })) return;
+    cardSwap.current = { showAt, key: next.id };
     seenRef.current.add(next.id);
     setCard(next);
   }, []);
 
   const onMessage = useCallback(
     (msg: PeerMessage) => {
+      if (msg.t === "activity") {
+        const clock = peerRef.current?.clock;
+        if (!clock) {
+          applyActivity(msg.id, msg.showAt);
+          return;
+        }
+        clock.scheduleAt(msg.showAt, () => applyActivity(msg.id, msg.showAt));
+        return;
+      }
       if (msg.t === "card") {
         const next: Card = { id: msg.cardId, text: msg.text, mood: msg.mood };
         const clock = peerRef.current?.clock;
@@ -83,7 +100,7 @@ export function RoomClient({ code }: { code: string }) {
       }
       clock.scheduleAt(msg.showAt, () => theirs.show(msg.id));
     },
-    [theirs, showCard],
+    [theirs, showCard, applyActivity],
   );
 
   const peer = usePeerConnection(code, onMessage);
@@ -114,6 +131,19 @@ export function RoomClient({ code }: { code: string }) {
   );
 
   const gesture = useGestureDetection(peer.localStream, onGesture, gesturesOn);
+  const kind = current === null ? "companion" : activity(current).kind;
+
+  const onSelectActivity = useCallback(
+    (id: ActivityId | null) => {
+      const clock = peerRef.current?.clock;
+      const showAt = clock ? clock.now() + clock.leadTime() : Date.now();
+      peerRef.current?.send({ t: "activity", id, showAt });
+      // Scheduled on both sides so the evening turns over together.
+      if (clock) clock.scheduleAt(showAt, () => applyActivity(id, showAt));
+      else applyActivity(id, showAt);
+    },
+    [applyActivity],
+  );
 
   const onDraw = useCallback(() => {
     const drawn = drawCard(deck, seenRef.current, mood, Math.random, card?.id);
@@ -142,6 +172,7 @@ export function RoomClient({ code }: { code: string }) {
         {/* Top letterbox bar */}
         <header className="bar-top flex items-center justify-between bg-[var(--letterbox)] px-5 py-3">
           <Monogram size="compact" />
+          <ActivityBar current={current} onSelect={onSelectActivity} />
           <span className="font-[family-name:var(--font-display)] text-sm tracking-[0.45em] text-[var(--lamp)]">
             {code}
           </span>
@@ -150,14 +181,36 @@ export function RoomClient({ code }: { code: string }) {
         {/* The stage */}
         <main className="flex flex-1 items-center justify-center px-4 py-6 md:px-8">
           <div className="w-full max-w-6xl">
-            <VideoStage
-              local={peer.localStream}
-              remote={peer.remoteStream}
-              localMemes={mine.memes}
-              remoteMemes={theirs.memes}
-              mediaError={peer.mediaError}
-            />
-            <QuestionCard card={card} onDismiss={() => setCard(null)} />
+            {/* The stage takes one of two shapes. A film is the only thing
+                that should be larger than a face; everything else here IS the
+                faces, so it stays companion-sized with the activity beneath. */}
+            {kind === "takeover" ? (
+              <TakeoverStage
+                local={peer.localStream}
+                remote={peer.remoteStream}
+                localMemes={mine.memes}
+                remoteMemes={theirs.memes}
+                mediaError={peer.mediaError}
+              >
+                <ActivityPlaceholder id={current} />
+              </TakeoverStage>
+            ) : (
+              <>
+                <VideoStage
+                  local={peer.localStream}
+                  remote={peer.remoteStream}
+                  localMemes={mine.memes}
+                  remoteMemes={theirs.memes}
+                  mediaError={peer.mediaError}
+                />
+                {current === "cards" && (
+                  <QuestionCard card={card} onDismiss={() => setCard(null)} />
+                )}
+                {current !== null && current !== "cards" && (
+                  <ActivityPlaceholder id={current} />
+                )}
+              </>
+            )}
           </div>
         </main>
 
@@ -175,13 +228,15 @@ export function RoomClient({ code }: { code: string }) {
             onToggleGestures={setGesturesOn}
             onRetry={peer.retry}
           />
-          <CardControls
-            mood={mood}
-            onMood={setMood}
-            onDraw={onDraw}
-            disabled={deck.length === 0}
-            hasCard={card !== null}
-          />
+          {current === "cards" && (
+            <CardControls
+              mood={mood}
+              onMood={setMood}
+              onDraw={onDraw}
+              disabled={deck.length === 0}
+              hasCard={card !== null}
+            />
+          )}
         </footer>
       </div>
     </>

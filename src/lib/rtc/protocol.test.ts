@@ -65,3 +65,25 @@ describe("card messages", () => {
     expect(decode(JSON.stringify({ ...card, showAt: undefined }))).toBeNull();
   });
 });
+
+describe("activity messages", () => {
+  const msg = { t: "activity" as const, id: "movie" as const, showAt: 1_700_000 };
+
+  it("round-trips an activity switch", () => {
+    expect(decode(encode(msg))).toEqual(msg);
+  });
+
+  it("round-trips closing the activity", () => {
+    const close = { t: "activity" as const, id: null, showAt: 1_700_000 };
+    expect(decode(encode(close))).toEqual(close);
+  });
+
+  it("rejects an unknown activity", () => {
+    // An id outside the registry would index nothing and blank the stage.
+    expect(decode(JSON.stringify({ ...msg, id: "bowling" }))).toBeNull();
+  });
+
+  it("rejects an activity without a showAt", () => {
+    expect(decode(JSON.stringify({ ...msg, showAt: undefined }))).toBeNull();
+  });
+});

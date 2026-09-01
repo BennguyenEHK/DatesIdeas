@@ -1,4 +1,5 @@
 import { isMood, type Mood } from "@/lib/cards/types";
+import { isActivityId, type ActivityId } from "@/lib/activities/registry";
 
 export const MEME_IDS = ["heart", "peace", "thumbsUp", "smile"] as const;
 export type MemeId = (typeof MEME_IDS)[number];
@@ -15,7 +16,10 @@ export type PeerMessage =
   // The text rides along with the id. The id is what both sides track so a
   // question is not drawn twice; the text means a peer whose deck fetch
   // failed still shows the question instead of a blank card.
-  | { t: "card"; cardId: number; text: string; mood: Mood; showAt: number };
+  | { t: "card"; cardId: number; text: string; mood: Mood; showAt: number }
+  // Which activity both screens are on. Shared, so an evening moves together.
+  // `null` closes the activity and returns to plain video.
+  | { t: "activity"; id: ActivityId | null; showAt: number };
 
 export function encode(m: PeerMessage): string {
   return JSON.stringify(m);
@@ -63,6 +67,10 @@ export function decode(raw: string): PeerMessage | null {
             mood: m.mood,
             showAt: m.showAt,
           }
+        : null;
+    case "activity":
+      return (m.id === null || isActivityId(m.id)) && isNum(m.showAt)
+        ? { t: "activity", id: m.id as ActivityId | null, showAt: m.showAt }
         : null;
     default:
       return null;

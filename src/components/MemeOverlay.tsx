@@ -21,7 +21,14 @@ const EMOJI: Record<MemeId, string> = {
  * a soft fade upward. The fade is a plain tween — springing on the way out
  * would fight the drift and read as a bounce rather than a goodbye.
  */
-export function MemeOverlay({ memes }: { memes: ActiveMeme[] }) {
+export function MemeOverlay({
+  memes,
+  size = "full",
+}: {
+  memes: ActiveMeme[];
+  /** Scales the emoji to its tile. A full-size reaction swamps a small one. */
+  size?: "full" | "compact";
+}) {
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
       <AnimatePresence>
@@ -37,7 +44,9 @@ export function MemeOverlay({ memes }: { memes: ActiveMeme[] }) {
               transition: { duration: 0.35, ease: "easeOut" },
             }}
             transition={{ type: "spring", stiffness: 320, damping: 22 }}
-            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 select-none text-7xl md:text-8xl"
+            className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 select-none ${
+              size === "compact" ? "text-3xl md:text-4xl" : "text-7xl md:text-8xl"
+            }`}
             style={{ filter: "drop-shadow(0 6px 18px rgba(8,11,28,0.55))" }}
           >
             {EMOJI[m.id]}
