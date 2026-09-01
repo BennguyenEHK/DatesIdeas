@@ -156,9 +156,13 @@ export function useSyncedPlayback(
         return;
       }
 
-      if (needsCorrection(p.currentTime(), want)) p.seek(want);
+      // Play/pause BEFORE seeking, not after. YouTube's seekTo starts playback
+      // when the video is merely cued rather than paused, so seeking first
+      // would blip the audio on a paused resync. Seeking an already-paused
+      // player leaves it paused, which is what makes this order safe.
       if (cur.playing) p.play();
       else p.pause();
+      if (needsCorrection(p.currentTime(), want)) p.seek(want);
     };
 
     const correcting = setInterval(tick, CORRECT_INTERVAL_MS);
