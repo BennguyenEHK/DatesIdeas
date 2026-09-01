@@ -53,6 +53,9 @@ export function RoomClient({ code }: { code: string }) {
   // right now, and a stored answer from last week cannot know that.
   const [audioMode, setAudioMode] = useState<AudioMode | null>(null);
   const [videoError, setVideoError] = useState<number | null>(null);
+  // Local to this side, never sent. Starts below full because the reported
+  // problem was the backing track burying the other person's voice.
+  const [musicVolume, setMusicVolume] = useState(70);
   // State, not a ref: a state setter is a valid callback ref and keeps the
   // player handle a plain value everywhere else.
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
@@ -174,6 +177,12 @@ export function RoomClient({ code }: { code: string }) {
   const gesture = useGestureDetection(peer.localStream, onGesture, gesturesOn);
   const kind = current === null ? "companion" : activity(current).kind;
 
+  // Applied here rather than through the sync layer: loudness is this side's
+  // alone, and routing it through shared state would push it to the peer.
+  useEffect(() => {
+    player?.setVolume(musicVolume);
+  }, [player, musicVolume]);
+
   // Retune the live microphone to match how the song is being heard. On
   // speakers echo cancellation stays on, since it is the only thing stopping
   // the microphone sending back a second copy of the song.
@@ -289,6 +298,8 @@ export function RoomClient({ code }: { code: string }) {
               audioMode={audioMode}
               onChooseAudio={setAudioMode}
               videoError={videoError}
+              musicVolume={musicVolume}
+              onMusicVolume={setMusicVolume}
               onLoad={(id) => {
                 // A new attempt starts clean; the last refusal was about the
                 // last video, not this one.

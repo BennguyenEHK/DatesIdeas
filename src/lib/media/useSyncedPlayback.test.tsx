@@ -21,6 +21,7 @@ function fakePlayer(ready = true) {
       time = s;
     },
     currentTime: () => time,
+    setVolume: (v) => calls.push(`volume:${v}`),
   };
   return {
     handle,
@@ -104,6 +105,20 @@ describe("useSyncedPlayback", () => {
     // No timer advanced at all.
     expect(p.calls.length).toBeGreaterThan(before);
     expect(p.calls).toContain("play");
+  });
+
+  it("never sends the local music level to the peer", () => {
+    // Loudness is this side's alone. If it ever entered the shared state, one
+    // person reaching for their own volume would move the other's.
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
+    );
+    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => void vi.advanceTimersByTime(11_000));
+    expect(JSON.stringify(sent)).not.toContain("volume");
+    expect(p.calls.some((c) => c.startsWith("volume:"))).toBe(false);
   });
 
   it("does not touch a player that is not ready", () => {

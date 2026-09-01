@@ -14,4 +14,13 @@ export interface PlayerHandle {
   seek(seconds: number): void;
   /** Current position in seconds; 0 before the player is ready. */
   currentTime(): number;
+  /**
+   * 0-100, and deliberately absent from the shared playback state.
+   *
+   * The song never crosses the connection — each side streams it — so loudness
+   * is the one karaoke setting that is genuinely personal. Turning the music
+   * down here lifts the other person's voice above it without moving either
+   * player off the beat.
+   */
+  setVolume(percent: number): void;
 }

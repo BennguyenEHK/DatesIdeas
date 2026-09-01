@@ -18,6 +18,8 @@ export function KaraokePanel(props: {
   audioMode: AudioMode | null;
   onChooseAudio: (mode: AudioMode) => void;
   onLoad: (videoId: string) => void;
+  musicVolume: number;
+  onMusicVolume: (percent: number) => void;
   onPlayPause: () => void;
   onResync: () => void;
   onClear: () => void;
@@ -29,6 +31,8 @@ export function KaraokePanel(props: {
     audioMode,
     onChooseAudio,
     onLoad,
+    musicVolume,
+    onMusicVolume,
     onPlayPause,
     onResync,
     onClear,
@@ -45,6 +49,8 @@ export function KaraokePanel(props: {
           playing={playing}
           audioMode={audioMode}
           onChooseAudio={onChooseAudio}
+          musicVolume={musicVolume}
+          onMusicVolume={onMusicVolume}
           onPlayPause={onPlayPause}
           onResync={onResync}
           onClear={onClear}
@@ -229,10 +235,52 @@ function SongPicker({
   );
 }
 
+/**
+ * The music level, and only this side's.
+ *
+ * Not part of the shared playback state on purpose: the song is streamed by
+ * each side rather than sent between them, so loudness can differ while the
+ * position stays identical. At zero the music is silent here and still
+ * running — which is a real way to use it, listening to nothing but the other
+ * person while both players stay on the same beat.
+ */
+function MusicVolume({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (percent: number) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <label htmlFor={id} className="whitespace-nowrap text-[var(--mist)]">
+        Music
+      </label>
+      <input
+        id={id}
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-valuetext={value === 0 ? "Muted here" : `${value} percent`}
+        className="h-1 w-24 cursor-pointer appearance-none rounded-full bg-[var(--edge)] accent-[var(--lamp)]"
+      />
+      <span className="w-8 tabular-nums text-[var(--mist)]">
+        {value === 0 ? "off" : `${value}%`}
+      </span>
+    </div>
+  );
+}
+
 function Transport({
   playing,
   audioMode,
   onChooseAudio,
+  musicVolume,
+  onMusicVolume,
   onPlayPause,
   onResync,
   onClear,
@@ -240,6 +288,8 @@ function Transport({
   playing: boolean;
   audioMode: AudioMode;
   onChooseAudio: (mode: AudioMode) => void;
+  musicVolume: number;
+  onMusicVolume: (percent: number) => void;
   onPlayPause: () => void;
   onResync: () => void;
   onClear: () => void;
@@ -301,6 +351,8 @@ function Transport({
         >
           Change song
         </button>
+
+        <MusicVolume value={musicVolume} onChange={onMusicVolume} />
 
         <AudioSwitch audioMode={audioMode} onChoose={onChooseAudio} />
       </div>

@@ -16,6 +16,7 @@ interface YTPlayerInstance {
   pauseVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   getCurrentTime(): number;
+  setVolume(volume: number): void;
 }
 
 interface YTPlayerEvent {
@@ -130,6 +131,9 @@ export const YouTubePlayer = forwardRef<
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayerInstance | null>(null);
   const readyRef = useRef(false);
+  // Remembered rather than dropped: the volume is chosen before YouTube
+  // finishes loading, and a setting silently lost is worse than a late one.
+  const volumeRef = useRef(100);
 
   // Latest callbacks in refs so the mount effect below can stay []-deps --
   // it must run exactly once, since it's what drives the single-load API
@@ -171,6 +175,7 @@ export const YouTubePlayer = forwardRef<
             if (cancelled) return;
             playerRef.current = player;
             readyRef.current = true;
+            player?.setVolume(volumeRef.current);
             onReadyRef.current?.();
           },
           onStateChange: (event) => {
@@ -223,6 +228,15 @@ export const YouTubePlayer = forwardRef<
       seek: (seconds) => {
         if (!readyRef.current || !playerRef.current) return;
         playerRef.current.seekTo(seconds, true);
+      },
+      setVolume: (percent) => {
+        const clamped = Math.min(100, Math.max(0, Math.round(percent)));
+        // Stored either way, so a level chosen while YouTube is still loading
+        // is applied on ready rather than quietly discarded.
+        volumeRef.current = clamped;
+        if (readyRef.current && playerRef.current) {
+          playerRef.current.setVolume(clamped);
+        }
       },
       currentTime: () => {
         if (!readyRef.current || !playerRef.current) return 0;
