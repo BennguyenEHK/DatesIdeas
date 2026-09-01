@@ -3,6 +3,7 @@
 import { useId, useState, type FormEvent } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { youTubeId } from "@/lib/media/youtube";
+import type { AudioMode } from "@/lib/media/micProfile";
 
 /**
  * The karaoke control panel, living in the bottom letterbox bar under the
@@ -13,8 +14,8 @@ import { youTubeId } from "@/lib/media/youtube";
 export function KaraokePanel(props: {
   videoId: string | null;
   playing: boolean;
-  headphonesConfirmed: boolean;
-  onConfirmHeadphones: () => void;
+  audioMode: AudioMode | null;
+  onChooseAudio: (mode: AudioMode) => void;
   onLoad: (videoId: string) => void;
   onPlayPause: () => void;
   onResync: () => void;
@@ -23,8 +24,8 @@ export function KaraokePanel(props: {
   const {
     videoId,
     playing,
-    headphonesConfirmed,
-    onConfirmHeadphones,
+    audioMode,
+    onChooseAudio,
     onLoad,
     onPlayPause,
     onResync,
@@ -33,13 +34,15 @@ export function KaraokePanel(props: {
 
   return (
     <section aria-label="Karaoke" className="w-full">
-      {!headphonesConfirmed ? (
-        <HeadphoneGate onConfirm={onConfirmHeadphones} />
+      {audioMode === null ? (
+        <AudioGate onChoose={onChooseAudio} />
       ) : videoId === null ? (
         <SongPicker onLoad={onLoad} />
       ) : (
         <Transport
           playing={playing}
+          audioMode={audioMode}
+          onChooseAudio={onChooseAudio}
           onPlayPause={onPlayPause}
           onResync={onResync}
           onClear={onClear}
@@ -49,25 +52,65 @@ export function KaraokePanel(props: {
   );
 }
 
-function HeadphoneGate({ onConfirm }: { onConfirm: () => void }) {
+/**
+ * Asks where the song will be playing, because the answer decides how much of
+ * the microphone processing can safely come off. A wrong answer is worse than
+ * no answer, so both options are offered plainly rather than one being
+ * presented as the correct one to click past.
+ */
+function AudioGate({ onChoose }: { onChoose: (mode: AudioMode) => void }) {
   return (
     <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-2 text-xs">
       <div className="flex min-w-0 flex-1 items-start gap-2 text-[var(--mist)]">
         <HeadphoneIcon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--lamp)]" />
         <p className="leading-relaxed">
-          Without headphones, your mic picks up the song from your speakers and sends
-          it back — arriving a beat behind the copy your partner is already playing.
-          Put on headphones so there is only one version of the song in the room.
+          On speakers your mic picks the song back up and sends it on, arriving a beat
+          behind the copy already playing. Tell us which you&rsquo;re on and the mic is
+          set up to match — headphones sound better, speakers still work.
         </p>
       </div>
-      <button
-        type="button"
-        onClick={onConfirm}
-        className="shrink-0 rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10"
-      >
-        We&rsquo;re both wearing headphones
-      </button>
+      <div className="flex shrink-0 flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onChoose("headphones")}
+          className="rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10"
+        >
+          I&rsquo;m on headphones
+        </button>
+        <button
+          type="button"
+          onClick={() => onChoose("speakers")}
+          className="rounded-[2px] border border-[var(--edge)] px-4 py-1.5 tracking-wide text-[var(--mist)] transition-colors hover:border-[var(--lamp)]/45 hover:text-[var(--cream)]"
+        >
+          I&rsquo;m on speakers
+        </button>
+      </div>
     </div>
+  );
+}
+
+/**
+ * Switches the answer mid-song, since putting headphones on is exactly the
+ * thing someone does once they hear how the speakers sound.
+ */
+function AudioSwitch({
+  audioMode,
+  onChoose,
+}: {
+  audioMode: AudioMode;
+  onChoose: (mode: AudioMode) => void;
+}) {
+  const other: AudioMode = audioMode === "headphones" ? "speakers" : "headphones";
+  return (
+    <button
+      type="button"
+      onClick={() => onChoose(other)}
+      title={`Switch to ${other}`}
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1 tracking-wide text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
+    >
+      <HeadphoneIcon aria-hidden className="h-3.5 w-3.5" />
+      {audioMode === "headphones" ? "Headphones" : "Speakers"}
+    </button>
   );
 }
 
@@ -151,11 +194,15 @@ function SongPicker({ onLoad }: { onLoad: (videoId: string) => void }) {
 
 function Transport({
   playing,
+  audioMode,
+  onChooseAudio,
   onPlayPause,
   onResync,
   onClear,
 }: {
   playing: boolean;
+  audioMode: AudioMode;
+  onChooseAudio: (mode: AudioMode) => void;
   onPlayPause: () => void;
   onResync: () => void;
   onClear: () => void;
@@ -217,11 +264,16 @@ function Transport({
         >
           Change song
         </button>
+
+        <AudioSwitch audioMode={audioMode} onChoose={onChooseAudio} />
       </div>
 
       <p className="w-full basis-full text-[0.65rem] text-[var(--mist)]">
         Resync pulls you both back together if an ad or a stall knocked the song out of
         step.
+        {audioMode === "speakers"
+          ? " On speakers, keep the volume moderate — the louder it is, the more of it your mic sends back."
+          : null}
       </p>
     </div>
   );

@@ -22,7 +22,7 @@ import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel } from "@/components/KaraokePanel";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
-import { tuneMicrophone } from "@/lib/media/micProfile";
+import { tuneMicrophone, type AudioMode } from "@/lib/media/micProfile";
 import type { PlayerHandle } from "@/lib/media/player";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
@@ -49,9 +49,9 @@ export function RoomClient({ code }: { code: string }) {
   // result, which would make every read of it a ref read.
   const acceptMedia = useRef<((m: PeerMessage) => void) | null>(null);
   const clearMedia = useRef<(() => void) | null>(null);
-  // Per session, never remembered. The question is whether headphones are on
-  // right now, and a stored yes from last week cannot answer that.
-  const [headphones, setHeadphones] = useState(false);
+  // Per session, never remembered. The question is what you are listening on
+  // right now, and a stored answer from last week cannot know that.
+  const [audioMode, setAudioMode] = useState<AudioMode | null>(null);
   // State, not a ref: a state setter is a valid callback ref and keeps the
   // player handle a plain value everywhere else.
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
@@ -80,7 +80,7 @@ export function RoomClient({ code }: { code: string }) {
     // here rather than in an effect watching `current`: this is the moment the
     // activity changes, and reacting to it afterwards is a cascading render.
     if (id !== "karaoke") {
-      setHeadphones(false);
+      setAudioMode(null);
       clearMedia.current?.();
     }
   }, []);
@@ -176,12 +176,12 @@ export function RoomClient({ code }: { code: string }) {
   );
   const kind = current === null ? "companion" : activity(current).kind;
 
-  // Retune the live microphone for singing, and only once headphones are
-  // confirmed -- without them, echo cancellation is the only thing stopping
-  // your microphone sending back a second copy of the song.
+  // Retune the live microphone to match how the song is being heard. On
+  // speakers echo cancellation stays on, since it is the only thing stopping
+  // the microphone sending back a second copy of the song.
   useEffect(() => {
-    void tuneMicrophone(peer.localStream, karaoke && headphones);
-  }, [peer.localStream, karaoke, headphones]);
+    void tuneMicrophone(peer.localStream, karaoke ? audioMode : null);
+  }, [peer.localStream, karaoke, audioMode]);
 
 
 
@@ -288,8 +288,8 @@ export function RoomClient({ code }: { code: string }) {
             <KaraokePanel
               videoId={media.videoId}
               playing={media.playing}
-              headphonesConfirmed={headphones}
-              onConfirmHeadphones={() => setHeadphones(true)}
+              audioMode={audioMode}
+              onChooseAudio={setAudioMode}
               onLoad={media.load}
               onPlayPause={media.playPause}
               onResync={media.resync}

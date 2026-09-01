@@ -7,20 +7,47 @@
  * thin and gated. Turning them off is what makes karaoke sound like a person
  * rather than a phone call.
  *
- * This is only safe in headphones. With speakers, echo cancellation is the one
- * thing stopping your microphone sending your partner a second copy of the
- * song they are already playing, a fraction of a second behind their own — the
- * flanging echo that ruins online karaoke. The app confirms headphones before
- * it applies this, and that confirmation is the whole reason it can.
+ * How far the processing can come off depends on where the song is playing.
+ * In headphones nothing but the voice reaches the microphone, so all of it can
+ * go. On speakers, echo cancellation has to stay: it is the only thing
+ * stopping the microphone sending back a second copy of the song, arriving a
+ * fraction of a second behind the one already playing. That is why the app
+ * asks which it is rather than assuming, and why answering wrongly is worse
+ * than not answering at all.
  */
+/** How the song is reaching this person's ears, which decides what is safe. */
+export type AudioMode = "headphones" | "speakers";
+
+/** Ordinary conversation. Everything on, because everything helps speech. */
 export const SPEECH_AUDIO: MediaTrackConstraints = {
   echoCancellation: true,
   noiseSuppression: true,
   autoGainControl: true,
 };
 
-export const SINGING_AUDIO: MediaTrackConstraints = {
+/**
+ * Singing in headphones. Nothing reaches the microphone but the voice, so
+ * every process can come off and the voice arrives whole.
+ */
+export const HEADPHONE_AUDIO: MediaTrackConstraints = {
   echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+
+/**
+ * Singing on speakers. Echo cancellation STAYS ON — it is the only thing
+ * subtracting the song from the microphone, and without it the partner hears
+ * the same song twice, a fraction apart. The other two still come off, since
+ * they are what thin and gate a singing voice.
+ *
+ * It will not sound as good as headphones. Cancellation is a prediction, and
+ * a loud speaker distorts in ways it cannot predict, so some of the song
+ * always gets through. The gap it closes is between "a bit of bleed" and
+ * "unlistenable", which is worth having.
+ */
+export const SPEAKER_AUDIO: MediaTrackConstraints = {
+  echoCancellation: true,
   noiseSuppression: false,
   autoGainControl: false,
 };
@@ -35,10 +62,15 @@ export const SINGING_AUDIO: MediaTrackConstraints = {
  */
 export async function tuneMicrophone(
   stream: MediaStream | null,
-  singing: boolean,
+  mode: AudioMode | null,
 ): Promise<void> {
   if (!stream) return;
-  const constraints = singing ? SINGING_AUDIO : SPEECH_AUDIO;
+  const constraints =
+    mode === "headphones"
+      ? HEADPHONE_AUDIO
+      : mode === "speakers"
+        ? SPEAKER_AUDIO
+        : SPEECH_AUDIO;
   await Promise.all(
     stream.getAudioTracks().map((track) =>
       track.applyConstraints(constraints).catch(() => {}),
