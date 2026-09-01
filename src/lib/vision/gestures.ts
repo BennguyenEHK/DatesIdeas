@@ -18,14 +18,14 @@ export function holdFor(id: MemeId): number {
 }
 
 /** Enter thresholds are strict; exit thresholds are loose. The gap is the hysteresis. */
-const SMILE_ENTER = 0.55;
-const SMILE_EXIT = 0.4;
+const SMILE_ENTER = 0.7;
+const SMILE_EXIT = 0.55;
 /** Distance between the two hands' fingertips, in units of hand scale. */
 const HEART_ENTER = 0.6;
 const HEART_EXIT = 0.95;
 /** Pursed lips. A kiss face and a smile are near mutually exclusive shapes. */
-const PUCKER_ENTER = 0.7;
-const PUCKER_EXIT = 0.5;
+const PUCKER_ENTER = 0.85;
+const PUCKER_EXIT = 0.65;
 /**
  * A wink is one eye shut while the other stays open. Both thresholds AND the
  * gap between them are required, so an ordinary blink — which closes both —
@@ -50,6 +50,12 @@ const PRAY_ENTER = 0.8;
 const PRAY_EXIT = 1.2;
 /** How far above the wrist the fingertips must sit for hands to read as raised. */
 const PRAY_UPRIGHT = 0.6;
+/**
+ * How far the thumb must clear the wrist vertically. Sitting on the correct
+ * side of it is not enough: in a finger heart the thumbs angle downwards just
+ * enough to pass that test, which is how a heart came to fire a thumbs-down.
+ */
+const THUMB_CLEAR = 0.5;
 /** Palm-to-mouth distance, in units of hand scale. */
 const COVER_ENTER = 1.6;
 const COVER_EXIT = 2.1;
@@ -63,17 +69,37 @@ function isPeace(h: HandSummary): boolean {
   return e.index && e.middle && !e.ring && !e.pinky;
 }
 
-function isThumbsUp(h: HandSummary): boolean {
+/** Thumb out, every finger in. The shape both thumbs gestures start from. */
+function onlyThumb(h: HandSummary): boolean {
   const e = h.extended;
-  if (!e.thumb || e.index || e.middle || e.ring || e.pinky) return false;
+  return e.thumb && !e.index && !e.middle && !e.ring && !e.pinky;
+}
+
+function isThumbsUp(h: HandSummary): boolean {
+  if (!onlyThumb(h)) return false;
   // Image coordinates: y increases downward, so "up" means a smaller y.
-  return h.thumbTip.y < h.wrist.y;
+  return h.wrist.y - h.thumbTip.y > THUMB_CLEAR * h.scale;
 }
 
 function isThumbsDown(h: HandSummary): boolean {
-  const e = h.extended;
-  if (!e.thumb || e.index || e.middle || e.ring || e.pinky) return false;
-  return h.thumbTip.y > h.wrist.y;
+  if (!onlyThumb(h)) return false;
+  return h.thumbTip.y - h.wrist.y > THUMB_CLEAR * h.scale;
+}
+
+/**
+ * Two hands showing nothing but a thumb, with the thumbs together.
+ *
+ * That is a heart being formed, not two simultaneous thumbs-downs. The index
+ * fingers curve to make the top of the heart rather than straightening, so
+ * they measure as curled — leaving each hand looking exactly like a thumbs
+ * gesture. Nobody gives two thumbs-down at once with their thumbs touching.
+ */
+function isFormingHeart(hands: HandSummary[]): boolean {
+  if (hands.length < 2) return false;
+  const [a, b] = hands;
+  if (!onlyThumb(a) || !onlyThumb(b)) return false;
+  const scale = (a.scale + b.scale) / 2;
+  return scale > 0 && dist(a.thumbTip, b.thumbTip) / scale < HEART_EXIT;
 }
 
 /** Ring and pinky curled in — the shape that separates a heart from a prayer. */
@@ -149,6 +175,10 @@ const EXCLUSIVE: readonly (readonly MemeId[])[] = [
   ["heart", "pray"],
   // A wink must never ride along with anything else on the face.
   ["wink", "handsOverMouth"],
+  // A heart is two hands doing one thing; a thumb is one hand doing another.
+  // When both read at once, the two-handed shape is what was meant.
+  ["heart", "thumbsDown"],
+  ["heart", "thumbsUp"],
 ];
 
 /** Drops any gesture shadowed by a more specific one firing at the same time. */
@@ -219,10 +249,12 @@ export function detectRaw(
   ) {
     out.add("handsOverMouth");
   }
+  // Hands mid-heart look like two thumbs gestures. Do not read them as one.
+  const formingHeart = isFormingHeart(frame.hands);
   for (const h of frame.hands) {
     if (isPeace(h)) out.add("peace");
-    if (isThumbsUp(h)) out.add("thumbsUp");
-    if (isThumbsDown(h)) out.add("thumbsDown");
+    if (!formingHeart && isThumbsUp(h)) out.add("thumbsUp");
+    if (!formingHeart && isThumbsDown(h)) out.add("thumbsDown");
   }
   return resolveConflicts(out);
 }

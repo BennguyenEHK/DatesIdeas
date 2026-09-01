@@ -74,8 +74,14 @@ describe("detectRaw", () => {
   });
 
   it("detects a smile above threshold", () => {
-    expect(detectRaw(frame({ smileScore: 0.8 }), none).has("smile")).toBe(true);
+    expect(detectRaw(frame({ smileScore: 0.85 }), none).has("smile")).toBe(true);
     expect(detectRaw(frame({ smileScore: 0.2 }), none).has("smile")).toBe(false);
+  });
+
+  it("ignores a polite half-smile", () => {
+    // A face at rest or being pleasant sits around here. Only a real smile
+    // should put an emoji on both screens.
+    expect(detectRaw(frame({ smileScore: 0.6 }), none).has("smile")).toBe(false);
   });
 
   it("detects heart when two hands bring thumb and index tips together", () => {
@@ -103,14 +109,14 @@ describe("detectRaw", () => {
   });
 
   it("detects a blown kiss from pursed lips", () => {
-    expect(detectRaw(frame({ puckerScore: 0.85 }), none).has("blowKiss")).toBe(true);
+    expect(detectRaw(frame({ puckerScore: 0.95 }), none).has("blowKiss")).toBe(true);
     expect(detectRaw(frame({ puckerScore: 0.2 }), none).has("blowKiss")).toBe(false);
   });
 
   it("does not read a broad smile as a kiss", () => {
     // The two mouth shapes are near opposites; a frame reporting both is
     // ambiguous, and a smile is the far more likely reading.
-    const f = frame({ puckerScore: 0.85, smileScore: 0.8 });
+    const f = frame({ puckerScore: 0.95, smileScore: 0.85 });
     expect(detectRaw(f, none).has("blowKiss")).toBe(false);
     expect(detectRaw(f, none).has("smile")).toBe(true);
   });
@@ -201,7 +207,7 @@ describe("detectRaw", () => {
   it("reads a hand at the mouth with pursed lips as a kiss, not surprise", () => {
     // Blowing a kiss brings a hand up too. The lips decide which it is.
     const f = frame({
-      puckerScore: 0.85,
+      puckerScore: 0.95,
       mouth: { x: 0.5, y: 0.5 },
       hands: [hand({ wrist: { x: 0.5, y: 0.55 }, indexTip: { x: 0.5, y: 0.48 } })],
     });
@@ -219,8 +225,8 @@ describe("detectRaw", () => {
   });
 
   it("ignores a mouth merely at rest", () => {
-    // 0.5 fired on an ordinary relaxed mouth, so a kiss now needs a real purse.
-    expect(detectRaw(frame({ puckerScore: 0.55 }), none).has("blowKiss")).toBe(false);
+    // 0.7 still fired on a mouth at rest; a kiss now needs a deliberate purse.
+    expect(detectRaw(frame({ puckerScore: 0.75 }), none).has("blowKiss")).toBe(false);
   });
 
   it("detects a wink that does not fully shut the eye", () => {
@@ -230,11 +236,58 @@ describe("detectRaw", () => {
     expect(detectRaw(soft, none).has("wink")).toBe(true);
   });
 
+  it("does not read a forming heart as two thumbs-down", () => {
+    // The reported collision. Index fingers CURVE to make the top of a heart
+    // rather than straightening, so they measure as curled -- leaving each
+    // hand looking exactly like a thumbs gesture, with the thumbs angled
+    // just far enough down to pass the old check.
+    const heart = frame({
+      hands: [
+        hand({
+          extended: { thumb: true, index: false, middle: false, ring: false, pinky: false },
+          thumbTip: { x: 0.49, y: 0.56 }, indexTip: { x: 0.49, y: 0.42 }, wrist: { x: 0.46, y: 0.52 },
+        }),
+        hand({
+          extended: { thumb: true, index: false, middle: false, ring: false, pinky: false },
+          thumbTip: { x: 0.51, y: 0.56 }, indexTip: { x: 0.51, y: 0.42 }, wrist: { x: 0.54, y: 0.52 },
+        }),
+      ],
+    });
+    const got = detectRaw(heart, none);
+    expect(got.has("thumbsDown")).toBe(false);
+    expect(got.has("thumbsUp")).toBe(false);
+    // And it is still read as what it actually is.
+    expect(got.has("heart")).toBe(true);
+  });
+
+  it("still reads a single clear thumbs-down", () => {
+    // One hand, thumb well clear of the wrist. Nothing above may break this.
+    const f = frame({
+      hands: [hand({
+        extended: { thumb: true, index: false, middle: false, ring: false, pinky: false },
+        thumbTip: { x: 0.5, y: 0.9 }, wrist: { x: 0.5, y: 0.7 },
+      })],
+    });
+    expect(detectRaw(f, none).has("thumbsDown")).toBe(true);
+  });
+
+  it("ignores a thumb barely off the wrist", () => {
+    // Sitting on the correct side of the wrist is not a thumbs-down; that is
+    // how a heart passed the old test.
+    const f = frame({
+      hands: [hand({
+        extended: { thumb: true, index: false, middle: false, ring: false, pinky: false },
+        thumbTip: { x: 0.5, y: 0.72 }, wrist: { x: 0.5, y: 0.7 }, scale: 0.1,
+      })],
+    });
+    expect(detectRaw(f, none).has("thumbsDown")).toBe(false);
+  });
+
   it("does not read a wink as a smile", () => {
     // The reported bug. Closing one eye raises that cheek, and the smile
     // blendshape keys off cheek raise, so a real wink arrives with a high
     // smile score attached. The eyes have to settle it.
-    const f = frame({ blinkLeft: 0.9, blinkRight: 0.05, smileScore: 0.8 });
+    const f = frame({ blinkLeft: 0.9, blinkRight: 0.05, smileScore: 0.85 });
     const got = detectRaw(f, none);
     expect(got.has("wink")).toBe(true);
     expect(got.has("smile")).toBe(false);
@@ -262,7 +315,7 @@ describe("detectRaw", () => {
   it("suppresses other face gestures even when the wink is too slight to fire", () => {
     // Half-closed one eye: not enough to call a wink, but plenty to raise the
     // cheek. Reading nothing beats reading it as a smile.
-    const f = frame({ blinkLeft: 0.35, blinkRight: 0.02, smileScore: 0.8 });
+    const f = frame({ blinkLeft: 0.35, blinkRight: 0.02, smileScore: 0.85 });
     const got = detectRaw(f, none);
     expect(got.has("wink")).toBe(false);
     expect(got.has("smile")).toBe(false);
@@ -271,7 +324,7 @@ describe("detectRaw", () => {
   it("still smiles through an ordinary blink", () => {
     // Both eyes shut is symmetric, so it is a blink, not a wink. Interrupting
     // a smile every few seconds would make it nearly impossible to trigger.
-    const f = frame({ blinkLeft: 0.9, blinkRight: 0.9, smileScore: 0.8 });
+    const f = frame({ blinkLeft: 0.9, blinkRight: 0.9, smileScore: 0.85 });
     const got = detectRaw(f, none);
     expect(got.has("smile")).toBe(true);
     expect(got.has("wink")).toBe(false);
@@ -318,7 +371,7 @@ describe("detectRaw", () => {
     // Exclusion is between conflicting readings only. Smiling while making a
     // peace sign is two things at once, and both are meant.
     const f = frame({
-      smileScore: 0.8,
+      smileScore: 0.85,
       hands: [hand({ extended: { thumb: false, index: true, middle: true, ring: false, pinky: false } })],
     });
     const got = detectRaw(f, none);
@@ -327,8 +380,8 @@ describe("detectRaw", () => {
   });
 
   it("applies a looser threshold to an already-active gesture (hysteresis)", () => {
-    // Just past the enter threshold for smile, but inside the exit threshold.
-    const borderline = frame({ smileScore: 0.45 });
+    // Below the enter threshold for smile, but above the exit threshold.
+    const borderline = frame({ smileScore: 0.6 });
     expect(detectRaw(borderline, none).has("smile")).toBe(false);
     expect(detectRaw(borderline, new Set(["smile"] as const)).has("smile")).toBe(true);
   });
