@@ -25,7 +25,7 @@ import { activity, activityKey, type ActivityId } from "@/lib/activities/registr
 import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
-import { KaraokePanel, MAX_OFFSET_MS } from "@/components/KaraokePanel";
+import { KaraokePanel } from "@/components/KaraokePanel";
 import { MoviePanel } from "@/components/MoviePanel";
 import { LocalFilePlayer } from "@/components/LocalFilePlayer";
 import { PhotoBoothStage } from "@/components/PhotoBoothStage";
@@ -34,7 +34,16 @@ import { PhotoStrip } from "@/components/PhotoStrip";
 import { useBooth } from "@/lib/photo/useBooth";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
-import { tuneMicrophone, type AudioMode } from "@/lib/media/micProfile";
+import { tuneMicrophone } from "@/lib/media/micProfile";
+import { useOutputMode } from "@/lib/media/outputDevice";
+import { useSingingTurn } from "@/lib/media/useSingingTurn";
+import {
+  measuredLatencyMs,
+  offsetForTurn,
+  settledOffset,
+  singingTurn,
+  smoothLatency,
+} from "@/lib/media/singerTurn";
 import type { PlayerHandle } from "@/lib/media/player";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
@@ -61,9 +70,6 @@ export function RoomClient({ code }: { code: string }) {
   // result, which would make every read of it a ref read.
   const acceptMedia = useRef<((m: PeerMessage) => void) | null>(null);
   const clearMedia = useRef<(() => void) | null>(null);
-  // Per session, never remembered. The question is what you are listening on
-  // right now, and a stored answer from last week cannot know that.
-  const [audioMode, setAudioMode] = useState<AudioMode | null>(null);
   const [videoError, setVideoError] = useState<number | null>(null);
   // Local to this side, never sent. Starts below full because the reported
   // problem was the backing track burying the other person's voice.
@@ -79,8 +85,13 @@ export function RoomClient({ code }: { code: string }) {
   // Pulls this side's music back so their voice lands on the beat. Local, and
   // never sent: if it were shared, both sides would shift by the same amount
   // and the gap between them would be exactly where it started.
-  const [matchSinging, setMatchSinging] = useState(false);
   const [offsetMs, setOffsetMs] = useState(0);
+  // Ticked, the figure above belongs to whoever is listening rather than to the
+  // measurement. Nothing here overrules a person who has taken the wheel.
+  const [manualOffset, setManualOffset] = useState(false);
+  // A short window of readings rather than the newest one, so a single packet
+  // caught behind a burst of traffic cannot lurch the song.
+  const latencySamples = useRef<number[]>([]);
   // This side's own copy of the film. Never sent: a feature film is gigabytes
   // and this connection carries a few hundred kilobytes a second, so each side
   // opens its own and only the position travels.
@@ -93,6 +104,7 @@ export function RoomClient({ code }: { code: string }) {
   const localVideo = useRef<HTMLVideoElement | null>(null);
   const remoteVideo = useRef<HTMLVideoElement | null>(null);
   const acceptPhoto = useRef<((m: PeerMessage) => void) | null>(null);
+  const acceptSinging = useRef<((m: PeerMessage) => void) | null>(null);
   // State, not a ref: a state setter is a valid callback ref and keeps the
   // player handle a plain value everywhere else.
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
@@ -117,13 +129,19 @@ export function RoomClient({ code }: { code: string }) {
     if (!shouldReplace(activitySwap.current, { showAt, key })) return;
     activitySwap.current = { showAt, key };
     setCurrent(id);
-    // Leaving karaoke drops the song and forgets the headphone answer. Done
-    // here rather than in an effect watching `current`: this is the moment the
-    // activity changes, and reacting to it afterwards is a cascading render.
     // Karaoke and movie share one player and one shared position, so the film
     // is dropped only when leaving BOTH of them -- switching between the two
-    // still starts fresh, which is why the source is cleared either way.
-    if (id !== "karaoke") setAudioMode(null);
+    // still starts fresh, which is why the source is cleared either way. Done
+    // here rather than in an effect watching `current`: this is the moment the
+    // activity changes, and reacting to it afterwards is a cascading render.
+    // The delay belongs to karaoke alone. Carrying it into the film that comes
+    // next would leave the player sitting behind the shared position with
+    // nothing on screen to explain why.
+    if (id !== "karaoke") {
+      latencySamples.current = [];
+      setOffsetMs(0);
+      setManualOffset(false);
+    }
     if (id !== "karaoke" && id !== "movie") {
       setVideoError(null);
       setFileError(null);
@@ -148,6 +166,10 @@ export function RoomClient({ code }: { code: string }) {
       }
       if (msg.t === "photo") {
         acceptPhoto.current?.(msg);
+        return;
+      }
+      if (msg.t === "singing") {
+        acceptSinging.current?.(msg);
         return;
       }
       if (msg.t === "activity") {
@@ -210,12 +232,7 @@ export function RoomClient({ code }: { code: string }) {
     [session, mine],
   );
 
-  const media = useSyncedPlayback(
-    player,
-    peer.clock,
-    peer.send,
-    matchSinging ? offsetMs / 1000 : 0,
-  );
+  const media = useSyncedPlayback(player, peer.clock, peer.send, offsetMs / 1000);
   useEffect(() => {
     acceptMedia.current = media.accept;
     clearMedia.current = media.clear;
@@ -257,33 +274,50 @@ export function RoomClient({ code }: { code: string }) {
     player?.setVolume(movie ? movieVolume : musicVolume);
   }, [player, movie, movieVolume, musicVolume]);
 
+  // Which of you is listening on what. Asked of the operating system rather
+  // than of the person: the answer is already sitting in the device list, and
+  // a question standing between someone and the song is a worse way to get it.
+  const audio = useOutputMode(karaoke);
+
   // Retune the live microphone to match how the song is being heard, and how
   // loud the room is. On speakers echo cancellation stays on, since it is the
   // only thing stopping the microphone sending back a second copy of the song;
   // in a noisy room noise suppression goes back on, because otherwise the
   // canceller is left picking a voice out of a crowd and clamps down on both.
   useEffect(() => {
-    void tuneMicrophone(peer.localStream, karaoke ? audioMode : null, noisy);
-  }, [peer.localStream, karaoke, audioMode, noisy]);
+    void tuneMicrophone(peer.localStream, karaoke ? audio.mode : null, noisy);
+  }, [peer.localStream, karaoke, audio.mode, noisy]);
+
+  // Who is actually singing, which is the only thing that can decide whose
+  // music moves. Both sides run this, and each tells the other.
+  const singing = useSingingTurn({
+    stream: peer.localStream,
+    send: peer.send,
+    enabled: karaoke,
+  });
+  useEffect(() => {
+    acceptSinging.current = singing.accept;
+  });
+
+  const turn = singingTurn(singing.mine, singing.theirs);
 
   // How late their voice arrives: half the round trip, plus however long their
-  // audio is sitting in this browser's jitter buffer. Offered as the starting
-  // point for the offset rather than imposed, since no measurement is exact
-  // and the last word belongs to whoever is listening.
-  const suggestedOffsetMs =
-    peer.rtt > 0 ? Math.round(peer.rtt / 2 + (peer.audioJitterMs ?? 0)) : null;
-
-  const onMatchSinging = useCallback(
-    (on: boolean) => {
-      setMatchSinging(on);
-      // Only seed the measured value the first time; a figure someone has
-      // already tuned by ear should survive being switched off and on again.
-      if (on && offsetMs === 0 && suggestedOffsetMs !== null) {
-        setOffsetMs(Math.min(suggestedOffsetMs, MAX_OFFSET_MS));
-      }
-    },
-    [offsetMs, suggestedOffsetMs],
-  );
+  // audio is sitting in this browser's jitter buffer -- a figure that is
+  // remeasured continuously, because a connection at nine in the evening is
+  // not the one you tuned to by ear at seven.
+  useEffect(() => {
+    if (!karaoke) return;
+    const sample = measuredLatencyMs(peer.rtt, peer.audioJitterMs);
+    if (sample === null) return;
+    const window = [...latencySamples.current, sample].slice(-9);
+    latencySamples.current = window;
+    if (manualOffset) return;
+    const wanted = offsetForTurn(turn, smoothLatency(window));
+    // Settled, not applied raw: every change re-seeks the player, and chasing
+    // a few milliseconds of wobble is an audible stutter bought for a
+    // correction nobody can hear.
+    setOffsetMs((current) => settledOffset(current, wanted));
+  }, [karaoke, manualOffset, turn, peer.rtt, peer.audioJitterMs]);
 
 
 
@@ -517,18 +551,19 @@ export function RoomClient({ code }: { code: string }) {
             <KaraokePanel
               videoId={media.videoId}
               playing={media.playing}
-              audioMode={audioMode}
-              onChooseAudio={setAudioMode}
+              audioMode={audio.mode}
+              audioAuto={audio.auto}
+              onChooseAudio={audio.choose}
               noisy={noisy}
               onNoisy={setNoisy}
               videoError={videoError}
               musicVolume={musicVolume}
               onMusicVolume={setMusicVolume}
-              matchSinging={matchSinging}
-              onMatchSinging={onMatchSinging}
+              turn={turn}
               offsetMs={offsetMs}
+              manual={manualOffset}
+              onManual={setManualOffset}
               onOffsetMs={setOffsetMs}
-              suggestedOffsetMs={suggestedOffsetMs}
               picking={picking}
               onPick={() => setPicking(true)}
               onCancelPick={() => setPicking(false)}

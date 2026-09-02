@@ -27,7 +27,7 @@ export const PANEL_ASPECT = 16 / 9;
 
 const MARGIN_FRACTION = 0.04;
 const PANEL_GAP_FRACTION = 0.03;
-const PERSON_GUTTER_FRACTION = 0.02;
+const PERSON_GUTTER_FRACTION = 0;
 const CAPTION_HEIGHT_FRACTION = 0.09;
 
 function requirePositiveFinite(value: number, name: string): void {

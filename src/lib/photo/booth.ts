@@ -1,7 +1,7 @@
 import type { ShotCount } from "./strip";
 
-export const LEAD_MS = 3000;
-export const BETWEEN_MS = 1800;
+export const LEAD_MS = 7000;
+export const BETWEEN_MS = 7000;
 export const REVEAL_MS = 700;
 
 export type BoothStep =
@@ -29,19 +29,13 @@ export function boothTimeline(startAt: number, shots: ShotCount): BoothStep[] {
   requireStartAt(startAt);
   requireShotCount(shots);
 
-  const steps: BoothStep[] = [
-    { at: startAt, kind: "count", shotIndex: 0, value: 3 },
-    { at: startAt + 1000, kind: "count", shotIndex: 0, value: 2 },
-    { at: startAt + 2000, kind: "count", shotIndex: 0, value: 1 },
-    { at: startAt + LEAD_MS, kind: "flash", shotIndex: 0 },
-  ];
-
-  for (let shotIndex = 1; shotIndex < shots; shotIndex += 1) {
+  const steps: BoothStep[] = [];
+  for (let shotIndex = 0; shotIndex < shots; shotIndex += 1) {
     const flashAt = startAt + LEAD_MS + shotIndex * BETWEEN_MS;
-    steps.push(
-      { at: flashAt - 1000, kind: "count", shotIndex, value: 1 },
-      { at: flashAt, kind: "flash", shotIndex },
-    );
+    for (let value = 7; value >= 1; value -= 1) {
+      steps.push({ at: flashAt - value * 1000, kind: "count", shotIndex, value });
+    }
+    steps.push({ at: flashAt, kind: "flash", shotIndex });
   }
 
   const finalFlashAt = startAt + LEAD_MS + (shots - 1) * BETWEEN_MS;

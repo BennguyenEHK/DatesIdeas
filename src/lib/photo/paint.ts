@@ -11,29 +11,88 @@ function fillRect(ctx: CanvasRenderingContext2D, rect: Rect): void {
   ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
 }
 
+type PaintContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
+function intrinsicSize(source: CanvasImageSource): { width: number; height: number } | null {
+  const candidate = source as CanvasImageSource & {
+    width?: number;
+    height?: number;
+    videoWidth?: number;
+    videoHeight?: number;
+    naturalWidth?: number;
+    naturalHeight?: number;
+  };
+  const width = candidate.videoWidth ?? candidate.naturalWidth ?? candidate.width;
+  const height = candidate.videoHeight ?? candidate.naturalHeight ?? candidate.height;
+  return width && height && width > 0 && height > 0 ? { width, height } : null;
+}
+
+function drawCropped(ctx: PaintContext, image: CanvasImageSource, dest: Rect): void {
+  const source = intrinsicSize(image);
+  if (!source) {
+    ctx.drawImage(image, dest.x, dest.y, dest.width, dest.height);
+    return;
+  }
+
+  const sourceAspect = source.width / source.height;
+  const destinationAspect = dest.width / dest.height;
+  let sx = 0;
+  let sy = 0;
+  let sw = source.width;
+  let sh = source.height;
+  if (sourceAspect > destinationAspect) {
+    sw = sh * destinationAspect;
+    sx = (source.width - sw) / 2;
+  } else {
+    sh = sw / destinationAspect;
+    sy = (source.height - sh) / 2;
+  }
+  ctx.drawImage(image, sx, sy, sw, sh, dest.x, dest.y, dest.width, dest.height);
+}
+
+function offscreenCanvas(width: number, height: number): OffscreenCanvas | HTMLCanvasElement | null {
+  if (typeof OffscreenCanvas !== "undefined") return new OffscreenCanvas(width, height);
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return canvas;
+}
+
+/** Feathering the two halves into the scene prevents their shared edge reading as a splice. */
+function paintPerson(ctx: CanvasRenderingContext2D, image: CanvasImageSource, dest: Rect): void {
+  const canvas = offscreenCanvas(dest.width, dest.height);
+  const mask = canvas?.getContext("2d") as PaintContext | null;
+  if (!canvas || !mask) {
+    drawCropped(ctx, image, dest);
+    return;
+  }
+
+  drawCropped(mask, image, { x: 0, y: 0, width: dest.width, height: dest.height });
+  mask.save();
+  mask.globalCompositeOperation = "destination-in";
+  mask.translate(dest.width * 0.5, dest.height * 0.46);
+  mask.scale(dest.width * 0.68, dest.height * 0.82);
+  const feather = mask.createRadialGradient(0, 0, 0, 0, 0, 1);
+  feather.addColorStop(0.58, "#000");
+  feather.addColorStop(1, "rgba(0,0,0,0)");
+  mask.fillStyle = feather;
+  mask.fillRect(-1, -1, 2, 2);
+  mask.restore();
+  ctx.drawImage(canvas, dest.x, dest.y, dest.width, dest.height);
+}
+
 function paintPeople(
   ctx: CanvasRenderingContext2D,
   panel: Panel,
   shot: Shot | undefined,
 ): void {
   if (shot?.left !== null && shot?.left !== undefined) {
-    ctx.drawImage(
-      shot.left,
-      panel.left.x,
-      panel.left.y,
-      panel.left.width,
-      panel.left.height,
-    );
+    paintPerson(ctx, shot.left, panel.left);
   }
 
   if (shot?.right !== null && shot?.right !== undefined) {
-    ctx.drawImage(
-      shot.right,
-      panel.right.x,
-      panel.right.y,
-      panel.right.width,
-      panel.right.height,
-    );
+    paintPerson(ctx, shot.right, panel.right);
   }
 }
 

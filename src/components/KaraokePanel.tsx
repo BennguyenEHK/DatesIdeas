@@ -4,21 +4,21 @@ import { useId, useState, type FormEvent } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { youTubeId } from "@/lib/media/youtube";
 import type { AudioMode } from "@/lib/media/micProfile";
+import { MAX_OFFSET_MS, type SingingTurn } from "@/lib/media/singerTurn";
 
-/** The furthest the music can be pulled back, in milliseconds. */
-export const MAX_OFFSET_MS = 1000;
+export { MAX_OFFSET_MS };
 
 /**
  * The karaoke control panel, living in the bottom letterbox bar under the
- * video. Headphones are gated first and exclusively: a synced song playing
- * into an open mic is one round trip away from becoming an echo, so nothing
- * else here is reachable until both of you have confirmed.
+ * video. The transport stays available before a song is loaded, so choosing a
+ * song remains an action inside the room rather than an entry gate.
  */
 export function KaraokePanel(props: {
   videoId: string | null;
   playing: boolean;
   videoError: number | null;
-  audioMode: AudioMode | null;
+  audioMode: AudioMode;
+  audioAuto: boolean;
   onChooseAudio: (mode: AudioMode) => void;
   noisy: boolean;
   onNoisy: (noisy: boolean) => void;
@@ -28,11 +28,11 @@ export function KaraokePanel(props: {
   onCancelPick: () => void;
   musicVolume: number;
   onMusicVolume: (percent: number) => void;
-  matchSinging: boolean;
-  onMatchSinging: (on: boolean) => void;
+  turn: SingingTurn;
   offsetMs: number;
+  manual: boolean;
+  onManual: (on: boolean) => void;
   onOffsetMs: (ms: number) => void;
-  suggestedOffsetMs: number | null;
   onPlayPause: () => void;
   onResync: () => void;
 }) {
@@ -41,6 +41,7 @@ export function KaraokePanel(props: {
     playing,
     videoError,
     audioMode,
+    audioAuto,
     onChooseAudio,
     noisy,
     onNoisy,
@@ -50,44 +51,41 @@ export function KaraokePanel(props: {
     onCancelPick,
     musicVolume,
     onMusicVolume,
-    matchSinging,
-    onMatchSinging,
+    turn,
     offsetMs,
+    manual,
+    onManual,
     onOffsetMs,
-    suggestedOffsetMs,
     onPlayPause,
     onResync,
   } = props;
 
-  // A song that failed to load is not a song to go back to, and neither is no
-  // song at all — so in those two cases the picker is the only thing there is
-  // and offering a way out of it would strand you on an empty panel.
-  const nothingToReturnTo = videoId === null || videoError !== null;
-
   return (
     <section aria-label="Karaoke" className="w-full">
-      {audioMode === null ? (
-        <AudioGate onChoose={onChooseAudio} />
-      ) : nothingToReturnTo || picking ? (
+      {picking ? (
         <SongPicker
           onLoad={onLoad}
           videoError={videoError}
-          onCancel={nothingToReturnTo ? null : onCancelPick}
+          hasSong={videoId !== null}
+          onCancel={onCancelPick}
         />
       ) : (
         <Transport
+          videoId={videoId}
+          videoError={videoError}
           playing={playing}
           audioMode={audioMode}
+          audioAuto={audioAuto}
           onChooseAudio={onChooseAudio}
           noisy={noisy}
           onNoisy={onNoisy}
           musicVolume={musicVolume}
           onMusicVolume={onMusicVolume}
-          matchSinging={matchSinging}
-          onMatchSinging={onMatchSinging}
+          turn={turn}
           offsetMs={offsetMs}
+          manual={manual}
+          onManual={onManual}
           onOffsetMs={onOffsetMs}
-          suggestedOffsetMs={suggestedOffsetMs}
           onPlayPause={onPlayPause}
           onResync={onResync}
           onPick={onPick}
@@ -98,52 +96,16 @@ export function KaraokePanel(props: {
 }
 
 /**
- * Asks where the song will be playing, because the answer decides how much of
- * the microphone processing can safely come off. A wrong answer is worse than
- * no answer, so both options are offered plainly rather than one being
- * presented as the correct one to click past.
- */
-function AudioGate({ onChoose }: { onChoose: (mode: AudioMode) => void }) {
-  return (
-    <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-      <div className="flex min-w-0 flex-1 items-start gap-2 text-[var(--mist)]">
-        <HeadphoneIcon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--lamp)]" />
-        <p className="leading-relaxed">
-          On speakers your mic picks the song back up and sends it on, arriving a beat
-          behind the copy already playing. Cancelling that costs some of your voice with
-          it, so headphones sound clearly better — speakers still work, and you can
-          switch at any time.
-        </p>
-      </div>
-      <div className="flex shrink-0 flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => onChoose("headphones")}
-          className="rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10"
-        >
-          I&rsquo;m on headphones
-        </button>
-        <button
-          type="button"
-          onClick={() => onChoose("speakers")}
-          className="rounded-[2px] border border-[var(--edge)] px-4 py-1.5 tracking-wide text-[var(--mist)] transition-colors hover:border-[var(--lamp)]/45 hover:text-[var(--cream)]"
-        >
-          I&rsquo;m on speakers
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/**
  * Switches the answer mid-song, since putting headphones on is exactly the
  * thing someone does once they hear how the speakers sound.
  */
 function AudioSwitch({
   audioMode,
+  audioAuto,
   onChoose,
 }: {
   audioMode: AudioMode;
+  audioAuto: boolean;
   onChoose: (mode: AudioMode) => void;
 }) {
   const other: AudioMode = audioMode === "headphones" ? "speakers" : "headphones";
@@ -151,7 +113,11 @@ function AudioSwitch({
     <button
       type="button"
       onClick={() => onChoose(other)}
-      title={`Switch to ${other}`}
+      title={
+        audioAuto
+          ? "Audio mode was detected from your audio device; choosing overrides it"
+          : `Switch to ${other}`
+      }
       className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1 tracking-wide text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
     >
       <HeadphoneIcon aria-hidden className="h-3.5 w-3.5" />
@@ -211,12 +177,14 @@ function videoErrorMessage(code: number): string {
 function SongPicker({
   onLoad,
   videoError,
+  hasSong,
   onCancel,
 }: {
   onLoad: (videoId: string) => void;
   videoError: number | null;
-  /** Null when there is no song behind this to go back to. */
-  onCancel: (() => void) | null;
+  /** Whether closing returns to a song, or to a transport waiting for one. */
+  hasSong: boolean;
+  onCancel: () => void;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState(false);
@@ -277,16 +245,14 @@ function SongPicker({
 
       {/* type="button" matters: inside a form, a bare button submits, so
           cancelling would try to load whatever half-typed text was there. */}
-      {onCancel && (
-        <button
-          type="button"
-          onClick={onCancel}
-          aria-label="Close and keep the current song"
-          className="shrink-0 rounded-[2px] px-2 py-1.5 text-base leading-none text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
-        >
-          ✕
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onCancel}
+        aria-label={hasSong ? "Close and keep the current song" : "Close without choosing a song"}
+        className="shrink-0 rounded-[2px] px-2 py-1.5 text-base leading-none text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
+      >
+        ✕
+      </button>
 
       {/* Same slot carries the helper copy or the error, so the row's
           height does not change between the two — only role="alert" swaps
@@ -357,107 +323,111 @@ function MusicVolume({
   );
 }
 
+/** What the delay is doing right now, in the one place that says it. */
+export function turnStatus(turn: SingingTurn): string {
+  if (turn === "them") {
+    return "The music is holding back so their singing lands on the beat.";
+  }
+  if (turn === "you") {
+    return "The music is running straight so your voice lands on theirs.";
+  }
+  return "The music is waiting for someone to sing.";
+}
+
 /**
- * Pulls this side's music back in time until the other person's voice lands on
- * the beat.
+ * Reports how far this side's music is running behind, and lets it be taken
+ * over by hand.
  *
  * Their voice spends a couple of hundred milliseconds crossing the internet
  * while your song carries on without it, so they always sound like they are
  * dragging — even though they are singing perfectly to their own copy.
  * Rewinding your music by that same amount lines the two up.
  *
- * It can only ever be right in one direction at a time. Delaying your music
- * means you are now singing behind your own copy, so your voice reaches them
- * twice as late as before. That is not a bug to be fixed; it is the distance
- * between two countries, and it is why this is a switch you flip while you are
- * listening rather than a setting you leave on.
+ * It can only ever be right for one of you at a time: two equal delays cancel
+ * exactly and leave the gap where it started. So this is no longer a switch to
+ * flip. Whoever is listening is delayed, whoever is singing is not, and the
+ * turn changes hands on its own — which is why the only control left here is
+ * the one for overruling the measurement.
  */
-function MatchSinging({
-  on,
-  onToggle,
+function DelayControl({
   offsetMs,
+  manual,
+  onManual,
   onOffsetMs,
-  suggestedMs,
 }: {
-  on: boolean;
-  onToggle: (on: boolean) => void;
   offsetMs: number;
+  manual: boolean;
+  onManual: (on: boolean) => void;
   onOffsetMs: (ms: number) => void;
-  suggestedMs: number | null;
 }) {
   const id = useId();
   return (
     <div className="flex shrink-0 items-center gap-2">
-      <button
-        type="button"
-        onClick={() => onToggle(!on)}
-        aria-pressed={on}
-        title={
-          suggestedMs === null
-            ? "Delay your music so their singing lands on the beat"
-            : `Measured delay on this connection: about ${suggestedMs}ms`
-        }
-        className={`inline-flex shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 py-1 tracking-wide transition-colors ${
-          on
-            ? "border-[var(--lamp)]/60 bg-[var(--lamp)]/10 text-[var(--lamp)]"
-            : "border-[var(--edge)] text-[var(--mist)] hover:border-[var(--lamp)]/45 hover:text-[var(--cream)]"
-        }`}
-      >
-        Match their singing
-      </button>
+      <label className="inline-flex shrink-0 items-center gap-1.5 text-[var(--mist)]">
+        <input
+          type="checkbox"
+          checked={manual}
+          onChange={(e) => onManual(e.target.checked)}
+          className="accent-[var(--lamp)]"
+        />
+        Set the delay myself
+      </label>
 
-      {on && (
-        <>
-          <label htmlFor={id} className="sr-only">
-            How far to delay your music
-          </label>
-          <input
-            id={id}
-            type="range"
-            min={0}
-            max={MAX_OFFSET_MS}
-            step={20}
-            value={offsetMs}
-            onChange={(e) => onOffsetMs(Number(e.target.value))}
-            aria-valuetext={`${offsetMs} milliseconds behind`}
-            className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-[var(--edge)] accent-[var(--lamp)]"
-          />
-          <span className="w-12 tabular-nums text-[var(--mist)]">{offsetMs}ms</span>
-        </>
-      )}
+      <label htmlFor={id} className="sr-only">
+        How far to delay your music
+      </label>
+      <input
+        id={id}
+        type="range"
+        min={0}
+        max={MAX_OFFSET_MS}
+        step={20}
+        value={offsetMs}
+        disabled={!manual}
+        onChange={(e) => onOffsetMs(Number(e.target.value))}
+        aria-valuetext={`${offsetMs} milliseconds behind`}
+        className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-[var(--edge)] accent-[var(--lamp)] disabled:cursor-not-allowed disabled:opacity-40"
+      />
+      <span className="w-12 tabular-nums text-[var(--mist)]">{offsetMs}ms</span>
     </div>
   );
 }
 
 function Transport({
+  videoId,
+  videoError,
   playing,
   audioMode,
+  audioAuto,
   onChooseAudio,
   noisy,
   onNoisy,
   musicVolume,
   onMusicVolume,
-  matchSinging,
-  onMatchSinging,
+  turn,
   offsetMs,
+  manual,
+  onManual,
   onOffsetMs,
-  suggestedOffsetMs,
   onPlayPause,
   onResync,
   onPick,
 }: {
+  videoId: string | null;
+  videoError: number | null;
   playing: boolean;
   audioMode: AudioMode;
+  audioAuto: boolean;
   onChooseAudio: (mode: AudioMode) => void;
   noisy: boolean;
   onNoisy: (noisy: boolean) => void;
   musicVolume: number;
   onMusicVolume: (percent: number) => void;
-  matchSinging: boolean;
-  onMatchSinging: (on: boolean) => void;
+  turn: SingingTurn;
   offsetMs: number;
+  manual: boolean;
+  onManual: (on: boolean) => void;
   onOffsetMs: (ms: number) => void;
-  suggestedOffsetMs: number | null;
   onPlayPause: () => void;
   onResync: () => void;
   onPick: () => void;
@@ -473,9 +443,10 @@ function Transport({
 
         <button
           type="button"
+          disabled={videoId === null}
           onClick={onPlayPause}
           aria-label={playing ? "Pause the song" : "Play the song"}
-          className="relative inline-flex shrink-0 items-center rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10"
+          className="relative inline-flex shrink-0 items-center rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10 disabled:cursor-not-allowed disabled:bg-[var(--mist)]/25 disabled:text-[var(--mist)]"
         >
           {/* The one moment this panel is built around: the room is
               mid-song. Reuses ActivityBar's lit-bulb glow rather than
@@ -505,8 +476,9 @@ function Transport({
 
         <button
           type="button"
+          disabled={videoId === null}
           onClick={onResync}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1.5 text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1.5 text-[var(--mist)] transition-colors hover:text-[var(--cream)] disabled:cursor-not-allowed disabled:text-[var(--mist)]/40"
         >
           <ResyncIcon />
           Resync
@@ -520,35 +492,29 @@ function Transport({
           onClick={onPick}
           className="shrink-0 rounded-[2px] px-2 py-1.5 text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
         >
-          Change song
+          {videoId === null ? "Choose song" : "Change song"}
         </button>
 
         <MusicVolume value={musicVolume} onChange={onMusicVolume} />
 
-        <MatchSinging
-          on={matchSinging}
-          onToggle={onMatchSinging}
+        <DelayControl
           offsetMs={offsetMs}
+          manual={manual}
+          onManual={onManual}
           onOffsetMs={onOffsetMs}
-          suggestedMs={suggestedOffsetMs}
         />
 
-        <AudioSwitch audioMode={audioMode} onChoose={onChooseAudio} />
+        <AudioSwitch audioMode={audioMode} audioAuto={audioAuto} onChoose={onChooseAudio} />
 
         <NoisyToggle noisy={noisy} onNoisy={onNoisy} />
       </div>
 
       <p className="w-full basis-full text-[0.65rem] text-[var(--mist)]">
-        {matchSinging ? (
-          <>
-            Your music is running {offsetMs}ms late so their voice lands on the beat.
-            Turn this off when it&rsquo;s your turn to sing — it can only be right for
-            one of you at a time.
-          </>
+        {videoError !== null ? (
+          <span role="alert">{videoErrorMessage(videoError)}</span>
         ) : (
           <>
-            Resync pulls you both back together if an ad or a stall knocked the song out
-            of step.
+            {turnStatus(turn)}
             {audioMode === "speakers"
               ? " On speakers, keep the volume moderate — the louder it is, the more of it your mic sends back."
               : null}

@@ -65,7 +65,15 @@ export type PeerMessage =
   // derive the identical countdown and the identical flashes from it, and each
   // builds the strip from the two video feeds it already has. No picture ever
   // crosses the connection.
-  | { t: "photo"; themeId: ThemeId; shots: ShotCount; startAt: number };
+  | { t: "photo"; themeId: ThemeId; shots: ShotCount; startAt: number }
+  // Whether someone is singing into this side's microphone right now.
+  //
+  // Delaying your music to catch up with their voice only ever works for the
+  // listener. Two equal delays cancel exactly -- each side hears the other at
+  // the same distance it started at -- so the pair of you cannot both be
+  // accommodating at once. This message is what decides whose turn it is:
+  // whoever is singing stays on the beat, and the one listening moves.
+  | { t: "singing"; on: boolean };
 
 export function encode(m: PeerMessage): string {
   return JSON.stringify(m);
@@ -148,6 +156,8 @@ export function decode(raw: string): PeerMessage | null {
             startAt: m.startAt,
           }
         : null;
+    case "singing":
+      return typeof m.on === "boolean" ? { t: "singing", on: m.on } : null;
     default:
       return null;
   }

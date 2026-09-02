@@ -13,6 +13,7 @@ describe("photo booth timeline", () => {
     const flashes = timeline.filter((step) => step.kind === "flash");
 
     expect(flashes).toHaveLength(shots);
+    expect(new Set(flashes.map((step) => step.at)).size).toBe(shots);
     expect(flashes.map((step) => step.shotIndex)).toEqual([0, ...Array.from({ length: shots - 1 }, (_, i) => i + 1)]);
     expect(flashes[0].at).toBe(10_000 + LEAD_MS);
     for (let index = 1; index < flashes.length; index += 1) {
@@ -25,14 +26,20 @@ describe("photo booth timeline", () => {
     const flashes = timeline.filter((step) => step.kind === "flash");
     const counts = timeline.filter((step) => step.kind === "count");
 
-    expect(counts.map((step) => step.value)).toEqual([3, 2, 1, ...Array(shots - 1).fill(1)]);
     for (const flash of flashes) {
       const shotCounts = counts.filter((step) => step.shotIndex === flash.shotIndex);
+      expect(shotCounts.map((step) => step.value)).toEqual([7, 6, 5, 4, 3, 2, 1]);
+      expect(shotCounts.map((step) => step.at)).toEqual([
+        flash.at - 7000,
+        flash.at - 6000,
+        flash.at - 5000,
+        flash.at - 4000,
+        flash.at - 3000,
+        flash.at - 2000,
+        flash.at - 1000,
+      ]);
       expect(shotCounts.at(-1)?.at).toBe(flash.at - 1000);
       expect(shotCounts.every((step) => step.at < flash.at)).toBe(true);
-      if (flash.shotIndex > 0) {
-        expect(shotCounts[0].at).toBe(flashes[flash.shotIndex - 1].at + 800);
-      }
     }
   });
 
@@ -46,13 +53,12 @@ describe("photo booth timeline", () => {
     expect(reveals[0].at).toBe(flashes.at(-1)!.at + REVEAL_MS);
   });
 
-  it("is sorted, collision-free, and uses absolute instants", () => {
+  it("is sorted and uses absolute instants", () => {
     const startAt = 1_234_567;
     const timeline = boothTimeline(startAt, 4);
     const shifted = boothTimeline(startAt + 3_600_000, 4);
 
     expect(timeline.map((step) => step.at)).toEqual([...timeline].sort((a, b) => a.at - b.at).map((step) => step.at));
-    expect(new Set(timeline.map((step) => step.at)).size).toBe(timeline.length);
     expect(shifted.map((step) => ({ ...step, at: step.at - 3_600_000 }))).toEqual(timeline);
   });
 

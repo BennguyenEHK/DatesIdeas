@@ -93,14 +93,10 @@ export function useBooth({
   }, []);
 
   const at = useCallback((when: number, fn: () => void) => {
-    const c = clockRef.current;
-    if (c) {
-      c.scheduleAt(when, fn);
-      return;
-    }
-    // No shared clock yet — this side is alone, so its own clock is the only
-    // one there is and nothing needs to agree with it.
-    const id = setTimeout(fn, Math.max(0, when - Date.now()));
+    // Booth sittings deliberately last longer than reaction scheduling permits;
+    // measure against the shared clock but own these long-lived timers locally.
+    const delay = Math.max(0, when - (clockRef.current?.now() ?? Date.now()));
+    const id = setTimeout(fn, delay);
     timers.current.push(id);
   }, []);
 

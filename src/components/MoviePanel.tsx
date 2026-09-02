@@ -9,11 +9,8 @@ import { formatDuration } from "@/lib/history/aggregate";
 /**
  * The movie controls, in the bottom letterbox bar under the screen.
  *
- * Karaoke's sibling, and deliberately shorter than it. Karaoke has to ask
- * where the song is playing before anything else, because singing into an open
- * microphone over loudspeakers becomes an echo. Watching a film is ordinary
- * talking with something on in the background, so the ordinary microphone
- * settings are already right and there is nothing to ask.
+ * Karaoke's sibling, and deliberately shorter than it. The transport remains
+ * available before a film is loaded, with the picker as one of its actions.
  */
 export function MoviePanel(props: {
   film: Film;
@@ -49,23 +46,23 @@ export function MoviePanel(props: {
     onResync,
   } = props;
 
-  const nothingToReturnTo =
-    film.videoId === null || videoError !== null || fileError !== null;
-
   return (
     <section aria-label="Movie" className="w-full">
       <Mismatch film={film} myDurationSec={myDurationSec} />
-      {nothingToReturnTo || picking ? (
+      {picking ? (
         <FilmPicker
           onLoadYouTube={onLoadYouTube}
           onOpenFile={onOpenFile}
           videoError={videoError}
           fileError={fileError}
-          onCancel={nothingToReturnTo ? null : onCancelPick}
+          hasFilm={film.videoId !== null}
+          onCancel={onCancelPick}
         />
       ) : (
         <Transport
           film={film}
+          videoError={videoError}
+          fileError={fileError}
           playing={playing}
           volume={volume}
           onVolume={onVolume}
@@ -123,13 +120,16 @@ function FilmPicker({
   onOpenFile,
   videoError,
   fileError,
+  hasFilm,
   onCancel,
 }: {
   onLoadYouTube: (videoId: string) => void;
   onOpenFile: (file: File) => void;
   videoError: number | null;
   fileError: string | null;
-  onCancel: (() => void) | null;
+  /** Whether closing returns to a film, or to a transport waiting for one. */
+  hasFilm: boolean;
+  onCancel: () => void;
 }) {
   const [value, setValue] = useState("");
   const [linkError, setLinkError] = useState(false);
@@ -215,16 +215,14 @@ function FilmPicker({
         Open a file
       </button>
 
-      {onCancel && (
-        <button
-          type="button"
-          onClick={onCancel}
-          aria-label="Close and keep the current film"
-          className="shrink-0 rounded-[2px] px-2 py-1.5 text-base leading-none text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
-        >
-          ✕
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onCancel}
+        aria-label={hasFilm ? "Close and keep the current film" : "Close without choosing a film"}
+        className="shrink-0 rounded-[2px] px-2 py-1.5 text-base leading-none text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
+      >
+        ✕
+      </button>
 
       <div id={helperId} className="w-full basis-full text-[0.65rem]">
         {linkError ? (
@@ -293,6 +291,8 @@ function Volume({
 
 function Transport({
   film,
+  videoError,
+  fileError,
   playing,
   volume,
   onVolume,
@@ -301,6 +301,8 @@ function Transport({
   onPick,
 }: {
   film: Film;
+  videoError: number | null;
+  fileError: string | null;
   playing: boolean;
   volume: number;
   onVolume: (percent: number) => void;
@@ -319,9 +321,10 @@ function Transport({
 
         <button
           type="button"
+          disabled={film.videoId === null}
           onClick={onPlayPause}
           aria-label={playing ? "Pause the film" : "Play the film"}
-          className="relative inline-flex shrink-0 items-center rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10"
+          className="relative inline-flex shrink-0 items-center rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10 disabled:cursor-not-allowed disabled:bg-[var(--mist)]/25 disabled:text-[var(--mist)]"
         >
           {playing ? (
             <motion.span
@@ -348,8 +351,9 @@ function Transport({
 
         <button
           type="button"
+          disabled={film.videoId === null}
           onClick={onResync}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1.5 text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1.5 text-[var(--mist)] transition-colors hover:text-[var(--cream)] disabled:cursor-not-allowed disabled:text-[var(--mist)]/40"
         >
           <ResyncIcon />
           Resync
@@ -360,7 +364,7 @@ function Transport({
           onClick={onPick}
           className="shrink-0 rounded-[2px] px-2 py-1.5 text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
         >
-          Change film
+          {film.videoId === null ? "Choose film" : "Change film"}
         </button>
 
         <Volume value={volume} onChange={onVolume} />
@@ -373,9 +377,15 @@ function Transport({
       </div>
 
       <p className="w-full basis-full text-[0.65rem] text-[var(--mist)]">
-        Resync pulls you both back together if an ad or a stall knocked the film out
-        of step. Volume is yours alone — turning it down here leaves theirs where it
-        was.
+        {fileError !== null || videoError !== null ? (
+          <span role="alert">
+            {fileError ?? "That video wouldn't play here. Try another one."}
+          </span>
+        ) : (
+          <>Resync pulls you both back together if an ad or a stall knocked the film out
+          of step. Volume is yours alone — turning it down here leaves theirs where it
+          was.</>
+        )}
       </p>
     </div>
   );

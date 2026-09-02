@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { paintStrip, type Shot } from "./paint";
 import { stripLayout } from "./strip";
@@ -77,6 +77,8 @@ class RecordingContext {
     this.calls.push(["radial", ...args]);
     return new RecordingGradient(this.calls, "radial") as unknown as CanvasGradient;
   }
+  translate(...args: number[]): void { this.calls.push(["translate", ...args]); }
+  scale(...args: number[]): void { this.calls.push(["scale", ...args]); }
   fillRect(...args: number[]): void { this.calls.push(["fillRect", ...args]); }
   strokeRect(...args: number[]): void { this.calls.push(["strokeRect", ...args]); }
   drawImage(image: CanvasImageSource, ...args: number[]): void {
@@ -163,10 +165,115 @@ describe("paintStrip", () => {
     expect(context.calls.filter(([name]) => name === "drawImage")).toHaveLength(1);
   });
 
+  it("crops a wide source with the nine-argument drawImage overload", () => {
+    const context = ctx();
+    const layout = stripLayout(2, 200);
+    const source = { width: 1600, height: 900 } as CanvasImageSource;
+    paintStrip(context as unknown as CanvasRenderingContext2D, layout, theme("griffith"), [{ left: source, right: null }], "Tonight");
+
+    const draw = context.calls.find(([name, image]) => name === "drawImage" && image === source);
+    expect(draw).toEqual([
+      "drawImage",
+      source,
+      400,
+      0,
+      800,
+      900,
+      layout.panels[0].left.x,
+      layout.panels[0].left.y,
+      layout.panels[0].left.width,
+      layout.panels[0].left.height,
+    ]);
+  });
+
   it("does not paint a grade for an ungraded theme", () => {
     const context = ctx();
     paintStrip(context as unknown as CanvasRenderingContext2D, stripLayout(2, 200), theme("silver"), shots(), "Tonight");
 
     expect(context.calls.filter(([name]) => name === "setComposite")).toHaveLength(0);
+  });
+});
+
+/**
+ * The feather, on the path a real browser actually takes.
+ *
+ * jsdom has no working canvas, so every other test in this file silently
+ * exercises the unfeathered fallback: paintPerson cannot get a 2d context for
+ * its offscreen canvas and draws straight to the strip. That fallback is worth
+ * having, but it is not what anyone sees. Standing an OffscreenCanvas up on
+ * globalThis is what puts the real path under test.
+ */
+class FakeOffscreen {
+  static made: FakeOffscreen[] = [];
+  readonly context = new RecordingContext();
+  constructor(readonly width: number, readonly height: number) {
+    FakeOffscreen.made.push(this);
+  }
+  getContext(): unknown {
+    return this.context;
+  }
+}
+
+describe("feathering the two halves into one photograph", () => {
+  afterEach(() => {
+    delete (globalThis as { OffscreenCanvas?: unknown }).OffscreenCanvas;
+    FakeOffscreen.made = [];
+  });
+
+  function paintOneHalf() {
+    (globalThis as { OffscreenCanvas?: unknown }).OffscreenCanvas = FakeOffscreen;
+    const context = ctx();
+    const layout = stripLayout(2, 200);
+    const source = { width: 1600, height: 900 } as CanvasImageSource;
+    paintStrip(
+      context as unknown as CanvasRenderingContext2D,
+      layout,
+      theme("griffith"),
+      [{ left: source, right: null }],
+      "Tonight",
+    );
+    return { context, layout, source };
+  }
+
+  it("crops into an offscreen canvas the size of the person's place on the strip", () => {
+    const { layout, source } = paintOneHalf();
+    const dest = layout.panels[0].left;
+
+    expect(FakeOffscreen.made).toHaveLength(1);
+    const off = FakeOffscreen.made[0];
+    expect([off.width, off.height]).toEqual([dest.width, dest.height]);
+    // Same centre crop as the fallback, but landing at the offscreen origin.
+    expect(off.context.calls.find(([name]) => name === "drawImage")).toEqual([
+      "drawImage", source, 400, 0, 800, 900, 0, 0, dest.width, dest.height,
+    ]);
+  });
+
+  it("punches an elliptical hole matching the live preview's mask", () => {
+    const { layout } = paintOneHalf();
+    const dest = layout.panels[0].left;
+    const calls = FakeOffscreen.made[0].context.calls;
+
+    expect(calls).toContainEqual(["setComposite", "destination-in"]);
+    expect(calls).toContainEqual(["translate", dest.width * 0.5, dest.height * 0.46]);
+    expect(calls).toContainEqual(["scale", dest.width * 0.68, dest.height * 0.82]);
+    // Opaque out to 58% of the radius, gone by the edge -- the CSS the stage
+    // feathers itself with, so the strip cannot drift away from the preview.
+    expect(calls).toContainEqual(["radialStop", 0.58, "#000"]);
+    expect(calls).toContainEqual(["radialStop", 1, "rgba(0,0,0,0)"]);
+  });
+
+  it("lays the feathered half onto the strip in its own place", () => {
+    const { context, layout } = paintOneHalf();
+    const dest = layout.panels[0].left;
+
+    expect(context.calls).toContainEqual([
+      "drawImage", FakeOffscreen.made[0], dest.x, dest.y, dest.width, dest.height,
+    ]);
+  });
+
+  it("puts the two people flush against each other, with no gap to feather across", () => {
+    const layout = stripLayout(2, 200);
+    const { left, right } = layout.panels[0];
+    expect(left.x + left.width).toBe(right.x);
   });
 });

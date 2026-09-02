@@ -39,7 +39,7 @@ describe("photo strip layout", () => {
       expect(panel.right.y).toBe(panel.y);
       expect(panel.left.height).toBe(panel.height);
       expect(panel.right.height).toBe(panel.height);
-      expect(panel.left.x + panel.left.width).toBeLessThan(panel.right.x);
+      expect(panel.left.x + panel.left.width).toBe(panel.right.x);
       expect(panel.right.x + panel.right.width).toBeCloseTo(panel.x + panel.width, 12);
       expect(panel.left.width + (panel.right.x - (panel.left.x + panel.left.width)) + panel.right.width).toBeCloseTo(panel.width, 12);
     }
