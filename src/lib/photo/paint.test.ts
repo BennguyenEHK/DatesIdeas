@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { paintStrip, type Shot } from "./paint";
-import { stripLayout } from "./strip";
+import { PERSON_BLUR_ALPHA, PERSON_BLUR_PX, paintStrip, type Shot } from "./paint";
+import { STRIP_WIDTH, stripLayout } from "./strip";
 import { starsFor, theme } from "./themes";
 
 type Call = [string, ...unknown[]];
@@ -162,7 +162,7 @@ describe("paintStrip", () => {
     const layout = stripLayout(2, 200);
     const left = {} as CanvasImageSource;
     expect(() => paintStrip(context as unknown as CanvasRenderingContext2D, layout, theme("griffith"), [{ left, right: null }], "Tonight")).not.toThrow();
-    expect(context.calls.filter(([name]) => name === "drawImage")).toHaveLength(1);
+    expect(context.calls.filter(([name]) => name === "drawImage")).toHaveLength(2);
   });
 
   it("crops a wide source with the nine-argument drawImage overload", () => {
@@ -275,5 +275,40 @@ describe("feathering the two halves into one photograph", () => {
     const layout = stripLayout(2, 200);
     const { left, right } = layout.panels[0];
     expect(left.x + left.width).toBe(right.x);
+  });
+
+  it("puts a blurred, unfeathered room behind the sharp feathered person", () => {
+    const { context, layout, source } = paintOneHalf();
+    const dest = layout.panels[0].left;
+    const backdrop = context.calls.findIndex(([name, image]) => name === "drawImage" && image === source);
+    const blur = context.calls.findIndex(([name, value]) => name === "setFilter" && value === `blur(${Math.max(1, Math.round(PERSON_BLUR_PX * (layout.width / STRIP_WIDTH)))}px)`);
+    const alpha = context.calls.findIndex(([name, value]) => name === "setAlpha" && value === PERSON_BLUR_ALPHA);
+    const sharp = context.calls.findIndex(([name, image]) => name === "drawImage" && image === FakeOffscreen.made[0]);
+
+    expect(backdrop).toBeGreaterThan(blur);
+    expect(backdrop).toBeGreaterThan(alpha);
+    expect(backdrop).toBeLessThan(sharp);
+    expect(context.calls[backdrop]).toEqual([
+      "drawImage", source, 400, 0, 800, 900, dest.x, dest.y, dest.width, dest.height,
+    ]);
+    expect(FakeOffscreen.made[0].context.calls.some(([name]) => name === "setFilter")).toBe(false);
+  });
+
+  it("scales the blur with the requested strip width and restores its state", () => {
+    (globalThis as { OffscreenCanvas?: unknown }).OffscreenCanvas = FakeOffscreen;
+    const context = ctx();
+    const layout = stripLayout(2, STRIP_WIDTH / 2);
+    const source = { width: 1600, height: 900 } as CanvasImageSource;
+    paintStrip(context as unknown as CanvasRenderingContext2D, layout, theme("griffith"), [{ left: source, right: null }], "Tonight");
+
+    const blur = `blur(${PERSON_BLUR_PX / 2}px)`;
+    const blurIndex = context.calls.findIndex(([name, value]) => name === "setFilter" && value === blur);
+    const backdropIndex = context.calls.findIndex(([name, image]) => name === "drawImage" && image === source);
+    const restoreIndex = context.calls.findIndex(([name], index) => index > backdropIndex && name === "restore");
+
+    expect(blurIndex).toBeLessThan(backdropIndex);
+    expect(restoreIndex).toBeGreaterThan(backdropIndex);
+    expect(context.globalAlpha).toBe(1);
+    expect(context.filter).toBe("none");
   });
 });

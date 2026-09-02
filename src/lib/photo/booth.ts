@@ -1,12 +1,15 @@
 import type { ShotCount } from "./strip";
 
 export const LEAD_MS = 7000;
-export const BETWEEN_MS = 7000;
+export const REVIEW_MS = 2000;
+export const BETWEEN_MS = REVIEW_MS + LEAD_MS;
 export const REVEAL_MS = 700;
 
 export type BoothStep =
   | { at: number; kind: "count"; shotIndex: number; value: number }
   | { at: number; kind: "flash"; shotIndex: number }
+  | { at: number; kind: "review"; shotIndex: number }
+  | { at: number; kind: "reviewEnd"; shotIndex: number }
   | { at: number; kind: "reveal" };
 
 function requireShotCount(shots: number): asserts shots is ShotCount {
@@ -36,10 +39,12 @@ export function boothTimeline(startAt: number, shots: ShotCount): BoothStep[] {
       steps.push({ at: flashAt - value * 1000, kind: "count", shotIndex, value });
     }
     steps.push({ at: flashAt, kind: "flash", shotIndex });
+    steps.push({ at: flashAt, kind: "review", shotIndex });
+    steps.push({ at: flashAt + REVIEW_MS, kind: "reviewEnd", shotIndex });
   }
 
   const finalFlashAt = startAt + LEAD_MS + (shots - 1) * BETWEEN_MS;
-  steps.push({ at: finalFlashAt + REVEAL_MS, kind: "reveal" });
+  steps.push({ at: finalFlashAt + REVIEW_MS + REVEAL_MS, kind: "reveal" });
   return steps;
 }
 
@@ -49,5 +54,5 @@ export function boothTimeline(startAt: number, shots: ShotCount): BoothStep[] {
  */
 export function boothDurationMs(shots: ShotCount): number {
   requireShotCount(shots);
-  return LEAD_MS + (shots - 1) * BETWEEN_MS + REVEAL_MS;
+  return LEAD_MS + (shots - 1) * BETWEEN_MS + REVIEW_MS + REVEAL_MS;
 }

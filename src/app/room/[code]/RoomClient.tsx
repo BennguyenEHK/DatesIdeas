@@ -302,22 +302,36 @@ export function RoomClient({ code }: { code: string }) {
   const turn = singingTurn(singing.mine, singing.theirs);
 
   // How late their voice arrives: half the round trip, plus however long their
-  // audio is sitting in this browser's jitter buffer -- a figure that is
-  // remeasured continuously, because a connection at nine in the evening is
-  // not the one you tuned to by ear at seven.
+  // audio is sitting in this browser's jitter buffer. Measured continuously,
+  // because a connection at nine in the evening is not the one you tuned to by
+  // ear at seven -- but only RECORDED here, never applied. Nothing in this
+  // effect moves the player.
   useEffect(() => {
     if (!karaoke) return;
     const sample = measuredLatencyMs(peer.rtt, peer.audioJitterMs);
     if (sample === null) return;
-    const window = [...latencySamples.current, sample].slice(-9);
-    latencySamples.current = window;
-    if (manualOffset) return;
-    const wanted = offsetForTurn(turn, smoothLatency(window));
-    // Settled, not applied raw: every change re-seeks the player, and chasing
-    // a few milliseconds of wobble is an audible stutter bought for a
-    // correction nobody can hear.
+    latencySamples.current = [...latencySamples.current, sample].slice(-9);
+  }, [karaoke, peer.rtt, peer.audioJitterMs]);
+
+  // The delay is decided once, when the turn changes hands, and then held for
+  // the whole of that turn.
+  //
+  // It used to be recomputed every time the connection was remeasured, which
+  // meant the figure crept while someone was mid-verse and the player kept
+  // being pulled to a new position underneath them. Even a correction too
+  // small to hear accumulates until it crosses the drift tolerance, and then
+  // the song jumps. A turn boundary is the one moment when a change is free:
+  // by definition somebody has just stopped singing, so there is nothing for
+  // the correction to interrupt.
+  //
+  // `turn` is the only dependency, which is the whole point: the connection is
+  // remeasured every couple of seconds and none of those readings reach the
+  // player any more.
+  useEffect(() => {
+    if (!karaoke || manualOffset) return;
+    const wanted = offsetForTurn(turn, smoothLatency(latencySamples.current));
     setOffsetMs((current) => settledOffset(current, wanted));
-  }, [karaoke, manualOffset, turn, peer.rtt, peer.audioJitterMs]);
+  }, [karaoke, manualOffset, turn]);
 
 
 
@@ -418,6 +432,8 @@ export function RoomClient({ code }: { code: string }) {
                 remoteMemes={theirs.memes}
                 count={booth.count}
                 flashing={booth.flashing}
+                review={booth.review}
+                shots={booth.shots}
                 localVideoRef={localVideo}
                 remoteVideoRef={remoteVideo}
               >

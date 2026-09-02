@@ -27,6 +27,21 @@ export const THEME_IDS = [
 
 export type ThemeId = (typeof THEME_IDS)[number];
 
+/**
+ * The corner darkening each look keeps after it moves away from the faces.
+ *
+ * The stage and the saved strip share these values: otherwise one can leave
+ * people clear while the other quietly puts the old muddy wash back on them.
+ */
+export const VIGNETTE_STRENGTHS: Readonly<Record<ThemeId, number>> = {
+  griffith: 0.14,
+  goldenHour: 0.12,
+  rose: 0.1,
+  planetarium: 0.18,
+  neon: 0.16,
+  silver: 0.2,
+};
+
 /** A colour stop down the vertical sky gradient. `at` runs 0 (top) to 1. */
 export interface Stop {
   at: number;
@@ -92,9 +107,9 @@ export const THEMES: readonly Theme[] = [
       { at: 1, color: "#2c2657" },
     ],
     glows: [{ x: 0.78, y: 0.86, radius: 0.62, color: "rgba(232,185,74,0.30)" }],
-    grade: { color: "#e8b94a", alpha: 0.16, mode: "soft-light" },
+    grade: { color: "#e8b94a", alpha: 0.08, mode: "soft-light" },
     stars: 46,
-    vignette: 0.42,
+    vignette: VIGNETTE_STRENGTHS.griffith,
     desaturate: 0,
     ink: "#f5efe0",
     frame: "#e8b94a",
@@ -111,9 +126,9 @@ export const THEMES: readonly Theme[] = [
     // Low and to the left, where a setting sun would be. The most flattering
     // of the six on camera: warm light suits skin and forgives a dim room.
     glows: [{ x: 0.16, y: 0.9, radius: 0.75, color: "rgba(255,215,154,0.45)" }],
-    grade: { color: "#f6b86a", alpha: 0.2, mode: "overlay" },
+    grade: { color: "#f6b86a", alpha: 0.1, mode: "overlay" },
     stars: 0,
-    vignette: 0.34,
+    vignette: VIGNETTE_STRENGTHS.goldenHour,
     desaturate: 0,
     ink: "#42203f",
     frame: "#f5efe0",
@@ -128,9 +143,9 @@ export const THEMES: readonly Theme[] = [
       { at: 1, color: "#6f2b46" },
     ],
     glows: [{ x: 0.5, y: 0.08, radius: 0.7, color: "rgba(255,224,230,0.5)" }],
-    grade: { color: "#e2879a", alpha: 0.2, mode: "soft-light" },
+    grade: { color: "#e2879a", alpha: 0.1, mode: "soft-light" },
     stars: 0,
-    vignette: 0.3,
+    vignette: VIGNETTE_STRENGTHS.rose,
     desaturate: 0,
     ink: "#5c2038",
     frame: "#f7ccd2",
@@ -145,12 +160,12 @@ export const THEMES: readonly Theme[] = [
       { at: 1, color: "#04030f" },
     ],
     glows: [{ x: 0.5, y: 0.42, radius: 0.55, color: "rgba(120,96,220,0.22)" }],
-    grade: { color: "#6a5acd", alpha: 0.14, mode: "multiply" },
+    grade: { color: "#6a5acd", alpha: 0.07, mode: "multiply" },
     // The most stars of the six, and the theme where a cut-out reads best:
     // the background is genuinely dark and simple, so an imperfect edge on
     // someone's hair has nothing to give itself away against.
     stars: 150,
-    vignette: 0.55,
+    vignette: VIGNETTE_STRENGTHS.planetarium,
     desaturate: 0,
     ink: "#e9e4ff",
     frame: "#8f86d6",
@@ -169,9 +184,9 @@ export const THEMES: readonly Theme[] = [
       { x: 0.04, y: 0.3, radius: 0.6, color: "rgba(255,61,129,0.42)" },
       { x: 0.98, y: 0.74, radius: 0.6, color: "rgba(53,214,232,0.34)" },
     ],
-    grade: { color: "#c74b6d", alpha: 0.14, mode: "overlay" },
+    grade: { color: "#c74b6d", alpha: 0.07, mode: "overlay" },
     stars: 0,
-    vignette: 0.5,
+    vignette: VIGNETTE_STRENGTHS.neon,
     desaturate: 0,
     ink: "#35d6e8",
     frame: "#ff3d81",
@@ -188,9 +203,9 @@ export const THEMES: readonly Theme[] = [
     glows: [{ x: 0.5, y: 0.18, radius: 0.8, color: "rgba(255,255,255,0.28)" }],
     grade: null,
     stars: 0,
-    // Heavier than the rest, because with the colour gone the vignette is the
-    // only thing left saying "photograph" rather than "grey rectangle".
-    vignette: 0.6,
+    // Still the strongest at the corners, because with colour gone it carries
+    // more of the work of making a strip read as a photograph, not a grey rectangle.
+    vignette: VIGNETTE_STRENGTHS.silver,
     desaturate: 1,
     ink: "#1a1a18",
     frame: "#1a1a18",

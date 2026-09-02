@@ -13,7 +13,7 @@ const film = (videoId: string): Film => ({
 });
 
 /** Records what the sync layer asks of a player, and in what order. */
-function fakePlayer(ready = true) {
+function fakePlayer(ready = true, acceptsRate = true) {
   const calls: string[] = [];
   let time = 0;
   const handle: PlayerHandle = {
@@ -27,6 +27,14 @@ function fakePlayer(ready = true) {
     seek: (s) => {
       calls.push(`seek:${s}`);
       time = s;
+    },
+    nudge: (s) => {
+      calls.push(`nudge:${s}`);
+      time = s;
+    },
+    setRate: (rate) => {
+      calls.push(`rate:${rate}`);
+      return acceptsRate;
     },
     currentTime: () => time,
     setVolume: (v) => calls.push(`volume:${v}`),
@@ -179,7 +187,9 @@ describe("useSyncedPlayback", () => {
     act(() => rerender({ offsetSec: 0.8 }));
 
     expect(p.calls.length).toBeGreaterThan(before);
-    expect(p.calls).toContain("seek:9.2");
+    // A nudge, not a seek. Half a second is a turn changing hands, and the
+    // player is certainly holding that much either side of where it is.
+    expect(p.calls).toContain("nudge:9.2");
   });
 
   it("stamps a local pause back at the true shared position", () => {
@@ -323,6 +333,90 @@ describe("reporting how long a local film is", () => {
     expect(sent.at(-1)).toMatchObject({ durationSec: 7402, source: "local" });
   });
 
+  it("ramps a small error without moving the playhead, then returns to normal speed", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}),
+    );
+
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
+    p.setTime(0.18);
+    act(() =>
+      result.current.accept({
+        t: "media",
+        source: "youtube",
+        durationSec: null,
+        videoId: "dQw4w9WgXcQ",
+        positionSec: 0,
+        playing: true,
+        atSharedTime: Date.now(),
+      } satisfies PeerMessage),
+    );
+
+    expect(p.calls).toContain("rate:0.97");
+    expect(p.calls.some((call) => call.startsWith("seek:"))).toBe(false);
+    expect(p.calls.some((call) => call.startsWith("nudge:"))).toBe(false);
+    act(() => void vi.advanceTimersByTime(6_000));
+    expect(p.calls).toContain("rate:1");
+  });
+
+  it("nudges a small error when the player cannot ramp", () => {
+    const p = fakePlayer(true, false);
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}),
+    );
+
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
+    p.setTime(0.18);
+    act(() =>
+      result.current.accept({
+        t: "media", source: "youtube", durationSec: null, videoId: "dQw4w9WgXcQ",
+        positionSec: 0, playing: true, atSharedTime: Date.now(),
+      } satisfies PeerMessage),
+    );
+
+    expect(p.calls.some((call) => call.startsWith("nudge:"))).toBe(true);
+    expect(p.calls.some((call) => call.startsWith("seek:"))).toBe(false);
+  });
+
+  it("seeks an error far too large to have been buffered", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}),
+    );
+
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
+    // Well past NUDGE_LIMIT_SEC: a stall or a late join, not a turn change.
+    p.setTime(45);
+    act(() =>
+      result.current.accept({
+        t: "media", source: "youtube", durationSec: null, videoId: "dQw4w9WgXcQ",
+        positionSec: 0, playing: true, atSharedTime: Date.now(),
+      } satisfies PeerMessage),
+    );
+
+    expect(p.calls.some((call) => call.startsWith("seek:"))).toBe(true);
+  });
+
+  it("does not seek from the correction interval while a ramp is active", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}),
+    );
+
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
+    p.setTime(0.18);
+    act(() =>
+      result.current.accept({
+        t: "media", source: "youtube", durationSec: null, videoId: "dQw4w9WgXcQ",
+        positionSec: 0, playing: true, atSharedTime: Date.now(),
+      } satisfies PeerMessage),
+    );
+    const afterRampStarts = p.calls.length;
+    act(() => void vi.advanceTimersByTime(2_000));
+    expect(p.calls.slice(afterRampStarts)).not.toContainEqual(expect.stringMatching(/^seek:/));
+  });
+
   it("does not move the film while doing it", () => {
     const sent: PeerMessage[] = [];
     const p = fakePlayer();
@@ -381,5 +475,51 @@ describe("reporting how long a local film is", () => {
     );
     act(() => result.current.reportDuration(7402));
     expect(sent).toEqual([]);
+  });
+});
+
+describe("a turn changing hands on a player that cannot ramp", () => {
+  /**
+   * The case this whole mechanism exists for, and the one easiest to lose.
+   *
+   * When the singing turn changes the offset moves by roughly the latency --
+   * a couple of hundred milliseconds. That is too large for a ramp to absorb
+   * inside MAX_RAMP_SEC, so rampPlan returns null for it. Routing the "no
+   * plan" branch to seek() therefore sent exactly these corrections back to
+   * the stalling seek, while the ramp quietly handled only the corrections
+   * nobody was complaining about.
+   */
+  it("nudges rather than seeks when the delay changes by a turn's worth", () => {
+    // acceptsRate false is YouTube: its API rounds any rate it does not
+    // support back towards 1, so it refuses rather than pretend.
+    const p = fakePlayer(true, false);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 30));
+    p.calls.length = 0;
+
+    // Their turn to sing: this side's music drops 250ms behind.
+    act(() => view.rerender({ offset: 0.25 }));
+
+    expect(p.calls.some((c) => c.startsWith("nudge:"))).toBe(true);
+    expect(p.calls.some((c) => c.startsWith("seek:"))).toBe(false);
+  });
+
+  it("still seeks for a correction too large to have been buffered", () => {
+    const p = fakePlayer(true, false);
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}),
+    );
+
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
+    p.calls.length = 0;
+    // Three quarters of a minute adrift is a stall, not a turn change.
+    p.setTime(45);
+    act(() => void vi.advanceTimersByTime(2100));
+
+    expect(p.calls.some((c) => c.startsWith("seek:"))).toBe(true);
   });
 });

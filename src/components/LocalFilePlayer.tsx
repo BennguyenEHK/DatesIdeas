@@ -76,6 +76,19 @@ export const LocalFilePlayer = forwardRef<PlayerHandle, LocalFilePlayerProps>(
           const video = videoRef.current;
           if (video) video.currentTime = seconds;
         },
+        nudge: (seconds) => {
+          const video = videoRef.current;
+          if (video) video.currentTime = seconds;
+        },
+        setRate: (rate) => {
+          const video = videoRef.current;
+          if (!video) return false;
+          // A small tempo correction should repair sync, not make the singer
+          // sound flat; engines without this optional property still ramp.
+          if ("preservesPitch" in video) video.preservesPitch = true;
+          video.playbackRate = rate;
+          return true;
+        },
         currentTime: () => {
           const video = videoRef.current;
           return video && video.readyState >= 1 ? video.currentTime : 0;

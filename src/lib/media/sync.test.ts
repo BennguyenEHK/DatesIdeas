@@ -4,6 +4,9 @@ import {
   needsCorrection,
   stateAt,
   DRIFT_TOLERANCE_SEC,
+  RAMP_RATE,
+  MAX_RAMP_SEC,
+  rampPlan,
   DURATION_MATCH_SEC,
   filmsMatch,
   type PlaybackState,
@@ -212,5 +215,30 @@ describe("filmsMatch", () => {
   it("tolerates less than a cut but more than a rounding", () => {
     expect(DURATION_MATCH_SEC).toBeGreaterThan(0.5);
     expect(DURATION_MATCH_SEC).toBeLessThan(30);
+  });
+});
+
+describe("rampPlan", () => {
+  it("slows an ahead player just long enough to lose the error", () => {
+    expect(rampPlan(0.18)).toEqual({ rate: 1 - RAMP_RATE, forSec: 6 });
+  });
+
+  it("speeds a behind player just long enough to gain the error", () => {
+    expect(rampPlan(-0.18)).toEqual({ rate: 1 + RAMP_RATE, forSec: 6 });
+  });
+
+  it("does not chase errors inside the drift tolerance", () => {
+    expect(rampPlan(DRIFT_TOLERANCE_SEC)).toBeNull();
+  });
+
+  it("uses a ramp at its longest useful boundary", () => {
+    expect(rampPlan(RAMP_RATE * MAX_RAMP_SEC)).toEqual({
+      rate: 1 - RAMP_RATE,
+      forSec: MAX_RAMP_SEC,
+    });
+  });
+
+  it("seeks instead once a ramp would outlast its useful window", () => {
+    expect(rampPlan(RAMP_RATE * MAX_RAMP_SEC + 0.001)).toBeNull();
   });
 });

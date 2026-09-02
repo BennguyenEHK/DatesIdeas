@@ -8,6 +8,7 @@ import {
   seeded,
   seedFor,
   starsFor,
+  VIGNETTE_STRENGTHS,
 } from "./themes";
 
 describe("the set of themes", () => {
@@ -38,6 +39,22 @@ describe("the set of themes", () => {
 });
 
 describe("what every theme must provide", () => {
+  it("keeps only a restrained vignette at the corners", () => {
+    expect(VIGNETTE_STRENGTHS).toEqual({
+      griffith: 0.14,
+      goldenHour: 0.12,
+      rose: 0.1,
+      planetarium: 0.18,
+      neon: 0.16,
+      silver: 0.2,
+    });
+    expect(THEMES.map((t) => t.vignette)).toEqual(THEME_IDS.map((id) => VIGNETTE_STRENGTHS[id]));
+  });
+
+  it("keeps the shared grade without letting it overwhelm either room", () => {
+    expect(THEMES.map((t) => t.grade?.alpha ?? null)).toEqual([0.08, 0.1, 0.1, 0.07, 0.07, null]);
+  });
+
   it.each(THEMES.map((t) => [t.id, t] as const))(
     "%s is fully described",
     (_id, t) => {

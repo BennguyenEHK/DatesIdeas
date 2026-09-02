@@ -79,6 +79,19 @@ describe("LocalFilePlayer", () => {
     expect(video.currentTime).toBe(42);
   });
 
+  it("nudges locally and changes rate without changing pitch", () => {
+    const view = setup();
+    const video = view.container.querySelector("video")!;
+    const handle = view.getHandle()!;
+    Object.defineProperty(video, "preservesPitch", { configurable: true, writable: true, value: false });
+
+    handle.nudge(42);
+    expect(video.currentTime).toBe(42);
+    expect(handle.setRate(1.03)).toBe(true);
+    expect(video.playbackRate).toBe(1.03);
+    expect(video.preservesPitch).toBe(true);
+  });
+
   it("revokes the previous object URL when the file changes", () => {
     const view = setup();
     const nextFile = new File(["next"], "next.mp4");

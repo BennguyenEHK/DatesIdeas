@@ -27,6 +27,8 @@ export interface Booth {
   setShots: (n: ShotCount) => void;
   /** The number currently on screen, or null between counts. */
   count: number | null;
+  /** The photograph just taken, held up before the next countdown. */
+  review: { shotIndex: number; frame: Frame | null } | null;
   flashing: boolean;
   running: boolean;
   /** Between the last flash and the strip being ready. */
@@ -64,6 +66,7 @@ export function useBooth({
   const [themeId, setThemeId] = useState<ThemeId>(DEFAULT_THEME_ID);
   const [shots, setShots] = useState<ShotCount>(4);
   const [count, setCount] = useState<number | null>(null);
+  const [review, setReview] = useState<{ shotIndex: number; frame: Frame | null } | null>(null);
   const [flashing, setFlashing] = useState(false);
   const [running, setRunning] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -145,6 +148,7 @@ export function useBooth({
     (id: ThemeId, n: ShotCount, startAt: number) => {
       setRunning(true);
       setCount(null);
+      setReview(null);
       // Each sitting starts from nothing. Without this the list grows by a
       // timer per flash for the whole evening, and unmount walks all of them.
       for (const id of timers.current) clearTimeout(id);
@@ -174,6 +178,21 @@ export function useBooth({
             timers.current.push(off);
             return;
           }
+          if (step.kind === "review") {
+            // The still must be the local mirrored capture rather than a new
+            // draw from video, or the held-up picture would not be the flash
+            // both sides just synchronized around.
+            setReview({
+              shotIndex: step.shotIndex,
+              frame: captured.current[step.shotIndex].left,
+            });
+            return;
+          }
+          if (step.kind === "reviewEnd") {
+            setReview(null);
+            return;
+          }
+          setReview(null);
           void develop(id, n);
         });
       }
@@ -220,6 +239,7 @@ export function useBooth({
     shots,
     setShots,
     count,
+    review,
     flashing,
     running,
     busy,

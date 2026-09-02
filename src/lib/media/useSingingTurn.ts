@@ -9,8 +9,16 @@ export const SINGING_SAMPLE_MS = 100;
 export const SINGING_ON_RMS = 0.06;
 /** A voice already holding the turn gets more room for breaths and tail ends. */
 export const SINGING_OFF_RMS = 0.03;
-/** Brief gaps belong to the same phrase; ending them sooner makes the music jump. */
-export const SINGING_QUIET_HOLD_MS = 1200;
+/**
+ * How long a voice must stay quiet before it gives the turn up.
+ *
+ * Deliberately longer than a phrase gap. Every change of turn moves the music,
+ * and moving the music is the one thing this feature can be seen doing -- so
+ * the cost of handing the turn over too eagerly is a stutter between verses,
+ * while the cost of holding it too long is a second or two of delay nobody
+ * asked for. The first is far more annoying than the second.
+ */
+export const SINGING_QUIET_HOLD_MS = 2500;
 
 export interface SingingTurnState {
   mine: boolean;

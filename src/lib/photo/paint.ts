@@ -1,5 +1,10 @@
 import { starsFor, type Theme } from "./themes";
-import type { Panel, Rect, StripLayout } from "./strip";
+import { STRIP_WIDTH, type Panel, type Rect, type StripLayout } from "./strip";
+
+/** The portrait falloff at the standard export width. */
+export const PERSON_BLUR_PX = 18;
+/** Enough room detail to join the scene without competing with the person. */
+export const PERSON_BLUR_ALPHA = 0.55;
 
 export interface Shot {
   /** Null when that person's camera gave nothing at the moment of the flash. */
@@ -60,7 +65,20 @@ function offscreenCanvas(width: number, height: number): OffscreenCanvas | HTMLC
 }
 
 /** Feathering the two halves into the scene prevents their shared edge reading as a splice. */
-function paintPerson(ctx: CanvasRenderingContext2D, image: CanvasImageSource, dest: Rect): void {
+function paintPerson(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  dest: Rect,
+  blurRadius: number,
+): void {
+  if ("filter" in ctx) {
+    ctx.save();
+    ctx.filter = `blur(${blurRadius}px)`;
+    ctx.globalAlpha = PERSON_BLUR_ALPHA;
+    drawCropped(ctx, image, dest);
+    ctx.restore();
+  }
+
   const canvas = offscreenCanvas(dest.width, dest.height);
   const mask = canvas?.getContext("2d") as PaintContext | null;
   if (!canvas || !mask) {
@@ -86,13 +104,14 @@ function paintPeople(
   ctx: CanvasRenderingContext2D,
   panel: Panel,
   shot: Shot | undefined,
+  blurRadius: number,
 ): void {
   if (shot?.left !== null && shot?.left !== undefined) {
-    paintPerson(ctx, shot.left, panel.left);
+    paintPerson(ctx, shot.left, panel.left, blurRadius);
   }
 
   if (shot?.right !== null && shot?.right !== undefined) {
-    paintPerson(ctx, shot.right, panel.right);
+    paintPerson(ctx, shot.right, panel.right, blurRadius);
   }
 }
 
@@ -166,11 +185,13 @@ export function paintScene(
 }
 
 /**
- * The light laid over the people: the grade, then the vignette.
+ * The light laid over the people: the grade, then a restrained corner vignette.
  *
  * The grade is what makes two people in two different rooms look like they are
  * in one photograph — the same light falling on both faces. Without it a strip
  * is two webcam grabs pasted onto a nice background, and reads as exactly that.
+ * The vignette only steadies the outermost corners; anything stronger muddies
+ * the two faces that sit in its path.
  *
  * It covers `graded` only, never the whole box, so a caption band underneath
  * keeps its own ink colour instead of being tinted along with the pictures.
@@ -211,12 +232,13 @@ export function paintStrip(
   caption: string,
 ): void {
   const filter = sceneFilter(t);
+  const blurRadius = Math.max(1, Math.round(PERSON_BLUR_PX * (layout.width / STRIP_WIDTH)));
 
   paintScene(ctx, t, layout);
 
   ctx.save();
   ctx.filter = filter;
-  layout.panels.forEach((panel, index) => paintPeople(ctx, panel, shots[index]));
+  layout.panels.forEach((panel, index) => paintPeople(ctx, panel, shots[index], blurRadius));
   ctx.restore();
 
   paintFinish(ctx, t, layout, layout.panels);

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { createRef } from "react";
 import { useBooth } from "./useBooth";
-import { LEAD_MS, BETWEEN_MS } from "./booth";
+import { LEAD_MS, BETWEEN_MS, REVIEW_MS, REVEAL_MS } from "./booth";
 import type { PeerMessage } from "@/lib/rtc/protocol";
 import type { SyncedClock } from "@/lib/sync/SyncedClock";
 
@@ -80,16 +80,22 @@ describe("starting a sitting", () => {
     expect(result.current.count).toBe(1);
   });
 
-  it("flashes when the count runs out, and starts the next count on the spot", async () => {
-    // The gap between photographs IS the next countdown, so it begins at the
-    // flash rather than after it -- that is what makes the interval the seven
-    // seconds it claims to be.
+  it("holds the flash for review before beginning the next count", async () => {
+    // Both sides derive the handoff from the same instant, so the next pose
+    // begins together instead of after whichever browser handled its flash first.
     const { result } = setup();
     act(() => result.current.setShots(2));
     act(() => result.current.start());
     await act(async () => void vi.advanceTimersByTime(400 + LEAD_MS));
     expect(result.current.flashing).toBe(true);
+    expect(result.current.count).toBeNull();
+    expect(result.current.review).toMatchObject({ shotIndex: 0 });
+    await act(async () => void vi.advanceTimersByTime(REVIEW_MS));
+    expect(result.current.review).toBeNull();
     expect(result.current.count).toBe(7);
+    await act(async () => void vi.advanceTimersByTime(6000));
+    expect(result.current.review).toBeNull();
+    expect(result.current.count).toBe(1);
   });
 
   it("leaves no count hanging after the final flash", async () => {
@@ -110,6 +116,35 @@ describe("starting a sitting", () => {
     expect(captureFrame).toHaveBeenCalledTimes(2);
     await act(async () => void vi.advanceTimersByTime(BETWEEN_MS));
     expect(captureFrame).toHaveBeenCalledTimes(4);
+  });
+
+  it("shows the local captured photograph for every review", async () => {
+    const { captureFrame } = await import("./capture");
+    const { result } = setup();
+    act(() => result.current.setShots(2));
+    act(() => result.current.start());
+
+    await act(async () => void vi.advanceTimersByTime(400 + LEAD_MS));
+    expect(result.current.review).toEqual({
+      shotIndex: 0,
+      frame: vi.mocked(captureFrame).mock.results[0].value,
+    });
+    await act(async () => void vi.advanceTimersByTime(BETWEEN_MS));
+    expect(result.current.review).toEqual({
+      shotIndex: 1,
+      frame: vi.mocked(captureFrame).mock.results[2].value,
+    });
+  });
+
+  it("clears the final review before the strip starts developing", async () => {
+    const { result } = setup();
+    act(() => result.current.setShots(2));
+    act(() => result.current.start());
+
+    await act(async () => void vi.advanceTimersByTime(400 + LEAD_MS + BETWEEN_MS));
+    expect(result.current.review).toMatchObject({ shotIndex: 1 });
+    await act(async () => void vi.advanceTimersByTime(REVIEW_MS + REVEAL_MS));
+    expect(result.current.review).toBeNull();
   });
 
   it("mirrors your own camera and not theirs", async () => {

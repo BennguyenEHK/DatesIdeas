@@ -54,6 +54,50 @@ export interface PlaybackState extends Film {
 export const DRIFT_TOLERANCE_SEC = 0.12;
 
 /**
+ * The largest tempo change a local player may use to catch up without making
+ * the song feel like it changed speed.
+ */
+export const RAMP_RATE = 0.03;
+
+/**
+ * A correction that takes longer than this leaves the players visibly apart
+ * for too long, so it is cheaper to move the playhead instead.
+ */
+export const MAX_RAMP_SEC = 8;
+
+/**
+ * How far a correction may reach and still be treated as certainly buffered.
+ *
+ * The distinction matters only on YouTube, where a seek is allowed to ask the
+ * server for data it does not have -- which empties the buffer and freezes the
+ * picture -- while a nudge is refused rather than fetched. A player mid-song
+ * holds far more than a couple of seconds either side of where it is, so a
+ * correction this small is always already in hand.
+ *
+ * It has to be comfortably larger than the largest delay the singing turn can
+ * ask for, or the one case this exists for -- a turn changing hands -- would
+ * fall through to the seek it is meant to avoid.
+ */
+export const NUDGE_LIMIT_SEC = 2;
+
+/**
+ * Turns a small position error into a bounded tempo correction.
+ *
+ * `errorSec` is actual minus wanted: an ahead player has to slow down, while
+ * a behind player has to run fast. At three percent, every second held erases
+ * three hundredths of a second of error.
+ */
+export function rampPlan(errorSec: number): { rate: number; forSec: number } | null {
+  const magnitude = Math.abs(errorSec);
+  if (magnitude <= DRIFT_TOLERANCE_SEC) return null;
+
+  const forSec = magnitude / RAMP_RATE;
+  if (forSec > MAX_RAMP_SEC) return null;
+
+  return { rate: errorSec > 0 ? 1 - RAMP_RATE : 1 + RAMP_RATE, forSec };
+}
+
+/**
  * How far two local copies may differ in length and still be the same film.
  *
  * Encoders disagree about trailing silence and containers round differently,

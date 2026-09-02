@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { PlayerHandle } from "./player";
 import {
   needsCorrection,
+  rampPlan,
+  NUDGE_LIMIT_SEC,
   stateAt,
   targetPosition,
   NO_FILM,
@@ -94,6 +96,11 @@ export function useSyncedPlayback(
    */
   const iChose = useRef(false);
 
+  // Declared before every callback that changes a ramp because the React
+  // Compiler rejects refs that are first modified below a closure over them.
+  const rampTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ramping = useRef(false);
+
   const clockRef = useRef(clock);
   const sendRef = useRef(send);
   const offsetRef = useRef(offsetSec);
@@ -107,6 +114,27 @@ export function useSyncedPlayback(
     () => clockRef.current?.now() ?? Date.now(),
     [],
   );
+
+  const cancelRamp = useCallback(() => {
+    if (rampTimer.current !== null) {
+      clearTimeout(rampTimer.current);
+      rampTimer.current = null;
+    }
+    if (!ramping.current) return;
+    ramping.current = false;
+    // Leaving a local player slightly slow after a cancelled correction makes
+    // every later song wrong, which is worse than a one-time sync jump.
+    player.current?.setRate(1);
+  }, []);
+
+  const startRamp = useCallback((forSec: number) => {
+    ramping.current = true;
+    rampTimer.current = setTimeout(() => {
+      rampTimer.current = null;
+      ramping.current = false;
+      player.current?.setRate(1);
+    }, forSec * 1000);
+  }, []);
 
   /** Adopt a state locally and tell the peer, so both sides agree at once. */
   const broadcast = useCallback(
@@ -128,10 +156,11 @@ export function useSyncedPlayback(
 
   const load = useCallback(
     (film: Film, startSec = 0) => {
+      cancelRamp();
       iChose.current = true;
       broadcast(stateAt(film, startSec, false, now()));
     },
-    [broadcast, now],
+    [broadcast, cancelRamp, now],
   );
 
   const reportDuration = useCallback(
@@ -148,25 +177,34 @@ export function useSyncedPlayback(
   const playPause = useCallback(() => {
     const cur = stateRef.current;
     if (!cur.videoId) return;
+    const wasRamping = ramping.current;
+    cancelRamp();
     // Stamp from where the player actually is, not from the last stamp, or
     // every pause would rewind to wherever the previous message left off.
-    const at = player.current?.isReady()
+    const at = wasRamping
+      // A rate correction intentionally makes the physical player disagree
+      // with shared time; broadcasting that temporary disagreement would make
+      // the other side adopt it as truth.
+      ? targetPosition(cur, now())
+      : player.current?.isReady()
       // The player is deliberately behind shared time for voice latency, so
       // put that local accommodation back before broadcasting shared truth.
       ? player.current.currentTime() + offsetRef.current
       : targetPosition(cur, now());
     broadcast(stateAt(cur, at, !cur.playing, now()));
-  }, [broadcast, now]);
+  }, [broadcast, cancelRamp, now]);
 
   const resync = useCallback(() => {
     const cur = stateRef.current;
     if (!cur.videoId) return;
+    cancelRamp();
     broadcast(stateAt(cur, targetPosition(cur, now()), cur.playing, now()));
-  }, [broadcast, now]);
+  }, [broadcast, cancelRamp, now]);
 
   const clear = useCallback(() => {
+    cancelRamp();
     broadcast(stateAt(NO_FILM, 0, false, now()));
-  }, [broadcast, now]);
+  }, [broadcast, cancelRamp, now]);
 
   /** Which video the player is actually showing, as opposed to asked to show. */
   const loadedId = useRef<string | null>(null);
@@ -178,6 +216,7 @@ export function useSyncedPlayback(
     if (!p?.isReady()) return;
 
     if (cur.videoId === null) {
+      cancelRamp();
       loadedId.current = null;
       p.pause();
       return;
@@ -185,8 +224,10 @@ export function useSyncedPlayback(
 
     const want = targetPosition(cur, now(), offsetRef.current);
 
-    if (loadedId.current !== cur.videoId) {
-      loadedId.current = cur.videoId;
+    const filmKey = `${cur.source}:${cur.videoId}`;
+    if (loadedId.current !== filmKey) {
+      cancelRamp();
+      loadedId.current = filmKey;
       p.load(cur.videoId, want);
       return;
     }
@@ -196,12 +237,34 @@ export function useSyncedPlayback(
     // would blip the audio on a paused resync. Seeking an already-paused
     // player leaves it paused, which is what makes this order safe.
     if (cur.playing) p.play();
-    else p.pause();
-    if (needsCorrection(p.currentTime(), want)) p.seek(want);
-  }, [now]);
+    else {
+      cancelRamp();
+      p.pause();
+    }
+    // The ramp creates intentional drift. Correcting it again on the safety
+    // timer would turn the smooth repair back into the seek it replaces.
+    if (ramping.current || !needsCorrection(p.currentTime(), want)) return;
+
+    const error = p.currentTime() - want;
+    const plan = rampPlan(error);
+    if (plan && cur.playing && p.setRate(plan.rate)) {
+      startRamp(plan.forSec);
+    } else if (Math.abs(error) <= NUDGE_LIMIT_SEC) {
+      // Everything a turn change asks for lands here on YouTube, which cannot
+      // ramp. Gating this on `plan` instead would have sent exactly the
+      // corrections this feature exists to smooth -- a couple of hundred
+      // milliseconds, too big to ramp inside the limit -- back to the seek
+      // that was stalling the picture in the first place.
+      p.nudge(want);
+    } else {
+      p.seek(want);
+    }
+  }, [cancelRamp, now, startRamp]);
 
   const accept = useCallback((msg: PeerMessage) => {
     if (msg.t !== "media") return;
+    const cur = stateRef.current;
+    if (cur.videoId !== msg.videoId || cur.source !== msg.source) cancelRamp();
     // Their film now, so their length is the one to measure against.
     iChose.current = false;
     const next: PlaybackState = {
@@ -214,7 +277,7 @@ export function useSyncedPlayback(
     };
     setState(next);
     stateRef.current = next;
-  }, []);
+  }, [cancelRamp]);
 
   // Apply the moment the state changes, from either side. The interval below
   // only exists to catch drift; a change waiting on a timer is a song where
@@ -245,6 +308,8 @@ export function useSyncedPlayback(
       clearInterval(beating);
     };
   }, [applyState]);
+
+  useEffect(() => cancelRamp, [cancelRamp]);
 
   return {
     videoId: state.videoId,

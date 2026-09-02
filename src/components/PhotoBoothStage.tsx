@@ -4,7 +4,12 @@ import { useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { MemeOverlay } from "./MemeOverlay";
 import { ScenePainter } from "./ScenePainter";
-import { paintScene, paintFinish } from "@/lib/photo/paint";
+import {
+  paintScene,
+  paintFinish,
+  PERSON_BLUR_ALPHA,
+  PERSON_BLUR_PX,
+} from "@/lib/photo/paint";
 import { SCREEN_FR, FACES_FR, takeoverAspect } from "@/lib/ui/stage";
 import type { Theme } from "@/lib/photo/themes";
 import type { ActiveMeme } from "@/lib/ui/useMemeQueue";
@@ -12,15 +17,14 @@ import type { ActiveMeme } from "@/lib/ui/useMemeQueue";
 /**
  * The booth itself: both of you standing in the same scene, waiting for it.
  *
- * The two feeds are feathered into the background rather than sitting in hard
- * rectangles, and one colour grade is laid over both. That grade is what makes
- * two people in two different rooms read as one photograph — without it this is
- * two webcam boxes on a nice wallpaper, and it looks like exactly that.
+ * Each feed stays sharp over its own softly blurred portrait backdrop, so two
+ * rooms can fall away while the people remain the subject. One colour grade is
+ * laid over both, which makes two people in different rooms read as one
+ * photograph; without it this is two webcam boxes on a nice wallpaper.
  *
- * The live view is not cut out; the flash is. Seeing yourselves lifted into the
- * scene only when the strip develops is the reveal, and it costs nothing during
- * the call because the segmenter runs on four still frames rather than thirty
- * a second.
+ * The live view keeps the camera portrait intact rather than cutting either of
+ * you out. After a flash, the photograph takes over briefly so the moment can
+ * be checked before the strip moves on.
  */
 export function PhotoBoothStage({
   theme,
@@ -30,6 +34,8 @@ export function PhotoBoothStage({
   remoteMemes,
   count,
   flashing,
+  review,
+  shots,
   localVideoRef,
   remoteVideoRef,
   children,
@@ -42,6 +48,8 @@ export function PhotoBoothStage({
   /** The number on screen, or null between counts. */
   count: number | null;
   flashing: boolean;
+  review: { shotIndex: number; frame: { canvas: HTMLCanvasElement } | null } | null;
+  shots: number;
   /** Handed up so the capture can read pixels out of these exact elements. */
   localVideoRef: React.RefObject<HTMLVideoElement | null>;
   remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
@@ -49,6 +57,20 @@ export function PhotoBoothStage({
   children: React.ReactNode;
 }) {
   const reduceMotion = useReducedMotion();
+  const reviewCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const destination = reviewCanvasRef.current;
+    const source = review?.frame?.canvas;
+    if (!destination || !source) return;
+
+    destination.width = source.width;
+    destination.height = source.height;
+    const context = destination.getContext("2d");
+    if (!context) return;
+    context.clearRect(0, 0, destination.width, destination.height);
+    context.drawImage(source, 0, 0);
+  }, [review]);
 
   const scene = useCallback(
     (ctx: CanvasRenderingContext2D, box: { width: number; height: number }) => {
@@ -109,10 +131,35 @@ export function PhotoBoothStage({
         className="pointer-events-none absolute inset-0 h-full w-full"
       />
 
+      <AnimatePresence>
+        {review !== null && review.frame !== null && (
+          <motion.div
+            key={`${review.shotIndex}-${review.frame.canvas.width}-${review.frame.canvas.height}`}
+            className="absolute inset-0"
+            initial={{ opacity: reduceMotion ? 1 : 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduceMotion ? 0 : 0.2, ease: "easeOut" }}
+          >
+            <canvas
+              ref={reviewCanvasRef}
+              aria-hidden
+              className="h-full w-full object-cover"
+            />
+            <span
+              className="pointer-events-none absolute inset-x-0 bottom-4 text-center font-[family-name:var(--font-display)] text-[0.7rem] tracking-[0.18em] text-[var(--cream)]"
+              style={{ textShadow: "0 1px 6px rgba(8,11,28,0.9)" }}
+            >
+              Shot {review.shotIndex + 1} of {shots}
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* The count, and then the flash. Deliberately the only motion in here:
           everything else is still, so the moment reads as the moment. */}
       <AnimatePresence>
-        {count !== null && (
+        {review === null && count !== null && (
           <motion.div
             key={count}
             className="pointer-events-none absolute inset-0 flex items-center justify-center"
@@ -132,7 +179,7 @@ export function PhotoBoothStage({
       </AnimatePresence>
 
       <AnimatePresence>
-        {flashing && (
+        {review === null && flashing && (
           <motion.div
             key="flash"
             aria-hidden
@@ -152,12 +199,13 @@ export function PhotoBoothStage({
 }
 
 /**
- * One person, feathered into the scene.
+ * One person, sharp over a portrait-mode room.
  *
- * The mask is what does the blending: a soft oval, so there is no edge where
- * the person stops and the background starts. A hard rectangle here would
- * undo the grade's work entirely — you would read two boxes no matter how
- * carefully the light matched.
+ * The blurred copy gives the room somewhere to fall away without darkening the
+ * face. The sharp copy keeps the feather so the scene still has no hard seam,
+ * and the separate backdrop avoids turning the grade into a dark curtain.
+ * It is the only element handed to capture; reversing those roles silently
+ * saves a blurred photograph.
  */
 function Half({
   videoRef,
@@ -175,9 +223,11 @@ function Half({
   memes: ActiveMeme[];
 }) {
   const ref = useRef<HTMLVideoElement>(null);
+  const backdropRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream;
+    if (backdropRef.current) backdropRef.current.srcObject = stream;
     // The capture needs this exact element, so hand it upward as well.
     videoRef.current = ref.current;
   }, [stream, videoRef]);
@@ -188,7 +238,21 @@ function Half({
   return (
     <div className="relative h-full flex-1">
       {stream ? (
-        <video
+        <>
+          <video
+            ref={backdropRef}
+            autoPlay
+            playsInline
+            muted
+            aria-hidden
+            className="absolute inset-0 h-full w-full object-cover"
+            style={{
+              filter: `blur(${PERSON_BLUR_PX}px)`,
+              opacity: PERSON_BLUR_ALPHA,
+              transform: mirrored ? "scaleX(-1)" : undefined,
+            }}
+          />
+          <video
           ref={ref}
           autoPlay
           playsInline
@@ -199,7 +263,8 @@ function Half({
             maskImage: feather,
             WebkitMaskImage: feather,
           }}
-        />
+          />
+        </>
       ) : (
         <div className="flex h-full w-full items-center justify-center px-6 text-center">
           <p className="text-xs leading-relaxed text-[var(--cream)]/70">

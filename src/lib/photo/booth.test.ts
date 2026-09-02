@@ -4,10 +4,22 @@ import {
   boothDurationMs,
   boothTimeline,
   LEAD_MS,
+  REVIEW_MS,
   REVEAL_MS,
 } from "./booth";
 
 describe("photo booth timeline", () => {
+  it("keeps four flashes nine seconds apart", () => {
+    const flashes = boothTimeline(10_000, 4).filter((step) => step.kind === "flash");
+
+    expect(BETWEEN_MS).toBe(9000);
+    expect(flashes.slice(1).map((flash, index) => flash.at - flashes[index].at)).toEqual([
+      9000,
+      9000,
+      9000,
+    ]);
+  });
+
   it.each([2, 4] as const)("schedules %i flashes in panel order", (shots) => {
     const timeline = boothTimeline(10_000, shots);
     const flashes = timeline.filter((step) => step.kind === "flash");
@@ -17,7 +29,7 @@ describe("photo booth timeline", () => {
     expect(flashes.map((step) => step.shotIndex)).toEqual([0, ...Array.from({ length: shots - 1 }, (_, i) => i + 1)]);
     expect(flashes[0].at).toBe(10_000 + LEAD_MS);
     for (let index = 1; index < flashes.length; index += 1) {
-      expect(flashes[index].at - flashes[index - 1].at).toBe(BETWEEN_MS);
+      expect(flashes[index].at - flashes[index - 1].at).toBe(REVIEW_MS + LEAD_MS);
     }
   });
 
@@ -43,6 +55,24 @@ describe("photo booth timeline", () => {
     }
   });
 
+  it.each([2, 4] as const)("holds each flash for review before the next countdown", (shots) => {
+    const timeline = boothTimeline(10_000, shots);
+    const flashes = timeline.filter((step) => step.kind === "flash");
+    const reviews = timeline.filter((step) => step.kind === "review");
+    const reviewEnds = timeline.filter((step) => step.kind === "reviewEnd");
+    const counts = timeline.filter((step) => step.kind === "count");
+
+    expect(reviews.map((step) => ({ at: step.at, shotIndex: step.shotIndex }))).toEqual(
+      flashes.map((step) => ({ at: step.at, shotIndex: step.shotIndex })),
+    );
+    expect(reviewEnds.map((step) => step.at)).toEqual(flashes.map((step) => step.at + REVIEW_MS));
+    for (let shotIndex = 1; shotIndex < shots; shotIndex += 1) {
+      expect(counts.find((step) => step.shotIndex === shotIndex && step.value === 7)?.at).toBe(
+        reviewEnds[shotIndex - 1].at,
+      );
+    }
+  });
+
   it.each([2, 4] as const)("ends with one reveal after the final flash", (shots) => {
     const timeline = boothTimeline(10_000, shots);
     const flashes = timeline.filter((step) => step.kind === "flash");
@@ -50,7 +80,7 @@ describe("photo booth timeline", () => {
 
     expect(reveals).toHaveLength(1);
     expect(timeline.at(-1)).toEqual(reveals[0]);
-    expect(reveals[0].at).toBe(flashes.at(-1)!.at + REVEAL_MS);
+    expect(reveals[0].at).toBe(flashes.at(-1)!.at + REVIEW_MS + REVEAL_MS);
   });
 
   it("is sorted and uses absolute instants", () => {

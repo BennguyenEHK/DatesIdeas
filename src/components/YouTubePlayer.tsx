@@ -229,6 +229,15 @@ export const YouTubePlayer = forwardRef<
         if (!readyRef.current || !playerRef.current) return;
         playerRef.current.seekTo(seconds, true);
       },
+      nudge: (seconds) => {
+        if (!readyRef.current || !playerRef.current) return;
+        playerRef.current.seekTo(seconds, false);
+      },
+      setRate: () => {
+        // YouTube rounds unsupported rates towards 1, so a 3% correction
+        // silently becomes no correction at all and leaves drift unresolved.
+        return false;
+      },
       setVolume: (percent) => {
         const clamped = Math.min(100, Math.max(0, Math.round(percent)));
         // Stored either way, so a level chosen while YouTube is still loading
