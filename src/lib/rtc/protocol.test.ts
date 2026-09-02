@@ -183,3 +183,38 @@ describe("where the film is coming from", () => {
     expect(decode(JSON.stringify({ t: "media", source: "local" }))).toBeNull();
   });
 });
+
+describe("starting a photo booth sitting", () => {
+  const shot = {
+    t: "photo" as const,
+    themeId: "planetarium" as const,
+    shots: 4 as const,
+    startAt: 1_700_000,
+  };
+
+  it("round-trips a sitting", () => {
+    expect(decode(encode(shot))).toEqual(shot);
+  });
+
+  it("carries the instant both cameras fire from", () => {
+    // The whole point. Both sides compute the same countdown from this one
+    // number, which is what photographs you together rather than a third of a
+    // second apart.
+    const msg = decode(encode(shot));
+    expect(msg).toMatchObject({ startAt: 1_700_000 });
+  });
+
+  it("refuses a theme that does not exist", () => {
+    // It reaches a painter that would throw on an unknown id, mid-countdown.
+    expect(decode(JSON.stringify({ ...shot, themeId: "sepia" }))).toBeNull();
+  });
+
+  it("refuses a shot count the strip cannot lay out", () => {
+    expect(decode(JSON.stringify({ ...shot, shots: 3 }))).toBeNull();
+    expect(decode(JSON.stringify({ ...shot, shots: 0 }))).toBeNull();
+  });
+
+  it("refuses a sitting with no start", () => {
+    expect(decode(JSON.stringify({ ...shot, startAt: "soon" }))).toBeNull();
+  });
+});

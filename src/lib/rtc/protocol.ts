@@ -1,4 +1,6 @@
 import { isMood, type Mood } from "@/lib/cards/types";
+import { isThemeId, type ThemeId } from "@/lib/photo/themes";
+import { SHOT_COUNTS, type ShotCount } from "@/lib/photo/strip";
 import { isActivityId, type ActivityId } from "@/lib/activities/registry";
 
 export const MEME_IDS = [
@@ -58,7 +60,12 @@ export type PeerMessage =
       positionSec: number;
       playing: boolean;
       atSharedTime: number;
-    };
+    }
+  // A photo booth sitting. Only the instant it starts travels: both sides
+  // derive the identical countdown and the identical flashes from it, and each
+  // builds the strip from the two video feeds it already has. No picture ever
+  // crosses the connection.
+  | { t: "photo"; themeId: ThemeId; shots: ShotCount; startAt: number };
 
 export function encode(m: PeerMessage): string {
   return JSON.stringify(m);
@@ -127,6 +134,18 @@ export function decode(raw: string): PeerMessage | null {
             positionSec: m.positionSec,
             playing: m.playing,
             atSharedTime: m.atSharedTime,
+          }
+        : null;
+    case "photo":
+      return isThemeId(m.themeId) &&
+        isNum(m.shots) &&
+        (SHOT_COUNTS as readonly number[]).includes(m.shots) &&
+        isNum(m.startAt)
+        ? {
+            t: "photo",
+            themeId: m.themeId,
+            shots: m.shots as ShotCount,
+            startAt: m.startAt,
           }
         : null;
     default:

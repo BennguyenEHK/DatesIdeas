@@ -27,7 +27,9 @@ export const ACTIVITIES: readonly ActivityDef[] = [
   // a column beside it so you can still see each other sing.
   { id: "karaoke", label: "Karaoke", icon: "🎤", kind: "takeover", ready: true },
   { id: "movie", label: "Movie", icon: "🎬", kind: "takeover", ready: true },
-  { id: "photobooth", label: "Photo booth", icon: "📸", kind: "companion", ready: false },
+  // Takeover: the scene the two of you stand in IS the stage, with the strip
+  // developing in the column beside it.
+  { id: "photobooth", label: "Photo booth", icon: "📸", kind: "takeover", ready: true },
 ];
 
 export function isActivityId(v: unknown): v is ActivityId {

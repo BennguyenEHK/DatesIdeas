@@ -30,22 +30,25 @@ describe("activity registry", () => {
   });
 
   it("marks exactly the built activities as ready", () => {
-    // Guards against shipping a bubble that opens an empty stage. The photo
-    // booth is the last one left; this list is what has to change with it.
-    expect(ACTIVITIES.filter((a) => a.ready).map((a) => a.id)).toEqual([
-      "cards",
-      "karaoke",
-      "movie",
-    ]);
+    // Guards against shipping a bubble that opens an empty stage. All four
+    // are built now, so this is the test that has to change first if a fifth
+    // bubble is ever added ahead of the thing behind it.
+    expect(ACTIVITIES.every((a) => a.ready)).toBe(true);
   });
 
-  it("gives the frame only to what needs to be bigger than a face", () => {
-    // A song and a film both want the frame, and both keep the faces beside
-    // them. Cards and the photo booth ARE the faces, so they stay
-    // companion-sized with the activity beneath.
+  it("gives the frame to whatever the faces have to sit inside", () => {
+    // A song and a film both want the frame with the faces beside them. The
+    // photo booth wants it for the opposite reason: the scene the two of you
+    // stand in IS the stage, so the faces are inside the frame rather than
+    // next to it. Only cards leaves the faces at full size with the activity
+    // underneath.
     expect(ACTIVITIES.filter((a) => a.kind === "takeover").map((a) => a.id)).toEqual([
       "karaoke",
       "movie",
+      "photobooth",
+    ]);
+    expect(ACTIVITIES.filter((a) => a.kind === "companion").map((a) => a.id)).toEqual([
+      "cards",
     ]);
   });
 

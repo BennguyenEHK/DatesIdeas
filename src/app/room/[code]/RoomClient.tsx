@@ -22,11 +22,16 @@ import type { Card } from "@/lib/cards/types";
 import { ActivityBar } from "@/components/ActivityBar";
 import { TakeoverStage } from "@/components/TakeoverStage";
 import { activity, activityKey, type ActivityId } from "@/lib/activities/registry";
+import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel, MAX_OFFSET_MS } from "@/components/KaraokePanel";
 import { MoviePanel } from "@/components/MoviePanel";
 import { LocalFilePlayer } from "@/components/LocalFilePlayer";
+import { PhotoBoothStage } from "@/components/PhotoBoothStage";
+import { PhotoBoothPanel } from "@/components/PhotoBoothPanel";
+import { PhotoStrip } from "@/components/PhotoStrip";
+import { useBooth } from "@/lib/photo/useBooth";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
 import { tuneMicrophone, type AudioMode } from "@/lib/media/micProfile";
@@ -83,6 +88,11 @@ export function RoomClient({ code }: { code: string }) {
   const [myDuration, setMyDuration] = useState<number | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [movieVolume, setMovieVolume] = useState(100);
+  // Handed down to the booth stage and back up here, because the capture has
+  // to read pixels out of these exact elements rather than the streams.
+  const localVideo = useRef<HTMLVideoElement | null>(null);
+  const remoteVideo = useRef<HTMLVideoElement | null>(null);
+  const acceptPhoto = useRef<((m: PeerMessage) => void) | null>(null);
   // State, not a ref: a state setter is a valid callback ref and keeps the
   // player handle a plain value everywhere else.
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
@@ -134,6 +144,10 @@ export function RoomClient({ code }: { code: string }) {
     (msg: PeerMessage) => {
       if (msg.t === "media") {
         acceptMedia.current?.(msg);
+        return;
+      }
+      if (msg.t === "photo") {
+        acceptPhoto.current?.(msg);
         return;
       }
       if (msg.t === "activity") {
@@ -207,8 +221,29 @@ export function RoomClient({ code }: { code: string }) {
     clearMedia.current = media.clear;
   });
 
+  // Stamped along the bottom of every strip: the evening it came from. The
+  // code lasts a day and will never exist again, which is what turns a collage
+  // into a keepsake.
+  const booth = useBooth({
+    clock: peer.clock,
+    send: peer.send,
+    localVideo,
+    remoteVideo,
+    caption: `${new Date()
+      .toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+      .toUpperCase()}  ·  ${code}`,
+  });
+  useEffect(() => {
+    acceptPhoto.current = booth.accept;
+  });
+
   const karaoke = current === "karaoke";
   const movie = current === "movie";
+  const photobooth = current === "photobooth";
 
   // No karaoke exception. Pausing gestures there meant the status bar had a
   // state it could not name and reported a warm-up that would never finish --
@@ -340,7 +375,26 @@ export function RoomClient({ code }: { code: string }) {
             {/* The stage takes one of two shapes. A film is the only thing
                 that should be larger than a face; everything else here IS the
                 faces, so it stays companion-sized with the activity beneath. */}
-            {kind === "takeover" ? (
+            {photobooth ? (
+              <PhotoBoothStage
+                theme={themeById(booth.themeId)}
+                local={peer.localStream}
+                remote={peer.remoteStream}
+                localMemes={mine.memes}
+                remoteMemes={theirs.memes}
+                count={booth.count}
+                flashing={booth.flashing}
+                localVideoRef={localVideo}
+                remoteVideoRef={remoteVideo}
+              >
+                <PhotoStrip
+                  url={booth.stripUrl}
+                  busy={booth.busy}
+                  onSave={booth.save}
+                  onDiscard={booth.discard}
+                />
+              </PhotoBoothStage>
+            ) : kind === "takeover" ? (
               <TakeoverStage
                 local={peer.localStream}
                 remote={peer.remoteStream}
@@ -409,6 +463,18 @@ export function RoomClient({ code }: { code: string }) {
             onToggleGestures={setGesturesOn}
             onRetry={peer.retry}
           />
+          {photobooth && (
+            <PhotoBoothPanel
+              themeId={booth.themeId}
+              onTheme={booth.setThemeId}
+              shots={booth.shots}
+              onShots={booth.setShots}
+              onStart={booth.start}
+              running={booth.running || booth.busy}
+              ready={peer.localStream !== null && peer.remoteStream !== null}
+            />
+          )}
+
           {movie && (
             <MoviePanel
               film={media.film}
