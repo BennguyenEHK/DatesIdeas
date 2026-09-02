@@ -6,6 +6,8 @@ import {
   needsCorrection,
   stateAt,
   targetPosition,
+  NO_FILM,
+  type Film,
   type PlaybackState,
 } from "./sync";
 import type { SyncedClock } from "@/lib/sync/SyncedClock";
@@ -30,8 +32,13 @@ const HEARTBEAT_MS = 5000;
 
 export interface SyncedPlayback {
   videoId: string | null;
+  /** What is playing, so a panel can tell a local film from a YouTube one and
+   *  compare two copies' lengths. */
+  film: Film;
   playing: boolean;
-  load: (videoId: string, startSec?: number) => void;
+  load: (film: Film, startSec?: number) => void;
+  /** Tell the peer how long this local film is, once the browser knows. */
+  reportDuration: (seconds: number) => void;
   playPause: () => void;
   resync: () => void;
   clear: () => void;
@@ -62,7 +69,7 @@ export function useSyncedPlayback(
     player.current = handle;
   });
   const [state, setState] = useState<PlaybackState>({
-    videoId: null,
+    ...NO_FILM,
     positionSec: 0,
     playing: false,
     atSharedTime: 0,
@@ -71,6 +78,21 @@ export function useSyncedPlayback(
   useEffect(() => {
     stateRef.current = state;
   });
+
+  /**
+   * Whether this side is the one that chose the film.
+   *
+   * Declared up here with the other refs because both `load` and `accept`
+   * write to it, and the React Compiler refuses a ref modified below the hook
+   * that closes over it.
+   *
+   * Only the chooser reports a length. Two people open their own copies of the
+   * same film and measure it slightly differently — encoders disagree about
+   * trailing silence — so if both reported, each would keep correcting the
+   * other's figure, one message per side, forever. The length in shared state
+   * belongs to whoever picked the film; everyone else compares against it.
+   */
+  const iChose = useRef(false);
 
   const clockRef = useRef(clock);
   const sendRef = useRef(send);
@@ -94,6 +116,8 @@ export function useSyncedPlayback(
       sendRef.current({
         t: "media",
         videoId: next.videoId,
+        source: next.source,
+        durationSec: next.durationSec,
         positionSec: next.positionSec,
         playing: next.playing,
         atSharedTime: next.atSharedTime,
@@ -103,10 +127,22 @@ export function useSyncedPlayback(
   );
 
   const load = useCallback(
-    (videoId: string, startSec = 0) => {
-      broadcast(stateAt(videoId, startSec, false, now()));
+    (film: Film, startSec = 0) => {
+      iChose.current = true;
+      broadcast(stateAt(film, startSec, false, now()));
     },
     [broadcast, now],
+  );
+
+  const reportDuration = useCallback(
+    (seconds: number) => {
+      const cur = stateRef.current;
+      if (!iChose.current) return;
+      if (cur.videoId === null || cur.durationSec !== null) return;
+      // Same moment, same position — only more is known about it now.
+      broadcast({ ...cur, durationSec: seconds });
+    },
+    [broadcast],
   );
 
   const playPause = useCallback(() => {
@@ -119,21 +155,22 @@ export function useSyncedPlayback(
       // put that local accommodation back before broadcasting shared truth.
       ? player.current.currentTime() + offsetRef.current
       : targetPosition(cur, now());
-    broadcast(stateAt(cur.videoId, at, !cur.playing, now()));
+    broadcast(stateAt(cur, at, !cur.playing, now()));
   }, [broadcast, now]);
 
   const resync = useCallback(() => {
     const cur = stateRef.current;
     if (!cur.videoId) return;
-    broadcast(stateAt(cur.videoId, targetPosition(cur, now()), cur.playing, now()));
+    broadcast(stateAt(cur, targetPosition(cur, now()), cur.playing, now()));
   }, [broadcast, now]);
 
   const clear = useCallback(() => {
-    broadcast(stateAt(null, 0, false, now()));
+    broadcast(stateAt(NO_FILM, 0, false, now()));
   }, [broadcast, now]);
 
   /** Which video the player is actually showing, as opposed to asked to show. */
   const loadedId = useRef<string | null>(null);
+
 
   const applyState = useCallback(() => {
     const p = player.current;
@@ -165,8 +202,12 @@ export function useSyncedPlayback(
 
   const accept = useCallback((msg: PeerMessage) => {
     if (msg.t !== "media") return;
+    // Their film now, so their length is the one to measure against.
+    iChose.current = false;
     const next: PlaybackState = {
       videoId: msg.videoId,
+      source: msg.source,
+      durationSec: msg.durationSec,
       positionSec: msg.positionSec,
       playing: msg.playing,
       atSharedTime: msg.atSharedTime,
@@ -191,6 +232,8 @@ export function useSyncedPlayback(
       sendRef.current({
         t: "media",
         videoId: cur.videoId,
+        source: cur.source,
+        durationSec: cur.durationSec,
         positionSec: cur.positionSec,
         playing: cur.playing,
         atSharedTime: cur.atSharedTime,
@@ -205,8 +248,14 @@ export function useSyncedPlayback(
 
   return {
     videoId: state.videoId,
+    film: {
+      videoId: state.videoId,
+      source: state.source,
+      durationSec: state.durationSec,
+    },
     playing: state.playing,
     load,
+    reportDuration,
     playPause,
     resync,
     clear,

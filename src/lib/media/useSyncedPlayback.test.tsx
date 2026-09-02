@@ -3,6 +3,14 @@ import { renderHook, act } from "@testing-library/react";
 import { useSyncedPlayback } from "./useSyncedPlayback";
 import type { PlayerHandle } from "./player";
 import type { PeerMessage } from "@/lib/rtc/protocol";
+import type { Film } from "./sync";
+
+/** A YouTube film, which is what every test here is about unless it says so. */
+const film = (videoId: string): Film => ({
+  videoId,
+  source: "youtube",
+  durationSec: null,
+});
 
 /** Records what the sync layer asks of a player, and in what order. */
 function fakePlayer(ready = true) {
@@ -42,7 +50,7 @@ describe("useSyncedPlayback", () => {
       useSyncedPlayback(p.handle, null, () => {}),
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
     act(() => void vi.advanceTimersByTime(2100));
 
     expect(p.calls.some((c) => c.startsWith("load:dQw4w9WgXcQ"))).toBe(true);
@@ -58,13 +66,15 @@ describe("useSyncedPlayback", () => {
       useSyncedPlayback(p.handle, null, () => {}),
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
     act(() => void vi.advanceTimersByTime(2100));
     // The peer resynced to a different point while still paused.
     p.setTime(0);
     act(() =>
       result.current.accept({
         t: "media",
+        source: "youtube",
+        durationSec: null,
         videoId: "dQw4w9WgXcQ",
         positionSec: 90,
         playing: false,
@@ -91,11 +101,13 @@ describe("useSyncedPlayback", () => {
       useSyncedPlayback(p.handle, null, () => {}),
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
     const before = p.calls.length;
     act(() =>
       result.current.accept({
         t: "media",
+        source: "youtube",
+        durationSec: null,
         videoId: "dQw4w9WgXcQ",
         positionSec: 0,
         playing: true,
@@ -115,7 +127,7 @@ describe("useSyncedPlayback", () => {
     const { result } = renderHook(() =>
       useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
     );
-    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
     act(() => void vi.advanceTimersByTime(11_000));
     expect(JSON.stringify(sent)).not.toContain("volume");
     expect(p.calls.some((c) => c.startsWith("volume:"))).toBe(false);
@@ -130,6 +142,8 @@ describe("useSyncedPlayback", () => {
     act(() =>
       result.current.accept({
         t: "media",
+        source: "youtube",
+        durationSec: null,
         videoId: "dQw4w9WgXcQ",
         positionSec: 10,
         playing: false,
@@ -142,6 +156,8 @@ describe("useSyncedPlayback", () => {
     act(() =>
       result.current.accept({
         t: "media",
+        source: "youtube",
+        durationSec: null,
         videoId: "dQw4w9WgXcQ",
         positionSec: 11,
         playing: false,
@@ -158,7 +174,7 @@ describe("useSyncedPlayback", () => {
       { initialProps: { offsetSec: 0.3 } },
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 10));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 10));
     const before = p.calls.length;
     act(() => rerender({ offsetSec: 0.8 }));
 
@@ -173,7 +189,7 @@ describe("useSyncedPlayback", () => {
       useSyncedPlayback(p.handle, null, (m) => sent.push(m), 0.35),
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 10));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 10));
     p.setTime(9.65);
     act(() => result.current.playPause());
     p.setTime(9.65);
@@ -189,7 +205,7 @@ describe("useSyncedPlayback", () => {
       useSyncedPlayback(p.handle, null, (m) => sent.push(m), 0.347),
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 10));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 10));
     p.setTime(10.5);
     act(() => result.current.playPause());
     act(() => result.current.resync());
@@ -203,7 +219,7 @@ describe("useSyncedPlayback", () => {
     const { result } = renderHook(() =>
       useSyncedPlayback(p.handle, null, () => {}),
     );
-    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
     act(() => void vi.advanceTimersByTime(5000));
     expect(p.calls).toEqual([]);
   });
@@ -215,7 +231,7 @@ describe("useSyncedPlayback", () => {
       useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
     expect(sent.at(-1)).toMatchObject({ t: "media", videoId: "dQw4w9WgXcQ" });
 
     act(() => result.current.playPause());
@@ -234,6 +250,8 @@ describe("useSyncedPlayback", () => {
     act(() =>
       result.current.accept({
         t: "media",
+        source: "youtube",
+        durationSec: null,
         videoId: "abc12345678",
         positionSec: 5,
         playing: true,
@@ -267,7 +285,7 @@ describe("useSyncedPlayback", () => {
       useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
     const afterLoad = sent.length;
     act(() => void vi.advanceTimersByTime(11_000));
     expect(sent.length).toBeGreaterThan(afterLoad);
@@ -280,10 +298,88 @@ describe("useSyncedPlayback", () => {
       useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
     );
 
-    act(() => result.current.load("dQw4w9WgXcQ", 0));
+    act(() => result.current.load(film("dQw4w9WgXcQ"), 0));
     act(() => result.current.clear());
     const afterClear = sent.length;
     act(() => void vi.advanceTimersByTime(11_000));
     expect(sent.length).toBe(afterClear);
+  });
+});
+
+describe("reporting how long a local film is", () => {
+  const localFilm = { videoId: "Inception.mp4", source: "local" as const, durationSec: null };
+
+  it("tells the peer once the browser knows the length", () => {
+    // Measured only after the file is opened, so it cannot travel with the
+    // load. Without this the other side has nothing to compare against and
+    // the mismatch warning could never fire.
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
+    );
+    act(() => result.current.load(localFilm));
+    act(() => result.current.reportDuration(7402));
+    expect(sent.at(-1)).toMatchObject({ durationSec: 7402, source: "local" });
+  });
+
+  it("does not move the film while doing it", () => {
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
+    );
+    act(() => result.current.load(localFilm, 120));
+    act(() => result.current.reportDuration(7402));
+    expect(sent.at(-1)).toMatchObject({ positionSec: 120, playing: false });
+  });
+
+  it("stays quiet when this side did not choose the film", () => {
+    // The one that matters. Both people open their own copy, and both measure
+    // a slightly different length. If each reported its own, they would
+    // overwrite each other forever, one message per side, without end.
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
+    );
+    act(() =>
+      result.current.accept({
+        t: "media",
+        videoId: "Inception.mp4",
+        source: "local",
+        durationSec: 7402,
+        positionSec: 0,
+        playing: false,
+        atSharedTime: Date.now(),
+      } satisfies PeerMessage),
+    );
+    act(() => result.current.reportDuration(7400));
+    expect(sent).toEqual([]);
+    // And the length it was told is the one it keeps, to compare against.
+    expect(result.current.film.durationSec).toBe(7402);
+  });
+
+  it("reports a length only once", () => {
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
+    );
+    act(() => result.current.load(localFilm));
+    act(() => result.current.reportDuration(7402));
+    const after = sent.length;
+    act(() => result.current.reportDuration(7402));
+    expect(sent.length).toBe(after);
+  });
+
+  it("says nothing when there is no film", () => {
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
+    );
+    act(() => result.current.reportDuration(7402));
+    expect(sent).toEqual([]);
   });
 });

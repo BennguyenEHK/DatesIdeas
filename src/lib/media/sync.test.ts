@@ -4,12 +4,16 @@ import {
   needsCorrection,
   stateAt,
   DRIFT_TOLERANCE_SEC,
+  DURATION_MATCH_SEC,
+  filmsMatch,
   type PlaybackState,
 } from "./sync";
 import { youTubeId, youTubeStart } from "./youtube";
 
 const playing: PlaybackState = {
   videoId: "dQw4w9WgXcQ",
+  source: "youtube",
+  durationSec: null,
   positionSec: 30,
   playing: true,
   atSharedTime: 100_000,
@@ -86,8 +90,13 @@ describe("needsCorrection", () => {
 
 describe("stateAt", () => {
   it("stamps the state with the instant it describes", () => {
-    expect(stateAt("abc12345678", 12.5, true, 50_000)).toEqual({
+    const film = {
       videoId: "abc12345678",
+      source: "youtube" as const,
+      durationSec: null,
+    };
+    expect(stateAt(film, 12.5, true, 50_000)).toEqual({
+      ...film,
       positionSec: 12.5,
       playing: true,
       atSharedTime: 50_000,
@@ -162,5 +171,46 @@ describe("youTubeStart", () => {
 
   it("is zero when the link carries no timestamp", () => {
     expect(youTubeStart("https://youtu.be/abc")).toBe(0);
+  });
+});
+
+describe("filmsMatch", () => {
+  const local = (durationSec: number | null) => ({
+    videoId: "Inception.mp4",
+    source: "local" as const,
+    durationSec,
+  });
+
+  it("accepts two copies that differ only by a rounding", () => {
+    // Encoders disagree about trailing silence and containers round
+    // differently, so identical films routinely differ by a fraction.
+    expect(filmsMatch(local(7402.0), local(7402.4))).toBe(true);
+  });
+
+  it("catches two different films", () => {
+    expect(filmsMatch(local(7402), local(5460))).toBe(false);
+  });
+
+  it("catches a difference either way round", () => {
+    expect(filmsMatch(local(5460), local(7402))).toBe(false);
+  });
+
+  it("never accuses anyone while a length is still unknown", () => {
+    // A file that has not reported its metadata is not evidence of a mismatch,
+    // and saying so while their video is still loading is worse than silence.
+    expect(filmsMatch(local(null), local(7402))).toBe(true);
+    expect(filmsMatch(local(7402), local(null))).toBe(true);
+  });
+
+  it("has nothing to check on YouTube", () => {
+    // Both sides fetch the same id, so they cannot have opened different things.
+    const yt = { videoId: "abc", source: "youtube" as const, durationSec: 100 };
+    const other = { videoId: "abc", source: "youtube" as const, durationSec: 9999 };
+    expect(filmsMatch(yt, other)).toBe(true);
+  });
+
+  it("tolerates less than a cut but more than a rounding", () => {
+    expect(DURATION_MATCH_SEC).toBeGreaterThan(0.5);
+    expect(DURATION_MATCH_SEC).toBeLessThan(30);
   });
 });

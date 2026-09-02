@@ -25,6 +25,8 @@ import { activity, activityKey, type ActivityId } from "@/lib/activities/registr
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel, MAX_OFFSET_MS } from "@/components/KaraokePanel";
+import { MoviePanel } from "@/components/MoviePanel";
+import { LocalFilePlayer } from "@/components/LocalFilePlayer";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
 import { tuneMicrophone, type AudioMode } from "@/lib/media/micProfile";
@@ -74,6 +76,13 @@ export function RoomClient({ code }: { code: string }) {
   // and the gap between them would be exactly where it started.
   const [matchSinging, setMatchSinging] = useState(false);
   const [offsetMs, setOffsetMs] = useState(0);
+  // This side's own copy of the film. Never sent: a feature film is gigabytes
+  // and this connection carries a few hundred kilobytes a second, so each side
+  // opens its own and only the position travels.
+  const [movieFile, setMovieFile] = useState<File | null>(null);
+  const [myDuration, setMyDuration] = useState<number | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [movieVolume, setMovieVolume] = useState(100);
   // State, not a ref: a state setter is a valid callback ref and keeps the
   // player handle a plain value everywhere else.
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
@@ -101,9 +110,15 @@ export function RoomClient({ code }: { code: string }) {
     // Leaving karaoke drops the song and forgets the headphone answer. Done
     // here rather than in an effect watching `current`: this is the moment the
     // activity changes, and reacting to it afterwards is a cascading render.
-    if (id !== "karaoke") {
-      setAudioMode(null);
+    // Karaoke and movie share one player and one shared position, so the film
+    // is dropped only when leaving BOTH of them -- switching between the two
+    // still starts fresh, which is why the source is cleared either way.
+    if (id !== "karaoke") setAudioMode(null);
+    if (id !== "karaoke" && id !== "movie") {
       setVideoError(null);
+      setFileError(null);
+      setMovieFile(null);
+      setMyDuration(null);
       clearMedia.current?.();
     }
   }, []);
@@ -193,6 +208,7 @@ export function RoomClient({ code }: { code: string }) {
   });
 
   const karaoke = current === "karaoke";
+  const movie = current === "movie";
 
   // No karaoke exception. Pausing gestures there meant the status bar had a
   // state it could not name and reported a warm-up that would never finish --
@@ -203,8 +219,8 @@ export function RoomClient({ code }: { code: string }) {
   // Applied here rather than through the sync layer: loudness is this side's
   // alone, and routing it through shared state would push it to the peer.
   useEffect(() => {
-    player?.setVolume(musicVolume);
-  }, [player, musicVolume]);
+    player?.setVolume(movie ? movieVolume : musicVolume);
+  }, [player, movie, movieVolume, musicVolume]);
 
   // Retune the live microphone to match how the song is being heard, and how
   // loud the room is. On speakers echo cancellation stays on, since it is the
@@ -332,8 +348,21 @@ export function RoomClient({ code }: { code: string }) {
                 remoteMemes={theirs.memes}
                 mediaError={peer.mediaError}
               >
-                {karaoke ? (
+                {karaoke || (movie && media.film.source === "youtube") ? (
                   <YouTubePlayer ref={setPlayer} onError={setVideoError} />
+                ) : movie ? (
+                  <LocalFilePlayer
+                    ref={setPlayer}
+                    file={movieFile}
+                    onDuration={(seconds) => {
+                      setMyDuration(seconds);
+                      // Only the side that chose the film reports its length;
+                      // the hook enforces that, so this is safe to call from
+                      // both.
+                      if (seconds !== null) media.reportDuration(seconds);
+                    }}
+                    onError={setFileError}
+                  />
                 ) : (
                   <ActivityPlaceholder id={current} />
                 )}
@@ -380,6 +409,44 @@ export function RoomClient({ code }: { code: string }) {
             onToggleGestures={setGesturesOn}
             onRetry={peer.retry}
           />
+          {movie && (
+            <MoviePanel
+              film={media.film}
+              playing={media.playing}
+              myDurationSec={myDuration}
+              videoError={videoError}
+              fileError={fileError}
+              picking={picking}
+              onPick={() => setPicking(true)}
+              onCancelPick={() => setPicking(false)}
+              onLoadYouTube={(id) => {
+                setVideoError(null);
+                setFileError(null);
+                setMovieFile(null);
+                setPicking(false);
+                media.load({ videoId: id, source: "youtube", durationSec: null });
+              }}
+              onOpenFile={(file) => {
+                setFileError(null);
+                setVideoError(null);
+                setMovieFile(file);
+                setPicking(false);
+                // The name identifies the film to the other side; the length,
+                // once the browser reports it, is what proves you opened the
+                // same one. Neither is the file.
+                media.load({
+                  videoId: file.name,
+                  source: "local",
+                  durationSec: null,
+                });
+              }}
+              volume={movieVolume}
+              onVolume={setMovieVolume}
+              onPlayPause={media.playPause}
+              onResync={media.resync}
+            />
+          )}
+
           {karaoke && (
             <KaraokePanel
               videoId={media.videoId}
@@ -404,7 +471,7 @@ export function RoomClient({ code }: { code: string }) {
                 // last video, not this one.
                 setVideoError(null);
                 setPicking(false);
-                media.load(id);
+                media.load({ videoId: id, source: "youtube", durationSec: null });
               }}
               onPlayPause={media.playPause}
               onResync={media.resync}

@@ -1,3 +1,5 @@
+import type { PlaybackSource } from "@/lib/rtc/protocol";
+
 /**
  * The shared playback state, broadcast whole rather than as play/pause/seek
  * events.
@@ -7,8 +9,29 @@
  * on its own. Someone opening karaoke late is corrected by the next heartbeat
  * rather than needing a special case.
  */
-export interface PlaybackState {
+/**
+ * What is being watched, as opposed to where in it you are.
+ *
+ * Kept together because the three travel together and are meaningless apart:
+ * an id without its source could be a YouTube video or a filename, and a
+ * local film's length is the only way to notice the two of you opened
+ * different files.
+ */
+export interface Film {
   videoId: string | null;
+  source: PlaybackSource;
+  /** Null for YouTube, where the same id cannot disagree, and until a local
+   *  file has reported its metadata. */
+  durationSec: number | null;
+}
+
+export const NO_FILM: Film = {
+  videoId: null,
+  source: "youtube",
+  durationSec: null,
+};
+
+export interface PlaybackState extends Film {
   /** Position in seconds, true as of `atSharedTime`. */
   positionSec: number;
   playing: boolean;
@@ -29,6 +52,30 @@ export interface PlaybackState {
  * slower than this, so the tighter figure costs almost no extra seeking.
  */
 export const DRIFT_TOLERANCE_SEC = 0.12;
+
+/**
+ * How far two local copies may differ in length and still be the same film.
+ *
+ * Encoders disagree about trailing silence and containers round differently,
+ * so identical films routinely differ by a fraction of a second. A different
+ * cut, or a different film entirely, differs by minutes.
+ */
+export const DURATION_MATCH_SEC = 2;
+
+/**
+ * Whether two people opened the same file.
+ *
+ * Only asked of local films: with YouTube both sides fetch the same id and
+ * cannot disagree. Unknown lengths pass, because a file that has not reported
+ * its metadata yet is not evidence of a mismatch — and accusing someone of
+ * opening the wrong film while their video is still loading is worse than
+ * saying nothing.
+ */
+export function filmsMatch(mine: Film, theirs: Film): boolean {
+  if (mine.source !== "local" || theirs.source !== "local") return true;
+  if (mine.durationSec === null || theirs.durationSec === null) return true;
+  return Math.abs(mine.durationSec - theirs.durationSec) <= DURATION_MATCH_SEC;
+}
 
 /** Where this player's copy of the video should be right now. */
 export function targetPosition(
@@ -53,10 +100,10 @@ export function needsCorrection(actualSec: number, targetSec: number): boolean {
 
 /** The state to broadcast when this peer changes something. */
 export function stateAt(
-  videoId: string | null,
+  film: Film,
   positionSec: number,
   playing: boolean,
   nowShared: number,
 ): PlaybackState {
-  return { videoId, positionSec, playing, atSharedTime: nowShared };
+  return { ...film, positionSec, playing, atSharedTime: nowShared };
 }

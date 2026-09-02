@@ -18,6 +18,21 @@ export function isMemeId(v: unknown): v is MemeId {
   return typeof v === "string" && (MEME_IDS as readonly string[]).includes(v);
 }
 
+/**
+ * Where a film is coming from.
+ *
+ * "local" means each side opened its own copy from its own machine. The file
+ * never travels — a feature film is gigabytes and this connection carries a
+ * few hundred kilobytes a second — so all that is shared is the position, and
+ * the length, which is the only way to notice you opened different files.
+ */
+export const PLAYBACK_SOURCES = ["youtube", "local"] as const;
+export type PlaybackSource = (typeof PLAYBACK_SOURCES)[number];
+
+export function isPlaybackSource(v: unknown): v is PlaybackSource {
+  return typeof v === "string" && (PLAYBACK_SOURCES as readonly string[]).includes(v);
+}
+
 export type PeerMessage =
   | { t: "hello"; identity: string; name: string }
   | { t: "ping"; t0: number }
@@ -36,6 +51,10 @@ export type PeerMessage =
   | {
       t: "media";
       videoId: string | null;
+      source: PlaybackSource;
+      /** Null for YouTube, where both sides fetch the same id and cannot
+       *  disagree, and until a local file has reported its metadata. */
+      durationSec: number | null;
       positionSec: number;
       playing: boolean;
       atSharedTime: number;
@@ -100,6 +119,11 @@ export function decode(raw: string): PeerMessage | null {
         ? {
             t: "media",
             videoId: m.videoId as string | null,
+            // Both fall back rather than rejecting the message: a peer running
+            // the build before these existed sends neither, and karaoke
+            // between two versions has to keep working.
+            source: isPlaybackSource(m.source) ? m.source : "youtube",
+            durationSec: isNum(m.durationSec) ? m.durationSec : null,
             positionSec: m.positionSec,
             playing: m.playing,
             atSharedTime: m.atSharedTime,

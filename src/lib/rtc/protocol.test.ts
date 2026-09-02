@@ -106,6 +106,8 @@ describe("media messages", () => {
   const msg = {
     t: "media" as const,
     videoId: "dQw4w9WgXcQ",
+    source: "youtube" as const,
+    durationSec: null,
     positionSec: 42.5,
     playing: true,
     atSharedTime: 1_700_000,
@@ -138,5 +140,46 @@ describe("media messages", () => {
 
   it("rejects a non-numeric position", () => {
     expect(decode(JSON.stringify({ ...msg, positionSec: "42" }))).toBeNull();
+  });
+});
+
+describe("where the film is coming from", () => {
+  const base = {
+    t: "media" as const,
+    videoId: "dQw4w9WgXcQ",
+    positionSec: 12,
+    playing: true,
+    atSharedTime: 1000,
+  };
+
+  it("carries a local film's source and length", () => {
+    // The file itself never travels — a two-hour film is gigabytes and the
+    // call moves a few hundred kilobytes a second. Only the length does, so
+    // two copies can be checked against each other.
+    const msg = decode(
+      encode({ ...base, source: "local", durationSec: 7402.5, videoId: "Inception.mp4" }),
+    );
+    expect(msg).toMatchObject({ source: "local", durationSec: 7402.5 });
+  });
+
+  it("reads a message from before this field existed as YouTube", () => {
+    // A peer on the previous build sends no source at all. Refusing the
+    // message would break karaoke between mismatched versions.
+    const msg = decode(JSON.stringify(base));
+    expect(msg).toMatchObject({ source: "youtube", durationSec: null });
+  });
+
+  it("refuses to guess at a source it does not recognise", () => {
+    const msg = decode(JSON.stringify({ ...base, source: "bittorrent" }));
+    expect(msg).toMatchObject({ source: "youtube" });
+  });
+
+  it("drops a length that is not a number", () => {
+    const msg = decode(JSON.stringify({ ...base, source: "local", durationSec: "long" }));
+    expect(msg).toMatchObject({ durationSec: null });
+  });
+
+  it("still refuses a message missing the parts that matter", () => {
+    expect(decode(JSON.stringify({ t: "media", source: "local" }))).toBeNull();
   });
 });

@@ -30,11 +30,12 @@ describe("activity registry", () => {
   });
 
   it("marks exactly the built activities as ready", () => {
-    // Guards against shipping a bubble that opens an empty stage. When karaoke
-    // or the rest land, this list is what has to change with them.
+    // Guards against shipping a bubble that opens an empty stage. The photo
+    // booth is the last one left; this list is what has to change with it.
     expect(ACTIVITIES.filter((a) => a.ready).map((a) => a.id)).toEqual([
       "cards",
       "karaoke",
+      "movie",
     ]);
   });
 

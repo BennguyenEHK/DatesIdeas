@@ -26,7 +26,7 @@ export const ACTIVITIES: readonly ActivityDef[] = [
   // Takeover, like the movie: the song needs the frame, and the faces move to
   // a column beside it so you can still see each other sing.
   { id: "karaoke", label: "Karaoke", icon: "🎤", kind: "takeover", ready: true },
-  { id: "movie", label: "Movie", icon: "🎬", kind: "takeover", ready: false },
+  { id: "movie", label: "Movie", icon: "🎬", kind: "takeover", ready: true },
   { id: "photobooth", label: "Photo booth", icon: "📸", kind: "companion", ready: false },
 ];
 
