@@ -154,6 +154,37 @@ body {
     0 0 1.1em rgba(199, 75, 109, 0.25);
 }
 
+/* ---------------------------------------------------------------------------
+   The stage sizes itself from the height it is given.
+
+   It used to be capped at a fixed max-width, which ignored the screen entirely:
+   on a wide monitor that left the faces small in a field of empty navy while
+   plenty of room went unused. The stage is a fixed shape — two 16:9 tiles, or a
+   16:9 screen beside a column of faces — so the honest constraint is whichever
+   of height and width runs out first.
+
+   height:100% plus aspect-ratio derives the width from the height available;
+   max-width:100% then clamps it on a wide-but-short window, and the browser
+   recomputes the height to match. No magic numbers, and it never overflows.
+
+   Only from md up. Below that the tiles stack, the shape is different, and
+   full width is already the right answer.
+--------------------------------------------------------------------------- */
+.stage {
+  width: 100%;
+}
+
+@media (min-width: 768px) {
+  .stage {
+    width: auto;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    aspect-ratio: var(--stage-aspect);
+    margin-inline: auto;
+  }
+}
+
 /* The film-opening moment: bars close in from the edges, once, on load. */
 @keyframes bar-in-top {
   from {

@@ -30,13 +30,21 @@ export interface PlaybackState {
  */
 export const DRIFT_TOLERANCE_SEC = 0.12;
 
-/** Where the video should be right now, on the shared clock. */
-export function targetPosition(state: PlaybackState, nowShared: number): number {
-  if (!state.playing) return state.positionSec;
+/** Where this player's copy of the video should be right now. */
+export function targetPosition(
+  state: PlaybackState,
+  nowShared: number,
+  offsetSec = 0,
+): number {
   const elapsed = (nowShared - state.atSharedTime) / 1000;
   // A negative elapsed means the instant has not arrived yet; do not rewind
   // past where the sender said the video was.
-  return Math.max(0, state.positionSec + Math.max(0, elapsed));
+  const sharedPosition = state.playing
+    ? state.positionSec + Math.max(0, elapsed)
+    : state.positionSec;
+  // The offset is a listener's local accommodation for voice latency. A
+  // player cannot seek before the beginning of the song.
+  return Math.max(0, sharedPosition - offsetSec);
 }
 
 export function needsCorrection(actualSec: number, targetSec: number): boolean {

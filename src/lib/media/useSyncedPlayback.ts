@@ -51,6 +51,7 @@ export function useSyncedPlayback(
   handle: PlayerHandle | null,
   clock: SyncedClock | null,
   send: (m: PeerMessage) => void,
+  offsetSec = 0,
 ): SyncedPlayback {
   // The handle arrives as a plain value and is kept here for the timers. No
   // ref crosses this hook's boundary in either direction: handing one out
@@ -73,9 +74,11 @@ export function useSyncedPlayback(
 
   const clockRef = useRef(clock);
   const sendRef = useRef(send);
+  const offsetRef = useRef(offsetSec);
   useEffect(() => {
     clockRef.current = clock;
     sendRef.current = send;
+    offsetRef.current = offsetSec;
   });
 
   const now = useCallback(
@@ -112,7 +115,9 @@ export function useSyncedPlayback(
     // Stamp from where the player actually is, not from the last stamp, or
     // every pause would rewind to wherever the previous message left off.
     const at = player.current?.isReady()
-      ? player.current.currentTime()
+      // The player is deliberately behind shared time for voice latency, so
+      // put that local accommodation back before broadcasting shared truth.
+      ? player.current.currentTime() + offsetRef.current
       : targetPosition(cur, now());
     broadcast(stateAt(cur.videoId, at, !cur.playing, now()));
   }, [broadcast, now]);
@@ -141,7 +146,7 @@ export function useSyncedPlayback(
       return;
     }
 
-    const want = targetPosition(cur, now());
+    const want = targetPosition(cur, now(), offsetRef.current);
 
     if (loadedId.current !== cur.videoId) {
       loadedId.current = cur.videoId;
@@ -175,7 +180,7 @@ export function useSyncedPlayback(
   // one person is two seconds into a verse the other has not started.
   useEffect(() => {
     applyState();
-  }, [state, applyState]);
+  }, [state, offsetSec, applyState]);
 
   useEffect(() => {
     const correcting = setInterval(applyState, CORRECT_INTERVAL_MS);

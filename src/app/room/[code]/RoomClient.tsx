@@ -24,7 +24,7 @@ import { TakeoverStage } from "@/components/TakeoverStage";
 import { activity, activityKey, type ActivityId } from "@/lib/activities/registry";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
-import { KaraokePanel } from "@/components/KaraokePanel";
+import { KaraokePanel, MAX_OFFSET_MS } from "@/components/KaraokePanel";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
 import { tuneMicrophone, type AudioMode } from "@/lib/media/micProfile";
@@ -61,6 +61,19 @@ export function RoomClient({ code }: { code: string }) {
   // Local to this side, never sent. Starts below full because the reported
   // problem was the backing track burying the other person's voice.
   const [musicVolume, setMusicVolume] = useState(70);
+  // Whether this room is loud. A separate question from where the song is
+  // playing: in a noisy room the microphone processing that ruins singing is
+  // the same processing keeping the singing audible at all.
+  const [noisy, setNoisy] = useState(false);
+  // Browsing for the next song. Local on purpose — opening the picker used to
+  // clear the video through shared state, which cut the other person off
+  // mid-verse just because you went looking for the next track.
+  const [picking, setPicking] = useState(false);
+  // Pulls this side's music back so their voice lands on the beat. Local, and
+  // never sent: if it were shared, both sides would shift by the same amount
+  // and the gap between them would be exactly where it started.
+  const [matchSinging, setMatchSinging] = useState(false);
+  const [offsetMs, setOffsetMs] = useState(0);
   // State, not a ref: a state setter is a valid callback ref and keeps the
   // player handle a plain value everywhere else.
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
@@ -168,7 +181,12 @@ export function RoomClient({ code }: { code: string }) {
     [session, mine],
   );
 
-  const media = useSyncedPlayback(player, peer.clock, peer.send);
+  const media = useSyncedPlayback(
+    player,
+    peer.clock,
+    peer.send,
+    matchSinging ? offsetMs / 1000 : 0,
+  );
   useEffect(() => {
     acceptMedia.current = media.accept;
     clearMedia.current = media.clear;
@@ -188,12 +206,33 @@ export function RoomClient({ code }: { code: string }) {
     player?.setVolume(musicVolume);
   }, [player, musicVolume]);
 
-  // Retune the live microphone to match how the song is being heard. On
-  // speakers echo cancellation stays on, since it is the only thing stopping
-  // the microphone sending back a second copy of the song.
+  // Retune the live microphone to match how the song is being heard, and how
+  // loud the room is. On speakers echo cancellation stays on, since it is the
+  // only thing stopping the microphone sending back a second copy of the song;
+  // in a noisy room noise suppression goes back on, because otherwise the
+  // canceller is left picking a voice out of a crowd and clamps down on both.
   useEffect(() => {
-    void tuneMicrophone(peer.localStream, karaoke ? audioMode : null);
-  }, [peer.localStream, karaoke, audioMode]);
+    void tuneMicrophone(peer.localStream, karaoke ? audioMode : null, noisy);
+  }, [peer.localStream, karaoke, audioMode, noisy]);
+
+  // How late their voice arrives: half the round trip, plus however long their
+  // audio is sitting in this browser's jitter buffer. Offered as the starting
+  // point for the offset rather than imposed, since no measurement is exact
+  // and the last word belongs to whoever is listening.
+  const suggestedOffsetMs =
+    peer.rtt > 0 ? Math.round(peer.rtt / 2 + (peer.audioJitterMs ?? 0)) : null;
+
+  const onMatchSinging = useCallback(
+    (on: boolean) => {
+      setMatchSinging(on);
+      // Only seed the measured value the first time; a figure someone has
+      // already tuned by ear should survive being switched off and on again.
+      if (on && offsetMs === 0 && suggestedOffsetMs !== null) {
+        setOffsetMs(Math.min(suggestedOffsetMs, MAX_OFFSET_MS));
+      }
+    },
+    [offsetMs, suggestedOffsetMs],
+  );
 
 
 
@@ -273,9 +312,15 @@ export function RoomClient({ code }: { code: string }) {
           <CopyLink code={code} closesIn={closesIn} />
         </header>
 
-        {/* The stage */}
-        <main className="flex flex-1 items-center justify-center px-4 py-6 md:px-8">
-          <div className="w-full max-w-6xl">
+        {/* The stage.
+
+            A column rather than a centred box: the stage claims every pixel of
+            height left between the two letterbox bars, and a companion panel
+            below takes its own natural height out of that. min-h-0 is what
+            allows the flex child to shrink — without it the stage refuses to go
+            below its content size and pushes the card off the bottom. */}
+        <main className="flex min-h-0 flex-1 flex-col items-center gap-4 px-4 py-4 md:px-8">
+          <div className="flex min-h-0 w-full flex-1 items-center justify-center">
             {/* The stage takes one of two shapes. A film is the only thing
                 that should be larger than a face; everything else here IS the
                 faces, so it stays companion-sized with the activity beneath. */}
@@ -294,23 +339,29 @@ export function RoomClient({ code }: { code: string }) {
                 )}
               </TakeoverStage>
             ) : (
-              <>
-                <VideoStage
-                  local={peer.localStream}
-                  remote={peer.remoteStream}
-                  localMemes={mine.memes}
-                  remoteMemes={theirs.memes}
-                  mediaError={peer.mediaError}
-                />
-                {current === "cards" && (
-                  <QuestionCard card={card} onDismiss={() => setCard(null)} />
-                )}
-                {current !== null && current !== "cards" && (
-                  <ActivityPlaceholder id={current} />
-                )}
-              </>
+              <VideoStage
+                local={peer.localStream}
+                remote={peer.remoteStream}
+                localMemes={mine.memes}
+                remoteMemes={theirs.memes}
+                mediaError={peer.mediaError}
+              />
             )}
           </div>
+
+          {/* Companion activities sit under the faces. shrink-0 so the card
+              keeps its full height and the video gives way instead — the
+              question is the point of the cards evening, not the wallpaper. */}
+          {kind !== "takeover" && current === "cards" && (
+            <div className="w-full max-w-4xl shrink-0">
+              <QuestionCard card={card} onDismiss={() => setCard(null)} />
+            </div>
+          )}
+          {kind !== "takeover" && current !== null && current !== "cards" && (
+            <div className="w-full max-w-4xl shrink-0">
+              <ActivityPlaceholder id={current} />
+            </div>
+          )}
         </main>
 
         {/* Bottom letterbox bar */}
@@ -321,6 +372,8 @@ export function RoomClient({ code }: { code: string }) {
             sending={peer.sending}
             rtt={peer.rtt}
             jitterMs={peer.jitterMs}
+            audioFormat={peer.audioFormat}
+            audioKbps={peer.audioKbps}
             gestureReady={gesture.ready}
             gestureError={gesture.error}
             gesturesOn={gesturesOn}
@@ -333,18 +386,28 @@ export function RoomClient({ code }: { code: string }) {
               playing={media.playing}
               audioMode={audioMode}
               onChooseAudio={setAudioMode}
+              noisy={noisy}
+              onNoisy={setNoisy}
               videoError={videoError}
               musicVolume={musicVolume}
               onMusicVolume={setMusicVolume}
+              matchSinging={matchSinging}
+              onMatchSinging={onMatchSinging}
+              offsetMs={offsetMs}
+              onOffsetMs={setOffsetMs}
+              suggestedOffsetMs={suggestedOffsetMs}
+              picking={picking}
+              onPick={() => setPicking(true)}
+              onCancelPick={() => setPicking(false)}
               onLoad={(id) => {
                 // A new attempt starts clean; the last refusal was about the
                 // last video, not this one.
                 setVideoError(null);
+                setPicking(false);
                 media.load(id);
               }}
               onPlayPause={media.playPause}
               onResync={media.resync}
-              onClear={media.clear}
             />
           )}
 

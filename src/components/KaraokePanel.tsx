@@ -5,6 +5,9 @@ import { motion, useReducedMotion } from "motion/react";
 import { youTubeId } from "@/lib/media/youtube";
 import type { AudioMode } from "@/lib/media/micProfile";
 
+/** The furthest the music can be pulled back, in milliseconds. */
+export const MAX_OFFSET_MS = 1000;
+
 /**
  * The karaoke control panel, living in the bottom letterbox bar under the
  * video. Headphones are gated first and exclusively: a synced song playing
@@ -17,12 +20,21 @@ export function KaraokePanel(props: {
   videoError: number | null;
   audioMode: AudioMode | null;
   onChooseAudio: (mode: AudioMode) => void;
+  noisy: boolean;
+  onNoisy: (noisy: boolean) => void;
   onLoad: (videoId: string) => void;
+  picking: boolean;
+  onPick: () => void;
+  onCancelPick: () => void;
   musicVolume: number;
   onMusicVolume: (percent: number) => void;
+  matchSinging: boolean;
+  onMatchSinging: (on: boolean) => void;
+  offsetMs: number;
+  onOffsetMs: (ms: number) => void;
+  suggestedOffsetMs: number | null;
   onPlayPause: () => void;
   onResync: () => void;
-  onClear: () => void;
 }) {
   const {
     videoId,
@@ -30,30 +42,55 @@ export function KaraokePanel(props: {
     videoError,
     audioMode,
     onChooseAudio,
+    noisy,
+    onNoisy,
     onLoad,
+    picking,
+    onPick,
+    onCancelPick,
     musicVolume,
     onMusicVolume,
+    matchSinging,
+    onMatchSinging,
+    offsetMs,
+    onOffsetMs,
+    suggestedOffsetMs,
     onPlayPause,
     onResync,
-    onClear,
   } = props;
+
+  // A song that failed to load is not a song to go back to, and neither is no
+  // song at all — so in those two cases the picker is the only thing there is
+  // and offering a way out of it would strand you on an empty panel.
+  const nothingToReturnTo = videoId === null || videoError !== null;
 
   return (
     <section aria-label="Karaoke" className="w-full">
       {audioMode === null ? (
         <AudioGate onChoose={onChooseAudio} />
-      ) : videoId === null || videoError !== null ? (
-        <SongPicker onLoad={onLoad} videoError={videoError} />
+      ) : nothingToReturnTo || picking ? (
+        <SongPicker
+          onLoad={onLoad}
+          videoError={videoError}
+          onCancel={nothingToReturnTo ? null : onCancelPick}
+        />
       ) : (
         <Transport
           playing={playing}
           audioMode={audioMode}
           onChooseAudio={onChooseAudio}
+          noisy={noisy}
+          onNoisy={onNoisy}
           musicVolume={musicVolume}
           onMusicVolume={onMusicVolume}
+          matchSinging={matchSinging}
+          onMatchSinging={onMatchSinging}
+          offsetMs={offsetMs}
+          onOffsetMs={onOffsetMs}
+          suggestedOffsetMs={suggestedOffsetMs}
           onPlayPause={onPlayPause}
           onResync={onResync}
-          onClear={onClear}
+          onPick={onPick}
         />
       )}
     </section>
@@ -73,8 +110,9 @@ function AudioGate({ onChoose }: { onChoose: (mode: AudioMode) => void }) {
         <HeadphoneIcon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--lamp)]" />
         <p className="leading-relaxed">
           On speakers your mic picks the song back up and sends it on, arriving a beat
-          behind the copy already playing. Tell us which you&rsquo;re on and the mic is
-          set up to match — headphones sound better, speakers still work.
+          behind the copy already playing. Cancelling that costs some of your voice with
+          it, so headphones sound clearly better — speakers still work, and you can
+          switch at any time.
         </p>
       </div>
       <div className="flex shrink-0 flex-wrap gap-2">
@@ -123,6 +161,34 @@ function AudioSwitch({
 }
 
 /**
+ * Whether the room is loud, which is a separate question from where the song
+ * is playing and cannot be folded into it.
+ *
+ * Singing normally wants every microphone process off. In a loud room that is
+ * the wrong call: with noise suppression off, echo cancellation has to pick a
+ * voice out of a room full of competing sound, cannot do it cleanly, and
+ * clamps down — which is heard as a thin, gated, "filtered" voice.
+ */
+function NoisyToggle({
+  noisy,
+  onNoisy,
+}: {
+  noisy: boolean;
+  onNoisy: (noisy: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onNoisy(!noisy)}
+      title={noisy ? "Switch to quiet room" : "Switch to noisy room"}
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1 tracking-wide text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
+    >
+      {noisy ? "Noisy room" : "Quiet room"}
+    </button>
+  );
+}
+
+/**
  * What YouTube's error numbers actually mean, in words that suggest a next
  * step. 101 and 150 are the common one and the useful one to explain: plenty
  * of official music uploads forbid embedding, and a karaoke channel's version
@@ -145,9 +211,12 @@ function videoErrorMessage(code: number): string {
 function SongPicker({
   onLoad,
   videoError,
+  onCancel,
 }: {
   onLoad: (videoId: string) => void;
   videoError: number | null;
+  /** Null when there is no song behind this to go back to. */
+  onCancel: (() => void) | null;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState(false);
@@ -205,6 +274,19 @@ function SongPicker({
       >
         Load song
       </button>
+
+      {/* type="button" matters: inside a form, a bare button submits, so
+          cancelling would try to load whatever half-typed text was there. */}
+      {onCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="Close and keep the current song"
+          className="shrink-0 rounded-[2px] px-2 py-1.5 text-base leading-none text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
+        >
+          ✕
+        </button>
+      )}
 
       {/* Same slot carries the helper copy or the error, so the row's
           height does not change between the two — only role="alert" swaps
@@ -275,24 +357,110 @@ function MusicVolume({
   );
 }
 
+/**
+ * Pulls this side's music back in time until the other person's voice lands on
+ * the beat.
+ *
+ * Their voice spends a couple of hundred milliseconds crossing the internet
+ * while your song carries on without it, so they always sound like they are
+ * dragging — even though they are singing perfectly to their own copy.
+ * Rewinding your music by that same amount lines the two up.
+ *
+ * It can only ever be right in one direction at a time. Delaying your music
+ * means you are now singing behind your own copy, so your voice reaches them
+ * twice as late as before. That is not a bug to be fixed; it is the distance
+ * between two countries, and it is why this is a switch you flip while you are
+ * listening rather than a setting you leave on.
+ */
+function MatchSinging({
+  on,
+  onToggle,
+  offsetMs,
+  onOffsetMs,
+  suggestedMs,
+}: {
+  on: boolean;
+  onToggle: (on: boolean) => void;
+  offsetMs: number;
+  onOffsetMs: (ms: number) => void;
+  suggestedMs: number | null;
+}) {
+  const id = useId();
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onToggle(!on)}
+        aria-pressed={on}
+        title={
+          suggestedMs === null
+            ? "Delay your music so their singing lands on the beat"
+            : `Measured delay on this connection: about ${suggestedMs}ms`
+        }
+        className={`inline-flex shrink-0 items-center gap-1.5 rounded-[2px] border px-2.5 py-1 tracking-wide transition-colors ${
+          on
+            ? "border-[var(--lamp)]/60 bg-[var(--lamp)]/10 text-[var(--lamp)]"
+            : "border-[var(--edge)] text-[var(--mist)] hover:border-[var(--lamp)]/45 hover:text-[var(--cream)]"
+        }`}
+      >
+        Match their singing
+      </button>
+
+      {on && (
+        <>
+          <label htmlFor={id} className="sr-only">
+            How far to delay your music
+          </label>
+          <input
+            id={id}
+            type="range"
+            min={0}
+            max={MAX_OFFSET_MS}
+            step={20}
+            value={offsetMs}
+            onChange={(e) => onOffsetMs(Number(e.target.value))}
+            aria-valuetext={`${offsetMs} milliseconds behind`}
+            className="h-1 w-20 cursor-pointer appearance-none rounded-full bg-[var(--edge)] accent-[var(--lamp)]"
+          />
+          <span className="w-12 tabular-nums text-[var(--mist)]">{offsetMs}ms</span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Transport({
   playing,
   audioMode,
   onChooseAudio,
+  noisy,
+  onNoisy,
   musicVolume,
   onMusicVolume,
+  matchSinging,
+  onMatchSinging,
+  offsetMs,
+  onOffsetMs,
+  suggestedOffsetMs,
   onPlayPause,
   onResync,
-  onClear,
+  onPick,
 }: {
   playing: boolean;
   audioMode: AudioMode;
   onChooseAudio: (mode: AudioMode) => void;
+  noisy: boolean;
+  onNoisy: (noisy: boolean) => void;
   musicVolume: number;
   onMusicVolume: (percent: number) => void;
+  matchSinging: boolean;
+  onMatchSinging: (on: boolean) => void;
+  offsetMs: number;
+  onOffsetMs: (ms: number) => void;
+  suggestedOffsetMs: number | null;
   onPlayPause: () => void;
   onResync: () => void;
-  onClear: () => void;
+  onPick: () => void;
 }) {
   const reduceMotion = useReducedMotion();
 
@@ -344,9 +512,12 @@ function Transport({
           Resync
         </button>
 
+        {/* Opens the picker over the song rather than stopping it. Browsing
+            for the next track used to clear the video for both of you, which
+            cut the other person off mid-verse. */}
         <button
           type="button"
-          onClick={onClear}
+          onClick={onPick}
           className="shrink-0 rounded-[2px] px-2 py-1.5 text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
         >
           Change song
@@ -354,15 +525,35 @@ function Transport({
 
         <MusicVolume value={musicVolume} onChange={onMusicVolume} />
 
+        <MatchSinging
+          on={matchSinging}
+          onToggle={onMatchSinging}
+          offsetMs={offsetMs}
+          onOffsetMs={onOffsetMs}
+          suggestedMs={suggestedOffsetMs}
+        />
+
         <AudioSwitch audioMode={audioMode} onChoose={onChooseAudio} />
+
+        <NoisyToggle noisy={noisy} onNoisy={onNoisy} />
       </div>
 
       <p className="w-full basis-full text-[0.65rem] text-[var(--mist)]">
-        Resync pulls you both back together if an ad or a stall knocked the song out of
-        step.
-        {audioMode === "speakers"
-          ? " On speakers, keep the volume moderate — the louder it is, the more of it your mic sends back."
-          : null}
+        {matchSinging ? (
+          <>
+            Your music is running {offsetMs}ms late so their voice lands on the beat.
+            Turn this off when it&rsquo;s your turn to sing — it can only be right for
+            one of you at a time.
+          </>
+        ) : (
+          <>
+            Resync pulls you both back together if an ad or a stall knocked the song out
+            of step.
+            {audioMode === "speakers"
+              ? " On speakers, keep the volume moderate — the louder it is, the more of it your mic sends back."
+              : null}
+          </>
+        )}
       </p>
     </div>
   );

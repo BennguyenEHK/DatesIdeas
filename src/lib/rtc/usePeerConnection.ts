@@ -7,6 +7,14 @@ import { SyncedClock } from "@/lib/sync/SyncedClock";
 import { selectPath, type PathInfo } from "./path";
 import { preferMusicAudio } from "./sdp";
 import { readJitter, jitterDelayMs, type JitterSample } from "./videoStats";
+import {
+  readAudio,
+  audioJitterMs,
+  audioBitrateKbps,
+  readAudioFormat,
+  type AudioSample,
+  type AudioFormat,
+} from "./audioStats";
 import { getIdentity } from "@/lib/history/identity";
 import {
   useSignaling,
@@ -41,6 +49,21 @@ export interface PeerApi {
    * on a long link it can cost more than crossing the ocean.
    */
   jitterMs: number | null;
+  /**
+   * The same measurement for the voice. Kept separate from the video figure
+   * because the two buffers behave differently and an average of them
+   * describes neither — and because this one, plus half the round trip, is how
+   * far behind the other person's singing arrives.
+   */
+  audioJitterMs: number | null;
+  /**
+   * What the voice was actually negotiated at, and what it is really costing.
+   * 48000Hz stereo is healthy; 16000Hz mono means the device fell back to a
+   * narrowband voice profile, which is heard as a thin, filtered voice and is
+   * not something any setting in this app can undo.
+   */
+  audioFormat: AudioFormat | null;
+  audioKbps: number | null;
   rtt: number;
   mediaError: string | null;
   clock: SyncedClock | null;
@@ -73,6 +96,9 @@ export function usePeerConnection(
   const [state, setState] = useState<ConnState>("idle");
   const [path, setPath] = useState<PathInfo | null>(null);
   const [jitterMs, setJitterMs] = useState<number | null>(null);
+  const [audioJitter, setAudioJitter] = useState<number | null>(null);
+  const [audioFormat, setAudioFormat] = useState<AudioFormat | null>(null);
+  const [audioKbps, setAudioKbps] = useState<number | null>(null);
   const [rtt, setRtt] = useState(0);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -91,6 +117,7 @@ export function usePeerConnection(
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const jitterRef = useRef<JitterSample | null>(null);
+  const audioRef = useRef<AudioSample | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const clockRef = useRef<SyncedClock | null>(null);
   const offeredRef = useRef(false);
@@ -304,6 +331,14 @@ export function usePeerConnection(
         setJitterMs(jitterDelayMs(jitterRef.current, sample));
         jitterRef.current = sample;
       }
+
+      const audio = readAudio(stats);
+      if (audio) {
+        setAudioJitter(audioJitterMs(audioRef.current, audio));
+        setAudioKbps(audioBitrateKbps(audioRef.current, audio));
+        audioRef.current = audio;
+      }
+      setAudioFormat(readAudioFormat(stats));
     };
 
     void sample();
@@ -335,6 +370,7 @@ export function usePeerConnection(
     setPath(null);
     setJitterMs(null);
     jitterRef.current = null;
+    audioRef.current = null;
     setIceSettled(false);
     setState("idle");
     // Re-arm the media gate so the next attempt cannot announce itself
@@ -354,6 +390,9 @@ export function usePeerConnection(
     path,
     sending,
     jitterMs,
+    audioJitterMs: audioJitter,
+    audioFormat,
+    audioKbps,
     rtt,
     mediaError,
     clock,

@@ -4,8 +4,11 @@
  * The browser's default audio processing is built for speech. Noise
  * suppression treats sustained music as noise and ducks it, and automatic gain
  * pumps the level up and down across a held note — so a singing voice arrives
- * thin and gated. Turning them off is what makes karaoke sound like a person
- * rather than a phone call.
+ * thin and gated. Turning them off is what makes quiet-room karaoke sound
+ * like a person rather than a phone call. In a noisy room, noise suppression
+ * and automatic gain keep the voice present over the room. Automatic gain
+ * pumps across a held note, but that trade is accepted because a voice you can
+ * hear beats a purer one buried under a room.
  *
  * How far the processing can come off depends on where the song is playing.
  * In headphones nothing but the voice reaches the microphone, so all of it can
@@ -53,6 +56,40 @@ export const SPEAKER_AUDIO: MediaTrackConstraints = {
 };
 
 /**
+ * Singing in headphones in a noisy room. Echo cancellation can stay off
+ * because the song cannot reach the microphone, while noise suppression and
+ * gain keep the voice above the room.
+ */
+export const HEADPHONE_NOISY_AUDIO: MediaTrackConstraints = {
+  echoCancellation: false,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+/**
+ * Singing on speakers in a noisy room. Echo cancellation still has to stay on
+ * to subtract the song, while noise suppression gives it a cleaner signal and
+ * gain keeps the voice present over the room. Automatic gain pumps across a
+ * held note, but a voice you can hear beats a purer one buried under a room.
+ */
+export const SPEAKER_NOISY_AUDIO: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+/** Selects the singing profile for the listening mode and room noise. */
+export function singingProfile(
+  mode: AudioMode,
+  noisy: boolean,
+): MediaTrackConstraints {
+  if (mode === "headphones") {
+    return noisy ? HEADPHONE_NOISY_AUDIO : HEADPHONE_AUDIO;
+  }
+  return noisy ? SPEAKER_NOISY_AUDIO : SPEAKER_AUDIO;
+}
+
+/**
  * Retunes the live microphone without renegotiating the call.
  *
  * applyConstraints swaps the settings on the existing track, so the connection
@@ -63,14 +100,11 @@ export const SPEAKER_AUDIO: MediaTrackConstraints = {
 export async function tuneMicrophone(
   stream: MediaStream | null,
   mode: AudioMode | null,
+  noisy = false,
 ): Promise<void> {
   if (!stream) return;
   const constraints =
-    mode === "headphones"
-      ? HEADPHONE_AUDIO
-      : mode === "speakers"
-        ? SPEAKER_AUDIO
-        : SPEECH_AUDIO;
+    mode === null ? SPEECH_AUDIO : singingProfile(mode, noisy);
   await Promise.all(
     stream.getAudioTracks().map((track) =>
       track.applyConstraints(constraints).catch(() => {}),

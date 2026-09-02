@@ -37,6 +37,11 @@ describe("targetPosition", () => {
     expect(targetPosition(early, 90_000)).toBe(0);
   });
 
+  it("pulls this listener's copy back without seeking before the song", () => {
+    expect(targetPosition(playing, 102_500, 0.35)).toBe(32.15);
+    expect(targetPosition({ ...playing, positionSec: 0, playing: false }, 100_000, 0.35)).toBe(0);
+  });
+
   it("keeps both peers on the same target from the same state", () => {
     // The property that matters: the state is absolute on the shared clock, so
     // two peers reading it at the same instant compute the same position.

@@ -1,6 +1,7 @@
 "use client";
 
 import { VideoTile } from "./VideoTile";
+import { SCREEN_FR, FACES_FR, takeoverAspect } from "@/lib/ui/stage";
 import type { ActiveMeme } from "@/lib/ui/useMemeQueue";
 
 /**
@@ -30,7 +31,17 @@ export function TakeoverStage({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid w-full grid-cols-1 gap-3 md:grid-cols-[3fr_1fr] md:gap-4">
+    <div
+      className="stage grid grid-cols-1 gap-3 md:grid-cols-[var(--stage-cols)] md:gap-4"
+      style={
+        {
+          // Both derived from the same two numbers, so the declared shape and
+          // the actual columns cannot drift apart.
+          "--stage-aspect": takeoverAspect(),
+          "--stage-cols": `${SCREEN_FR}fr ${FACES_FR}fr`,
+        } as React.CSSProperties
+      }
+    >
       {/* The screen. A dark frame even before a film loads it, so an empty
           child never reads as an unstyled box — just as a theatre reads as
           a theatre before the projector lamp comes on. */}
@@ -66,11 +77,16 @@ export function TakeoverStage({
       </div>
 
       {/* The two faces. A row on a phone (side by side does not fit next to
-          a full-width screen), a column once there is room beside it. */}
+          a full-width screen), a column once there is room beside it.
+
+          Centred rather than stretched: two 16:9 tiles at a quarter of the
+          width are shorter than a 16:9 screen at three quarters, so there is
+          always some column left over. Splitting it above and below reads as
+          deliberate; letting it all pool underneath reads as a bug. */}
       <div
         role="group"
         aria-label="Video call participants"
-        className="grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-4"
+        className="grid grid-cols-2 gap-3 md:grid-cols-1 md:gap-4 md:content-center"
       >
         <VideoTile
           size="compact"

@@ -2,6 +2,7 @@
 
 import type { ConnState } from "@/lib/rtc/usePeerConnection";
 import type { PathInfo } from "@/lib/rtc/path";
+import type { AudioFormat } from "@/lib/rtc/audioStats";
 
 const LABEL: Record<ConnState, string> = {
   idle: "Getting ready",
@@ -23,12 +24,35 @@ function Item({ children }: { children: React.ReactNode }) {
   return <span className="text-[var(--mist)]">{children}</span>;
 }
 
+/**
+ * Anything below 32kHz is a voice-call profile rather than a music one. The
+ * usual cause is a Bluetooth headset whose microphone was opened, which drops
+ * the whole device to hands-free mode behind the browser's back.
+ */
+function isNarrowband(format: AudioFormat): boolean {
+  return format.clockRateHz !== null && format.clockRateHz < 32000;
+}
+
+/** "opus 48k stereo", or as much of it as the browser actually reported. */
+function describeAudio(format: AudioFormat): string {
+  const parts = [format.codec];
+  if (format.clockRateHz !== null) {
+    parts.push(`${Math.round(format.clockRateHz / 1000)}k`);
+  }
+  if (format.channels !== null) {
+    parts.push(format.channels >= 2 ? "stereo" : "mono");
+  }
+  return parts.join(" ");
+}
+
 export function ConnectionStatus({
   state,
   path,
   sending,
   rtt,
   jitterMs,
+  audioFormat,
+  audioKbps,
   gestureReady,
   gestureError,
   gesturesOn,
@@ -40,6 +64,8 @@ export function ConnectionStatus({
   sending: boolean;
   rtt: number;
   jitterMs: number | null;
+  audioFormat: AudioFormat | null;
+  audioKbps: number | null;
   gestureReady: boolean;
   gestureError: string | null;
   gesturesOn: boolean;
@@ -110,6 +136,27 @@ export function ConnectionStatus({
           whole journey. Worth watching if the picture starts to stutter. */}
       {state === "connected" && jitterMs !== null && (
         <Item>buffer {Math.round(jitterMs)}ms</Item>
+      )}
+
+      {/* What the voice is actually arriving as.
+
+          "It sounds filtered" is not something you can debug by listening
+          harder, and every cause looks the same from the outside. This says
+          which it is: 48k stereo means the codec is fine and the problem is in
+          the room, while 16k mono means the device fell back to a narrowband
+          phone-call profile and nothing in this app can undo that. Marked in
+          neon when it has collapsed, because that is the case worth noticing. */}
+      {state === "connected" && audioFormat && (
+        <Item>
+          <span
+            className={
+              isNarrowband(audioFormat) ? "text-[var(--neon)]" : undefined
+            }
+          >
+            voice {describeAudio(audioFormat)}
+          </span>
+          {audioKbps !== null && ` · ${Math.round(audioKbps)}kbps`}
+        </Item>
       )}
 
       {(state === "failed" || state === "reconnecting") && (

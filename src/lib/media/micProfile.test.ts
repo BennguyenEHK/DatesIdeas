@@ -4,6 +4,9 @@ import {
   SPEECH_AUDIO,
   HEADPHONE_AUDIO,
   SPEAKER_AUDIO,
+  HEADPHONE_NOISY_AUDIO,
+  SPEAKER_NOISY_AUDIO,
+  singingProfile,
 } from "./micProfile";
 
 function fakeStream(trackCount = 1) {
@@ -32,13 +35,49 @@ describe("audio profiles", () => {
     expect(SPEECH_AUDIO.echoCancellation).toBe(true);
   });
 
-  it("frees the voice from speech processing in both singing modes", () => {
-    // Noise suppression treats sustained music as noise and gain pumps across
-    // a held note. Neither belongs in a song, whatever you are listening on.
+  it("frees the voice from speech processing in quiet singing modes", () => {
+    // With no room noise to overcome, noise suppression and gain only treat
+    // sustained music as noise or pump across a held note.
     for (const profile of [HEADPHONE_AUDIO, SPEAKER_AUDIO]) {
       expect(profile.noiseSuppression).toBe(false);
       expect(profile.autoGainControl).toBe(false);
     }
+  });
+
+  it("selects the headphones quiet profile", () => {
+    expect(singingProfile("headphones", false)).toBe(HEADPHONE_AUDIO);
+    expect(HEADPHONE_AUDIO).toEqual({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
+  });
+
+  it("selects the headphones noisy profile", () => {
+    expect(singingProfile("headphones", true)).toBe(HEADPHONE_NOISY_AUDIO);
+    expect(HEADPHONE_NOISY_AUDIO).toEqual({
+      echoCancellation: false,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+  });
+
+  it("selects the speakers quiet profile", () => {
+    expect(singingProfile("speakers", false)).toBe(SPEAKER_AUDIO);
+    expect(SPEAKER_AUDIO).toEqual({
+      echoCancellation: true,
+      noiseSuppression: false,
+      autoGainControl: false,
+    });
+  });
+
+  it("selects the speakers noisy profile", () => {
+    expect(singingProfile("speakers", true)).toBe(SPEAKER_NOISY_AUDIO);
+    expect(SPEAKER_NOISY_AUDIO).toEqual({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
   });
 
   it("leaves every process on for ordinary talking", () => {
@@ -65,7 +104,7 @@ describe("tuneMicrophone", () => {
 
   it("returns to speech when no mode is set", async () => {
     const { stream, applied } = fakeStream();
-    await tuneMicrophone(stream, null);
+    await tuneMicrophone(stream, null, true);
     expect(applied).toEqual([SPEECH_AUDIO]);
   });
 

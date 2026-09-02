@@ -121,6 +121,83 @@ describe("useSyncedPlayback", () => {
     expect(p.calls.some((c) => c.startsWith("volume:"))).toBe(false);
   });
 
+  it("uses the listening offset only for its local player", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}, 0.35),
+    );
+
+    act(() =>
+      result.current.accept({
+        t: "media",
+        videoId: "dQw4w9WgXcQ",
+        positionSec: 10,
+        playing: false,
+        atSharedTime: Date.now(),
+      } satisfies PeerMessage),
+    );
+    expect(p.calls).toContain("load:dQw4w9WgXcQ@9.65");
+
+    p.setTime(0);
+    act(() =>
+      result.current.accept({
+        t: "media",
+        videoId: "dQw4w9WgXcQ",
+        positionSec: 11,
+        playing: false,
+        atSharedTime: Date.now(),
+      } satisfies PeerMessage),
+    );
+    expect(p.calls).toContain("seek:10.65");
+  });
+
+  it("reapplies a changed listening offset without waiting for drift correction", () => {
+    const p = fakePlayer();
+    const { result, rerender } = renderHook(
+      ({ offsetSec }) => useSyncedPlayback(p.handle, null, () => {}, offsetSec),
+      { initialProps: { offsetSec: 0.3 } },
+    );
+
+    act(() => result.current.load("dQw4w9WgXcQ", 10));
+    const before = p.calls.length;
+    act(() => rerender({ offsetSec: 0.8 }));
+
+    expect(p.calls.length).toBeGreaterThan(before);
+    expect(p.calls).toContain("seek:9.2");
+  });
+
+  it("stamps a local pause back at the true shared position", () => {
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m), 0.35),
+    );
+
+    act(() => result.current.load("dQw4w9WgXcQ", 10));
+    p.setTime(9.65);
+    act(() => result.current.playPause());
+    p.setTime(9.65);
+    act(() => result.current.playPause());
+
+    expect(sent.at(-1)).toMatchObject({ positionSec: 10, playing: false });
+  });
+
+  it("never sends the local listening offset to the peer", () => {
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m), 0.347),
+    );
+
+    act(() => result.current.load("dQw4w9WgXcQ", 10));
+    p.setTime(10.5);
+    act(() => result.current.playPause());
+    act(() => result.current.resync());
+    act(() => void vi.advanceTimersByTime(5_000));
+
+    expect(JSON.stringify(sent)).not.toContain("0.347");
+  });
+
   it("does not touch a player that is not ready", () => {
     const p = fakePlayer(false);
     const { result } = renderHook(() =>
