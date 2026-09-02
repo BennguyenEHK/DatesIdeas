@@ -22,6 +22,10 @@ function bad(message: string) {
  * Neon has no realtime channel, so the handshake runs through this table:
  * each peer writes its offer/answer/ICE here and polls GET for the other
  * side's. Rows are transport with a lifetime of seconds, not records.
+ *
+ * This is also the gate on a room's 24-hour life: a closed room accepts no
+ * signals, so no new pair can find each other in it. An evening already in
+ * progress is untouched — once connected, nothing it does comes back here.
  */
 export async function POST(request: Request) {
   let body: unknown;
@@ -52,10 +56,26 @@ export async function POST(request: Request) {
   const sql = db();
   const room = code.toUpperCase();
 
-  await sql`
+  // The room's day is enforced here, and here only. This is the one call that
+  // lets two peers find each other, so a check anywhere else would be
+  // decoration. Folding it into the insert keeps it to a single round trip and
+  // leaves no gap in which the room could expire between the check and the
+  // write.
+  const inserted = (await sql`
     INSERT INTO signals (room_code, from_identity, payload)
-    VALUES (${room}, ${from}, ${encoded}::jsonb)
-  `;
+    SELECT ${room}, ${from}, ${encoded}::jsonb
+    WHERE EXISTS (
+      SELECT 1 FROM couples WHERE code = ${room} AND expires_at > now()
+    )
+    RETURNING id
+  `) as { id: string }[];
+
+  if (inserted.length === 0) {
+    // Gone rather than Bad Request: the code was well formed and may well have
+    // been real — its day is simply over, or it was never opened. Nothing else
+    // happens on this path, because anyone holding a stale link can reach it.
+    return NextResponse.json({ error: "this room has closed" }, { status: 410 });
+  }
 
   // Sweep on write rather than on a schedule: these rows are worthless once
   // the handshake completes, and this keeps the table from growing forever

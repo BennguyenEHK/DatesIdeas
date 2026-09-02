@@ -24,6 +24,12 @@ export type ConnState =
 export interface PeerApi {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+  /**
+   * The room's day is over, so signalling refuses to carry anything more.
+   * Kept apart from a failed connection: there is nothing to retry here, and
+   * a page that says "reconnecting" forever is the wrong thing to show.
+   */
+  roomClosed: boolean;
   state: ConnState;
   /** The route actually carrying the call, and what the browser says it costs. */
   path: PathInfo | null;
@@ -341,6 +347,9 @@ export function usePeerConnection(
   return {
     localStream,
     remoteStream,
+    // The room's day is over. Distinct from a failed connection: there is
+    // nothing here to retry, so the page says so instead of waiting.
+    roomClosed: signaling.status === "closed",
     state,
     path,
     sending,

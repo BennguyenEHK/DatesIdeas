@@ -12,9 +12,18 @@ export interface SessionRow {
   memes_sent: Record<string, number>;
 }
 
-export async function listSessions(code: string): Promise<SessionRow[]> {
+/**
+ * Past evenings across every room this device has been in.
+ *
+ * Takes a list rather than a single code because a code only lasts a day now:
+ * asking about the current room alone would empty the log every morning.
+ */
+export async function listSessions(codes: string[]): Promise<SessionRow[]> {
+  if (codes.length === 0) return [];
   try {
-    const res = await fetch(`/api/sessions?code=${encodeURIComponent(code)}`);
+    const res = await fetch(
+      `/api/sessions?codes=${encodeURIComponent(codes.join(","))}`,
+    );
     if (!res.ok) return [];
     const body = (await res.json()) as { sessions: SessionRow[] };
     return body.sessions ?? [];

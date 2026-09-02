@@ -6,21 +6,35 @@ import { isValidRoomCode } from "@/lib/room/code";
 export function RoomGate({
   onJoin,
   onCreate,
+  creating,
+  error,
 }: {
   onJoin: (code: string) => void;
   onCreate: () => void;
+  creating: boolean;
+  error: string | null;
 }) {
   const [value, setValue] = useState("");
   const valid = isValidRoomCode(value);
 
   return (
     <div className="flex w-full flex-col gap-6">
+      {/* The code is minted by the server, so this waits on a request. The
+          button says so rather than looking inert, and refuses a second press
+          — two clicks would open two rooms and leave one of them unused. */}
       <button
         onClick={onCreate}
-        className="w-full rounded-[2px] bg-[var(--dress)] px-6 py-3.5 text-sm font-medium tracking-wide text-[#1a1405] transition-colors hover:bg-[var(--lamp)]"
+        disabled={creating}
+        className="w-full rounded-[2px] bg-[var(--dress)] px-6 py-3.5 text-sm font-medium tracking-wide text-[#1a1405] transition-colors hover:bg-[var(--lamp)] disabled:cursor-not-allowed disabled:bg-[var(--mist)]/30 disabled:text-[var(--mist)]"
       >
-        Start the evening
+        {creating ? "Opening a room…" : "Start the evening"}
       </button>
+
+      {error && (
+        <p role="alert" className="-mt-3 text-xs text-[var(--neon)]">
+          {error}
+        </p>
+      )}
 
       <div className="flex items-center gap-4" aria-hidden>
         <span className="h-px flex-1 bg-[var(--edge)]" />

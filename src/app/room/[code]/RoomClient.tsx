@@ -5,7 +5,12 @@ import { usePeerConnection } from "@/lib/rtc/usePeerConnection";
 import { useGestureDetection } from "@/lib/vision/useGestureDetection";
 import { useSession } from "@/lib/history/useSession";
 import { Ambience } from "@/components/Ambience";
-import { Monogram } from "@/components/Monogram";
+import { Wordmark } from "@/components/Wordmark";
+import { CopyLink } from "@/components/CopyLink";
+import { RoomClosed } from "@/components/RoomClosed";
+import { fetchRoomStatus, type RoomInfo } from "@/lib/room/api";
+import { formatRemaining, remainingMs } from "@/lib/room/lifetime";
+import { useCreateRoom } from "@/lib/room/useCreateRoom";
 import { VideoStage } from "@/components/VideoStage";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 import { useMemeQueue } from "@/lib/ui/useMemeQueue";
@@ -224,17 +229,48 @@ export function RoomClient({ code }: { code: string }) {
     else showCard(drawn.card, showAt);
   }, [deck, mood, card, showCard]);
 
+  // Opening the next room, for when this one has closed.
+  const newRoom = useCreateRoom();
+  // Asked once on arrival for the countdown, and again the moment signalling
+  // reports the room gone — that second answer is what separates "this evening
+  // has ended" from "there is no such code", which need different replies.
+  const [room, setRoom] = useState<RoomInfo | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchRoomStatus(code).then((info) => {
+      if (!cancelled) setRoom(info);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [code, peer.roomClosed]);
+
+  const left = room?.expiresAt ? remainingMs(room.expiresAt) : 0;
+  const closesIn = left > 0 ? formatRemaining(left) : null;
+
+  if (peer.roomClosed) {
+    return (
+      <RoomClosed
+        // Until the second answer arrives, "expired" is the likelier of the
+        // two and the gentler thing to be told.
+        status={room?.status === "missing" ? "missing" : "expired"}
+        code={code}
+        onStart={() => void newRoom.start()}
+        pending={newRoom.pending}
+        error={newRoom.error}
+      />
+    );
+  }
+
   return (
     <>
       <Ambience />
       <div className="flex min-h-screen flex-1 flex-col">
         {/* Top letterbox bar */}
         <header className="bar-top flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-[var(--letterbox)] px-5 py-3">
-          <Monogram size="compact" />
+          <Wordmark size="compact" />
           <ActivityBar current={current} onSelect={onSelectActivity} />
-          <span className="font-[family-name:var(--font-display)] text-sm tracking-[0.45em] text-[var(--lamp)]">
-            {code}
-          </span>
+          <CopyLink code={code} closesIn={closesIn} />
         </header>
 
         {/* The stage */}

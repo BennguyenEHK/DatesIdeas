@@ -1,4 +1,4 @@
-# M + K
+# FestiBooth
 
 A private video room for exactly two people, built for date nights across a long
 distance. Video and audio travel directly between the two browsers — never

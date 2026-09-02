@@ -16,6 +16,7 @@
    Palette   twilight ground, one warm horizon glow, one saturated yellow
    Type      Poiret One (art deco) for identity, Inter for everything useful
    Motion    one film-opening moment on load, then stillness
+   Name      FestiBooth, set as the marquee sign over a booth
 --------------------------------------------------------------------------- */
 
 :root {
@@ -65,17 +66,92 @@ body {
   font-family: var(--font-sans);
 }
 
-/* The monogram: gold letters, the join between them in neon. Decorative use
-   of neon only — it never carries text a person has to read. */
-.monogram {
+/* ---------------------------------------------------------------------------
+   The wordmark — FestiBooth as a marquee.
+
+   In this world a booth is named by the sign hanging over it: the Rialto, the
+   Lighthouse, Seb's. So the name is built like one rather than glowing for the
+   sake of glowing — letters extruded in brass, a bulb halo around them, and a
+   far magenta bloom past that, because a warm subject in this film is always
+   sitting inside a saturated cool surround.
+
+   Depth is set in em throughout, so one rule serves a sign six times the size
+   of the other.
+--------------------------------------------------------------------------- */
+.wordmark {
+  position: relative;
+  display: inline-block;
   font-family: var(--font-display);
-  color: var(--lamp);
-  letter-spacing: 0.14em;
+  color: var(--dress);
   line-height: 1;
+  white-space: nowrap;
 }
-.monogram .join {
-  color: var(--neon);
-  font-weight: 400;
+
+/* The brass edge: solid steps down the face, then one soft contact shadow
+   where the letter meets the sky behind it. */
+.wordmark--hero {
+  letter-spacing: 0.06em;
+  text-shadow:
+    0 0.014em 0 #c9a03a,
+    0 0.028em 0 #ad872c,
+    0 0.042em 0 #8e6e21,
+    0 0.056em 0 #6d5518,
+    0 0.07em 0 #4b3a10,
+    0 0.09em 0.07em rgba(3, 5, 16, 0.65);
+}
+
+/* The bulbs, on their own layer. Switching them on is then one composited
+   opacity rather than a repaint of five shadows every frame. */
+.wordmark--hero::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  color: var(--dress);
+  pointer-events: none;
+  text-shadow:
+    0 0 0.04em rgba(255, 243, 214, 0.95),
+    0 0 0.16em rgba(232, 185, 74, 0.8),
+    0 0 0.42em rgba(232, 185, 74, 0.45),
+    0 0 0.85em rgba(199, 75, 109, 0.38);
+  animation: sign-on 1200ms cubic-bezier(0.3, 0, 0.2, 1) 180ms both;
+}
+
+/* A sign warming up: it catches, drops, catches again, holds. Once, on
+   arrival, alongside the letterbox bars closing in — a sign that flickered
+   all evening would be unbearable to sit under. */
+@keyframes sign-on {
+  0% {
+    opacity: 0;
+  }
+  42% {
+    opacity: 0.28;
+  }
+  55% {
+    opacity: 0.95;
+  }
+  62% {
+    opacity: 0.34;
+  }
+  74% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 0.62;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* In the letterbox bar the sign is small and always there: a hint of depth
+   and a close halo, no stutter. Five stacked shadows at 20px is mud. */
+.wordmark--compact {
+  letter-spacing: 0.1em;
+  text-shadow:
+    0 0.03em 0 #9b7822,
+    0 0.06em 0.05em rgba(3, 5, 16, 0.6),
+    0 0 0.5em rgba(232, 185, 74, 0.45),
+    0 0 1.1em rgba(199, 75, 109, 0.25);
 }
 
 /* The film-opening moment: bars close in from the edges, once, on load. */
@@ -131,5 +207,10 @@ body {
   .rise-late,
   .twinkle {
     animation: none !important;
+  }
+  /* The sign is simply already on. */
+  .wordmark--hero::after {
+    animation: none !important;
+    opacity: 1;
   }
 }

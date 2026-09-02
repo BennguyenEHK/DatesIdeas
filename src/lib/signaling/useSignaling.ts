@@ -24,7 +24,18 @@ export function shouldOffer(me: PeerInfo, them: PeerInfo): boolean {
   return me.identity < them.identity;
 }
 
-export type SignalStatus = "connecting" | "waiting" | "paired" | "error";
+/**
+ * "closed" is a room whose day is over, and it is deliberately distinct from
+ * "error". A stale link and a dropped connection look identical on screen
+ * otherwise — both just sit on "waiting" — and they need opposite responses:
+ * one means make a new room, the other means wait.
+ */
+export type SignalStatus =
+  | "connecting"
+  | "waiting"
+  | "paired"
+  | "closed"
+  | "error";
 
 export interface SignalingHandlers {
   onPeer: (peer: PeerInfo, iOffer: boolean) => void;
@@ -60,6 +71,9 @@ export function useSignaling(
   const identityRef = useRef<string | null>(null);
   const seenPeerRef = useRef<string | null>(null);
   const pairedRef = useRef(paired);
+  // Set from either the announce or a later send, so it lives outside the
+  // polling effect that both of them have to be able to stop.
+  const closedRef = useRef(false);
 
   useEffect(() => {
     handlersRef.current = handlers;
@@ -75,9 +89,20 @@ export function useSignaling(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, from, payload: msg }),
         keepalive: true,
-      }).catch(() => {
-        /* a dropped signal is retried by the peer's next poll */
-      });
+      })
+        .then((res) => {
+          // The room can run out mid-handshake: joined at 23:59, offered at
+          // 00:00. Only an explicit Gone counts — a failed request is not an
+          // expiry, and treating it as one would send someone off to make a
+          // new room over a flicker of wifi.
+          if (res.status === 410) {
+            closedRef.current = true;
+            setStatus("closed");
+          }
+        })
+        .catch(() => {
+          /* a dropped signal is retried by the peer's next poll */
+        });
     },
     [code],
   );
@@ -102,6 +127,7 @@ export function useSignaling(
 
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
+    closedRef.current = false;
 
     function handle(msg: SignalMessage) {
       switch (msg.kind) {
@@ -131,7 +157,9 @@ export function useSignaling(
     }
 
     async function poll() {
-      if (stopped) return;
+      // Nothing can arrive in a room nobody is allowed to post to, and this
+      // tab may be left open for hours.
+      if (stopped || closedRef.current) return;
       try {
         const res = await fetch(
           `/api/signal?code=${encodeURIComponent(code)}` +
@@ -144,14 +172,16 @@ export function useSignaling(
           };
           cursorRef.current = body.cursor;
           for (const msg of body.signals) handle(msg);
-          if (!stopped && status === "connecting") setStatus("waiting");
-        } else if (!stopped) {
+          if (!stopped && !closedRef.current && status === "connecting") {
+            setStatus("waiting");
+          }
+        } else if (!stopped && !closedRef.current) {
           setStatus("error");
         }
       } catch {
         // Transient failure. Keep polling; the next tick usually succeeds.
       }
-      if (stopped) return;
+      if (stopped || closedRef.current) return;
       timer = setTimeout(poll, pairedRef.current ? POLL_IDLE_MS : POLL_PAIRING_MS);
     }
 
@@ -165,7 +195,14 @@ export function useSignaling(
         payload: { kind: "join", identity, joinedAt } satisfies SignalMessage,
       }),
     })
-      .then(() => setStatus("waiting"))
+      .then((res) => {
+        if (res.status === 410) {
+          closedRef.current = true;
+          setStatus("closed");
+          return;
+        }
+        setStatus("waiting");
+      })
       .catch(() => setStatus("error"));
 
     void poll();
