@@ -9,7 +9,7 @@ export const MAX_UPLOAD_MB: Record<KeepsakeKind, number> = {
 
 export const CONTENT_TYPE: Record<KeepsakeKind, string> = {
   strip: "image/png",
-  clip: "video/webm",
+  clip: "video/mp4",
 };
 
 /** File extension for a kind, without the dot. */

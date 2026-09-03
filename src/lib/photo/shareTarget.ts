@@ -74,6 +74,109 @@ export async function shareFile(
   }
 }
 
+/** The narrowest slice of navigator the platform question needs. */
+export interface PlatformProbe {
+  userAgent?: string;
+  maxTouchPoints?: number;
+}
+
+/**
+ * Whether this is a device whose photo library is reachable ONLY through the
+ * share sheet — meaning an iPhone or an iPad.
+ *
+ * Everywhere else an ordinary download is the better answer, and on Android it
+ * is the better answer twice over: the file lands in Downloads, the media
+ * scanner indexes it, and it turns up in the gallery without anyone having to
+ * pick an app out of a sheet. Apple has no equivalent. A download there goes to
+ * Files, which is nowhere near Photos, so the sheet is not a worse route — it
+ * is the only one.
+ */
+export function isApplePhotosDevice(probe?: PlatformProbe | null): boolean {
+  let candidate: PlatformProbe | null | undefined = probe;
+  if (candidate === undefined) {
+    try {
+      candidate = globalThis.navigator;
+    } catch {
+      return false;
+    }
+  }
+  if (candidate == null) return false;
+
+  const agent = typeof candidate.userAgent === "string" ? candidate.userAgent : "";
+  if (/iPad|iPhone|iPod/.test(agent)) return true;
+  // An iPad on iPadOS 13 and later calls itself a Macintosh. The touch points
+  // are what give it away, and the distinction matters: a real Mac wants the
+  // download, an iPad wants the sheet.
+  const touches =
+    typeof candidate.maxTouchPoints === "number" ? candidate.maxTouchPoints : 0;
+  return /Macintosh/.test(agent) && touches > 1;
+}
+
+/** How this device should be offered a keepsake. */
+export type SaveRoute = "share" | "download";
+
+/**
+ * Picks the route that actually ends with the file in someone's photos.
+ *
+ * The share sheet is not a nicer download; it is a different thing, and on
+ * every platform but Apple's it is a chooser standing between a person and the
+ * file they already asked for.
+ */
+export function saveRoute(
+  canShareThisFile: boolean,
+  probe?: PlatformProbe | null,
+): SaveRoute {
+  return canShareThisFile && isApplePhotosDevice(probe) ? "share" : "download";
+}
+
+/**
+ * Saves bytes already in hand, under a name we choose.
+ *
+ * Deliberately built from the blob rather than by pointing a link at storage.
+ * The bucket behind this app silently discards `response-content-disposition`
+ * on a signed URL — measured, not assumed — so a remote link arrives with no
+ * filename attached and the browser invents one, which is how a photo strip
+ * ended up saved as something that was not a .png. A blob URL carries no
+ * headers to be ignored: the `download` attribute is the whole filename, and
+ * the type travels with the bytes.
+ */
+export function downloadBlob(
+  blob: Blob,
+  filename: string,
+  doc?: Document | null,
+): boolean {
+  const target = doc === undefined ? globalThis.document : doc;
+  if (target == null) return false;
+
+  let href: string | null = null;
+  try {
+    href = URL.createObjectURL(blob);
+    const anchor = target.createElement("a");
+    anchor.href = href;
+    anchor.download = filename;
+    anchor.rel = "noopener";
+    // In the document, because more than one browser ignores a click on an
+    // anchor that was never attached to anything.
+    target.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    // Not on the next tick: some browsers have not started reading the blob by
+    // then and the download arrives empty. A few seconds costs one object URL.
+    if (href !== null) {
+      const url = href;
+      try {
+        globalThis.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      } catch {
+        URL.revokeObjectURL(url);
+      }
+    }
+  }
+}
+
 /** Builds a safe, platform-friendly File name from downloaded bytes. */
 export function fileFromBlob(blob: Blob, name: string, type?: string): File {
   const contentType = type || blob.type || "application/octet-stream";

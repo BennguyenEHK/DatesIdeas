@@ -22,6 +22,11 @@ export const CLIP_MIME_TYPES: readonly string[] = [
   "video/webm",
 ];
 
+/** A phone's Photos/Gallery, not the recording browser, determines what can be kept. */
+export function phoneCanKeep(mimeType: string | null | undefined): boolean {
+  return typeof mimeType === "string" && /^video\/mp4(?:;codecs=.*)?$/i.test(mimeType);
+}
+
 /**
  * A minimal stand-in for MediaRecorder's static support check, so this
  * module can be tested without a real one.

@@ -17,7 +17,7 @@ describe("keepsake helpers", () => {
   });
 
   it("exports the storage content types", () => {
-    expect(CONTENT_TYPE).toEqual({ strip: "image/png", clip: "video/webm" });
+    expect(CONTENT_TYPE).toEqual({ strip: "image/png", clip: "video/mp4" });
   });
 
   it("uses png for strips regardless of mime type", () => {

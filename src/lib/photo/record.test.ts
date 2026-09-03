@@ -3,6 +3,7 @@ import {
   CLIP_FPS,
   CLIP_MIME_TYPES,
   clipSizeMb,
+  phoneCanKeep,
   pickMimeType,
   startRecording,
   type RecordableCanvas,
@@ -91,6 +92,17 @@ afterEach(() => {
 });
 
 describe("pickMimeType", () => {
+  it("keeps every MP4 candidate before every WebM candidate", () => {
+    const mp4Indexes = CLIP_MIME_TYPES
+      .map((type, index) => type.toLowerCase().startsWith("video/mp4") ? index : -1)
+      .filter((index) => index >= 0);
+    const webmIndexes = CLIP_MIME_TYPES
+      .map((type, index) => type.toLowerCase().startsWith("video/webm") ? index : -1)
+      .filter((index) => index >= 0);
+
+    expect(Math.max(...mp4Indexes)).toBeLessThan(Math.min(...webmIndexes));
+  });
+
   /**
    * MP4 leads deliberately. A live photo is made to be scanned onto a phone,
    * and an iPhone cannot save WebM to Photos at all -- so the format is chosen
@@ -132,6 +144,22 @@ describe("pickMimeType", () => {
   it("returns null without a global recorder", () => {
     Reflect.deleteProperty(globalThis, "MediaRecorder");
     expect(pickMimeType()).toBeNull();
+  });
+});
+
+describe("phoneCanKeep", () => {
+  it.each([
+    ["video/mp4;codecs=avc1.42E01E", true],
+    ["video/mp4", true],
+    ["VIDEO/MP4", true],
+    ["video/webm;codecs=vp9", false],
+    ["video/webm", false],
+    [null, false],
+    [undefined, false],
+    ["", false],
+    ["audio/mp4", false],
+  ])("returns %s -> %s", (mimeType, expected) => {
+    expect(phoneCanKeep(mimeType)).toBe(expected);
   });
 });
 

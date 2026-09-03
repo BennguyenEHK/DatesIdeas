@@ -3,11 +3,16 @@
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { HoldHeart } from "./HoldHeart";
+import { phoneCanKeep } from "@/lib/photo/record";
 import {
   canShareFiles,
+  downloadBlob,
   fileFromBlob,
+  isApplePhotosDevice,
   keepsakeFilename,
+  saveRoute,
   shareFile,
+  type SaveRoute,
 } from "@/lib/photo/shareTarget";
 
 type Stage = "idle" | "working" | "saved" | "failed";
@@ -17,14 +22,22 @@ type Stage = "idle" | "working" | "saved" | "failed";
 const subscribeNever = () => () => {};
 
 /**
- * One keepsake, on a page of its own, with the phone's own way of keeping it.
+ * One keepsake, on a page of its own, and the shortest honest route from here
+ * into the person's own photos.
  *
- * The QR used to point straight at the file, which meant the phone downloaded
- * it into whatever folder it downloads things into — Files on an iPhone, where
- * it is nowhere near the camera roll. A page can do better, because a page can
- * hand the file to the operating system and let it offer "Save Image" and
- * "Save Video". That sheet is the only route into Photos that exists, and it
- * is the phone's own, not something this app pretends to do.
+ * There are two such routes and they belong to different platforms, which is
+ * why this does not simply always open the share sheet. On an iPhone the sheet
+ * is the only way into Photos at all — a download there lands in Files, which
+ * is nowhere near the camera roll. Everywhere else the sheet is a chooser
+ * standing in front of a file somebody already asked for, and an ordinary
+ * download is both quicker and better: Android's media scanner picks a
+ * downloaded image or video up and it appears in the gallery by itself.
+ *
+ * Neither route trusts the storage link to name the file. That bucket discards
+ * `response-content-disposition` on a signed URL, so the browser was left
+ * inventing a name — which is how a photo strip arrived saved as something that
+ * was not a .png, and how a phone came to treat a photograph as anonymous data.
+ * The bytes are fetched here and the name is decided here.
  */
 export function KeepsakeView({
   url,
@@ -55,20 +68,21 @@ export function KeepsakeView({
   );
 
   // Read through useSyncExternalStore rather than an effect: `navigator` does
-  // not exist while this renders on the server, and the server must answer
-  // "no" so the markup it sends matches what the browser first draws.
-  const canShare = useSyncExternalStore(
+  // not exist while this renders on the server, so the server answers with the
+  // route that needs nothing from the browser, and the markup it sends matches
+  // what the browser first draws.
+  const route = useSyncExternalStore(
     subscribeNever,
-    () => canShareFiles(undefined, probe),
-    () => false,
+    () => saveRoute(canShareFiles(undefined, probe)),
+    (): SaveRoute => "download",
   );
 
-  // Long-press-to-save is a genuinely chooser-free route, but it's an iOS
+  // Long-press-to-save is a genuinely chooser-free route, but it is an iOS
   // Safari context-menu behaviour, not something this code can offer anywhere
   // else — so the tip only appears where it will actually work.
-  const isIOS = useSyncExternalStore(
+  const isApple = useSyncExternalStore(
     subscribeNever,
-    () => /iPad|iPhone|iPod/.test(globalThis.navigator?.userAgent ?? ""),
+    () => isApplePhotosDevice(),
     () => false,
   );
 
@@ -97,28 +111,28 @@ export function KeepsakeView({
       return;
     }
 
-    if (!canShare) {
-      // No share sheet here, so hand it over as an ordinary download.
-      const href = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = href;
-      a.download = filename;
-      a.click();
-      window.setTimeout(() => URL.revokeObjectURL(href), 0);
-      setStage("saved");
+    // Retyped from what we KNOW this keepsake is rather than from what the
+    // response happened to say. Both an operating system's "can I save this?"
+    // and a share sheet's ranking are decided from the type and the extension
+    // together, so neither is left to chance.
+    const typed =
+      blob.type === contentType ? blob : new Blob([blob], { type: contentType });
+
+    if (route === "download") {
+      setStage(downloadBlob(typed, filename) ? "saved" : "failed");
       return;
     }
 
     // No title/text alongside the file: iOS is more likely to rank
     // "Save to Photos"/"Save Video" first in the sheet when the payload is
     // file-only, rather than burying it behind a mixed text+file share.
-    const outcome = await shareFile(fileFromBlob(blob, filename, contentType));
+    const outcome = await shareFile(fileFromBlob(typed, filename, contentType));
     // Cancelling the sheet is a decision, not a fault, so it goes quietly back
     // to the start rather than showing anyone an error.
     setStage(
       outcome === "shared" ? "saved" : outcome === "dismissed" ? "idle" : "failed",
     );
-  }, [canShare, filename, contentType]);
+  }, [route, filename, contentType]);
 
   return (
     <div className="flex w-full max-w-md flex-col items-center gap-7">
@@ -148,7 +162,9 @@ export function KeepsakeView({
         label={`Hold to download this ${noun}`}
         hint={
           stage === "saved"
-            ? "Download succeeded"
+            ? route === "share"
+              ? "Kept"
+              : "Downloaded"
             : stage === "failed"
               ? "That didn’t save — the link may have closed with the room"
               : "Hold to fill, for download"
@@ -156,14 +172,27 @@ export function KeepsakeView({
       />
 
       <p className="max-w-xs text-center text-[0.65rem] leading-relaxed text-[var(--mist)]">
-        {canShare
-          ? "Your phone will ask where to keep it. Choose Save Image or Save Video and it goes straight to your photos."
-          : "This link stops working when the room does."}
+        {route === "share"
+          ? `Your phone will ask where to keep it. Choose Save ${
+              kind === "clip" ? "Video" : "Image"
+            } and it goes straight to your photos.`
+          : `It downloads straight to this device — no menu. On a phone your gallery picks the ${noun} up from there.`}
       </p>
 
-      {canShare && isIOS && kind === "strip" && (
+      {isApple && kind === "strip" && (
         <p className="max-w-xs text-center text-[0.65rem] leading-relaxed text-[var(--mist)]">
           Tip: press and hold the photo above to save it directly — no menu.
+        </p>
+      )}
+
+      {/* Said plainly rather than discovered afterwards: this browser recorded
+          a format Photos will not take, and no amount of holding will change
+          that. The clip still plays, and it still saves — just to Files. */}
+      {kind === "clip" && !phoneCanKeep(contentType) && (
+        <p className="max-w-xs text-center text-[0.65rem] leading-relaxed text-[var(--neon)]">
+          This one was recorded as WebM, which a phone’s photo library won’t
+          accept. It will save to your files instead. Recording again on a
+          different browser gives you an MP4, which Photos does take.
         </p>
       )}
     </div>

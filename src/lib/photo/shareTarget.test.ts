@@ -1,11 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   canShareFiles,
+  downloadBlob,
   fileFromBlob,
+  isApplePhotosDevice,
   keepsakeFilename,
+  saveRoute,
   shareFile,
   type ShareCapable,
 } from "./shareTarget";
+
+const IPHONE =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1";
+const IPAD_OS =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/17.5 Safari/605.1.15";
+const ANDROID =
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36";
 
 function file(name = "photo.png", type = "image/png"): File {
   return new File(["bytes"], name, { type });
@@ -125,6 +135,108 @@ describe("fileFromBlob", () => {
 
   it("removes quotes and spaces while retaining safe punctuation", () => {
     expect(fileFromBlob(new Blob(), `my "photo" file..png`).name).toBe("myphoto file.png".replace(" ", ""));
+  });
+});
+
+describe("isApplePhotosDevice", () => {
+  it("recognises an iPhone", () => {
+    expect(isApplePhotosDevice({ userAgent: IPHONE })).toBe(true);
+  });
+
+  it("recognises an iPad pretending to be a Mac", () => {
+    expect(isApplePhotosDevice({ userAgent: IPAD_OS, maxTouchPoints: 5 })).toBe(true);
+  });
+
+  it("does not mistake a real Mac for an iPad", () => {
+    expect(isApplePhotosDevice({ userAgent: IPAD_OS, maxTouchPoints: 0 })).toBe(false);
+  });
+
+  it("treats a Mac with no touch information as a Mac", () => {
+    expect(isApplePhotosDevice({ userAgent: IPAD_OS })).toBe(false);
+  });
+
+  it("says no to Android", () => {
+    expect(isApplePhotosDevice({ userAgent: ANDROID, maxTouchPoints: 5 })).toBe(false);
+  });
+
+  it("says no for a null or absent navigator", () => {
+    expect(isApplePhotosDevice(null)).toBe(false);
+    vi.stubGlobal("navigator", undefined);
+    expect(isApplePhotosDevice()).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("reads the global navigator when nothing is passed", () => {
+    vi.stubGlobal("navigator", { userAgent: IPHONE });
+    expect(isApplePhotosDevice()).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("saveRoute", () => {
+  it("uses the sheet on an iPhone that can share the file", () => {
+    expect(saveRoute(true, { userAgent: IPHONE })).toBe("share");
+  });
+
+  it("downloads on Android even though it could share", () => {
+    // The whole point of the fix: a chooser is not a feature here, because a
+    // downloaded image reaches the gallery on its own.
+    expect(saveRoute(true, { userAgent: ANDROID })).toBe("download");
+  });
+
+  it("downloads on an iPhone that cannot share this particular file", () => {
+    expect(saveRoute(false, { userAgent: IPHONE })).toBe("download");
+  });
+
+  it("downloads on a desktop", () => {
+    expect(saveRoute(false, { userAgent: IPAD_OS })).toBe("download");
+  });
+});
+
+describe("downloadBlob", () => {
+  function fakeDocument() {
+    const anchor = {
+      href: "",
+      download: "",
+      rel: "",
+      click: vi.fn(),
+      remove: vi.fn(),
+    };
+    const doc = {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    } as unknown as Document;
+    return { doc, anchor };
+  }
+
+  it("names the file itself rather than leaving it to the browser", () => {
+    const { doc, anchor } = fakeDocument();
+    expect(downloadBlob(new Blob(["x"], { type: "image/png" }), "festibooth-AB.png", doc)).toBe(
+      true,
+    );
+    expect(anchor.download).toBe("festibooth-AB.png");
+    expect(anchor.click).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches the anchor before clicking it", () => {
+    const { doc, anchor } = fakeDocument();
+    downloadBlob(new Blob(["x"]), "x.png", doc);
+    expect(doc.body.appendChild).toHaveBeenCalledWith(anchor);
+    expect(anchor.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports failure rather than throwing when there is no document", () => {
+    expect(downloadBlob(new Blob(["x"]), "x.png", null)).toBe(false);
+  });
+
+  it("reports failure when the document refuses", () => {
+    const doc = {
+      createElement: () => {
+        throw new Error("no");
+      },
+      body: { appendChild: vi.fn() },
+    } as unknown as Document;
+    expect(downloadBlob(new Blob(["x"]), "x.png", doc)).toBe(false);
   });
 });
 
