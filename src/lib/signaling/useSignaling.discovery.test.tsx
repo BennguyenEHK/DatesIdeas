@@ -15,24 +15,28 @@ import { useSignaling, type PeerInfo } from "./useSignaling";
  */
 
 let fetchMock: ReturnType<typeof vi.fn>;
-let peers: Array<{ them: PeerInfo; iOffer: boolean }>;
+let peers: Array<{ them: PeerInfo; iOffer: boolean; restarted: boolean }>;
 
 /**
  * A fetch that answers a POST with an empty ack and every poll with one join
  * from somebody else. Built per call, because a Response body can only be read
  * once and the poll loop reads one on every tick.
  */
-function fetchReturning(join: { joinedAt: number; sentAt?: number } | null) {
+function fetchReturning(
+  join: { joinedAt: number; sentAt?: number } | null,
+  live?: { current: { joinedAt: number; sentAt?: number } | null },
+) {
   return vi.fn((_url: string, init?: RequestInit) => {
+    const current = live ? live.current : join;
     const signals =
-      init?.method === "POST" || join === null
+      init?.method === "POST" || current === null
         ? []
         : [
             {
               kind: "join",
               identity: "them-0000",
-              joinedAt: join.joinedAt,
-              ...(join.sentAt === undefined ? {} : { sentAt: join.sentAt }),
+              joinedAt: current.joinedAt,
+              ...(current.sentAt === undefined ? {} : { sentAt: current.sentAt }),
             },
           ];
     return Promise.resolve(
@@ -44,7 +48,8 @@ function fetchReturning(join: { joinedAt: number; sentAt?: number } | null) {
 }
 
 const handlers = () => ({
-  onPeer: (them: PeerInfo, iOffer: boolean) => void peers.push({ them, iOffer }),
+  onPeer: (them: PeerInfo, iOffer: boolean, restarted: boolean) =>
+    void peers.push({ them, iOffer, restarted }),
   onOffer: () => {},
   onAnswer: () => {},
   onIce: () => {},
@@ -124,6 +129,49 @@ describe("finding someone who was already in the room", () => {
     renderHook(() => useSignaling("ABCDEF", handlers(), false, true));
 
     await waitFor(() => expect(peers).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(peers).toHaveLength(1);
+  });
+
+  /**
+   * Pressing Back into a room you were already in.
+   *
+   * The returning side rebuilds everything and announces with a later
+   * joinedAt. The side that stayed used to read that as an echo of the person
+   * it had already paired with and ignore it -- so it never offered again,
+   * while the returning side sat waiting for an offer that was never coming.
+   */
+  it("pairs again when the same person comes back on a new connection", async () => {
+    const first = Date.now() - 60_000;
+    const live = { current: { joinedAt: first, sentAt: Date.now() } };
+    fetchMock = fetchReturning(null, live);
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderHook(() => useSignaling("ABCDEF", handlers(), false, true));
+    await waitFor(() => expect(peers).toHaveLength(1));
+    expect(peers[0].restarted).toBe(false);
+
+    // They leave and come straight back: same person, new arrival.
+    live.current = { joinedAt: Date.now(), sentAt: Date.now() };
+
+    await waitFor(() => expect(peers).toHaveLength(2));
+    expect(peers[1].restarted).toBe(true);
+    expect(peers[1].them.identity).toBe(peers[0].them.identity);
+    // We were here first now, so offering is ours to do.
+    expect(peers[1].iOffer).toBe(true);
+  });
+
+  it("does not re-pair on an unchanged repeat of the same arrival", async () => {
+    const arrival = Date.now() - 1000;
+    const live = { current: { joinedAt: arrival, sentAt: Date.now() } };
+    fetchMock = fetchReturning(null, live);
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderHook(() => useSignaling("ABCDEF", handlers(), false, true));
+    await waitFor(() => expect(peers).toHaveLength(1));
+
+    // Their re-announcement: same arrival, fresher sentAt. Not a restart.
+    live.current = { joinedAt: arrival, sentAt: Date.now() };
     await new Promise((r) => setTimeout(r, 400));
     expect(peers).toHaveLength(1);
   });

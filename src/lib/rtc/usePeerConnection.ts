@@ -316,7 +316,12 @@ export function usePeerConnection(
   const signaling = useSignaling(
     code,
     {
-    onPeer: async (_peer: PeerInfo, iOffer: boolean) => {
+    onPeer: async (_peer: PeerInfo, iOffer: boolean, restarted: boolean) => {
+      // They came back on a new connection. Ours is pointing at the session
+      // they left, and no part of it can be reused -- including the flag that
+      // says we already offered, which is what used to leave this side
+      // certain it had done its job while the other waited forever.
+      if (restarted) dropConnection();
       if (!iOffer || offeredRef.current) return;
       offeredRef.current = true;
       setState("connecting");
@@ -471,6 +476,41 @@ export function usePeerConnection(
     const pc = pcRef.current;
     if (!pc) return;
     void leashSenders(pc.getSenders(), mode);
+  }, []);
+
+  /**
+   * Throws away the current connection without touching the camera or this
+   * side's place in the room.
+   *
+   * Used when the OTHER person comes back: their connection is brand new and
+   * everything held here describes the session they walked out of. Kept
+   * separate from `retry` on purpose -- retry re-announces us, which would
+   * give this side a later arrival time and could have the two of us swapping
+   * who offers back and forth forever.
+   */
+  const dropConnection = useCallback(() => {
+    cancelRecovery(recoveryTimer);
+    connectedAt.current = null;
+    topologyRef.current = null;
+    trafficRef.current = null;
+    ratesRef.current = null;
+    clockRef.current?.stop();
+    clockRef.current = null;
+    setClock(null);
+    dcRef.current?.close();
+    dcRef.current = null;
+    pcRef.current?.close();
+    pcRef.current = null;
+    offeredRef.current = false;
+    pendingIce.current = [];
+    jitterRef.current = null;
+    audioRef.current = null;
+    setRemoteStream(null);
+    setPath(null);
+    setJitterMs(null);
+    setAudioJitter(null);
+    setIceSettled(false);
+    setState("connecting");
   }, []);
 
   const retry = useCallback(() => {

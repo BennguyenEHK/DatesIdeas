@@ -51,7 +51,12 @@ export type SignalStatus =
   | "error";
 
 export interface SignalingHandlers {
-  onPeer: (peer: PeerInfo, iOffer: boolean) => void;
+  /**
+   * `restarted` marks the same person arriving again on a brand new
+   * connection -- pressing Back into the room, or reloading. Everything held
+   * about the previous session is rubbish and must be thrown away.
+   */
+  onPeer: (peer: PeerInfo, iOffer: boolean, restarted: boolean) => void;
   onOffer: (sdp: string) => void;
   onAnswer: (sdp: string) => void;
   onIce: (candidate: RTCIceCandidateInit) => void;
@@ -96,7 +101,7 @@ export function useSignaling(
   const handlersRef = useRef(handlers);
   const cursorRef = useRef(0);
   const identityRef = useRef<string | null>(null);
-  const seenPeerRef = useRef<string | null>(null);
+  const seenPeerRef = useRef<PeerInfo | null>(null);
   const pairedRef = useRef(paired);
   // Set from either the announce or a later send, so it lives outside the
   // polling effect that both of them have to be able to stop.
@@ -167,13 +172,25 @@ export function useSignaling(
           // for three minutes was discarded as debris from a previous evening.
           const announcedAt = msg.sentAt ?? msg.joinedAt;
           if (Date.now() - announcedAt > JOIN_FRESHNESS_MS) return;
-          // Both peers see each other's join row, so guard against acting twice.
-          if (seenPeerRef.current === msg.identity) return;
-          seenPeerRef.current = msg.identity;
+          // Both peers see each other's join row, so guard against acting
+          // twice -- but ONLY for the same arrival. The same person with a
+          // later joinedAt is not an echo, it is them coming back: pressing
+          // Back into the room builds a completely new connection on their
+          // side while ours still points at the session they walked out of.
+          // Treating that as a duplicate left both sides waiting forever, the
+          // one that stayed never offering because it believed it already had.
+          const seen = seenPeerRef.current;
+          const sameArrival =
+            seen !== null &&
+            seen.identity === msg.identity &&
+            msg.joinedAt <= seen.joinedAt;
+          if (sameArrival) return;
+          const restarted = seen !== null && seen.identity === msg.identity;
 
           const them = { identity: msg.identity, joinedAt: msg.joinedAt };
+          seenPeerRef.current = them;
           setStatus("paired");
-          handlersRef.current.onPeer(them, shouldOffer(me, them));
+          handlersRef.current.onPeer(them, shouldOffer(me, them), restarted);
           break;
         }
         case "offer":
