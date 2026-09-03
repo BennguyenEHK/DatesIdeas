@@ -91,16 +91,38 @@ afterEach(() => {
 });
 
 describe("pickMimeType", () => {
-  it("uses the candidate preference order", () => {
-    const support = { isTypeSupported: vi.fn((type: string) => type !== "video/webm;codecs=vp9") };
+  /**
+   * MP4 leads deliberately. A live photo is made to be scanned onto a phone,
+   * and an iPhone cannot save WebM to Photos at all -- so the format is chosen
+   * for where the file ends up, not for where it is recorded.
+   */
+  it("prefers MP4, because that is what a phone will keep", () => {
+    const support = { isTypeSupported: vi.fn(() => true) };
+    expect(pickMimeType(support)).toBe("video/mp4;codecs=avc1.42E01E");
+    expect(CLIP_MIME_TYPES[0]).toContain("mp4");
+  });
+
+  it("falls back through the candidates in order", () => {
+    const unsupported = new Set([
+      "video/mp4;codecs=avc1.42E01E",
+      "video/mp4",
+      "video/webm;codecs=vp9",
+    ]);
+    const support = { isTypeSupported: vi.fn((type: string) => !unsupported.has(type)) };
 
     expect(pickMimeType(support)).toBe("video/webm;codecs=vp8");
     expect(CLIP_MIME_TYPES).toEqual([
+      "video/mp4;codecs=avc1.42E01E",
+      "video/mp4",
       "video/webm;codecs=vp9",
       "video/webm;codecs=vp8",
       "video/webm",
-      "video/mp4",
     ]);
+  });
+
+  it("still records WebM where MP4 is unavailable", () => {
+    const support = { isTypeSupported: vi.fn((type: string) => type.startsWith("video/webm")) };
+    expect(pickMimeType(support)).toBe("video/webm;codecs=vp9");
   });
 
   it("returns null when no type is supported", () => {

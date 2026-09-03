@@ -103,6 +103,19 @@ function isUploadTicket(value: unknown): value is UploadTicket {
  * Ask the app only for a presigned ticket, then PUT the bytes directly to
  * storage because Vercel's serverless body limit cannot carry large live strips.
  */
+/**
+ * A media type without its parameters.
+ *
+ * MediaRecorder reports things like "video/mp4;codecs=avc1.42E01E", and the
+ * codec detail is true but not something a storage service should be asked to
+ * match on.
+ */
+export function baseMimeType(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const base = value.split(";")[0].trim().toLowerCase();
+  return base === "" ? null : base;
+}
+
 export async function uploadKeepsake(
   blob: Blob,
   options: {
@@ -126,6 +139,11 @@ export async function uploadKeepsake(
     }
 
     const extension = extensionFor(options.kind, options.mimeType);
+    // The recorder decides the format at runtime -- MP4 where the browser can
+    // manage it, WebM otherwise -- so the type has to follow the actual bytes.
+    // Declaring a fixed one here stored MP4 clips labelled as WebM, which is a
+    // file a phone opens and then refuses to play.
+    const contentType = baseMimeType(options.mimeType) ?? CONTENT_TYPE[options.kind];
     const fetchImpl = options.fetchImpl ?? globalThis.fetch;
     const ticketResponse = await fetchImpl("/api/keepsake", {
       method: "POST",
@@ -133,7 +151,7 @@ export async function uploadKeepsake(
       body: JSON.stringify({
         room: options.room,
         kind: options.kind,
-        contentType: CONTENT_TYPE[options.kind],
+        contentType,
         extension,
         sizeBytes: blob.size,
       }),
@@ -164,7 +182,8 @@ export async function uploadKeepsake(
 
     const uploadResponse = await fetchImpl(ticketBody.uploadUrl, {
       method: "PUT",
-      headers: { "Content-Type": CONTENT_TYPE[options.kind] },
+      // Must match the type the URL was signed for, or storage rejects the PUT.
+      headers: { "Content-Type": contentType },
       body: blob,
     });
     if (!uploadResponse.ok) return { ok: false, error: "the upload was refused" };

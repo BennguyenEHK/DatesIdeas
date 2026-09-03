@@ -85,7 +85,20 @@ export async function presignKeepsake(
       ),
       getSignedUrl(
         client,
-        new GetObjectCommand({ Bucket: resolvedConfig.bucket, Key: key }),
+        new GetObjectCommand({
+          Bucket: resolvedConfig.bucket,
+          Key: key,
+          // Without this the link OPENS the file instead of saving it: a
+          // browser handed an image or a video renders it inline, and the
+          // phone that scanned the QR ends up looking at a picture it has no
+          // copy of. "attachment" is the only thing that turns a link into a
+          // download, and it has to be signed into the URL because nothing
+          // else about the request is ours to control.
+          ResponseContentDisposition: `attachment; filename="${downloadName(key)}"`,
+          // Served as what it actually is, rather than whatever the object was
+          // stored as, so a phone knows what it has been given.
+          ResponseContentType: contentType,
+        }),
         { expiresIn: DOWNLOAD_URL_TTL_SEC },
       ),
     ]);
@@ -95,6 +108,25 @@ export async function presignKeepsake(
     // Signing failures can contain request details, so callers only get absence.
     return null;
   }
+}
+
+/**
+ * What the file should be called once it reaches someone's phone.
+ *
+ * Built from the key rather than passed in, so it cannot disagree with the
+ * object it names. The storage key carries a random token to stop two people
+ * overwriting each other, which is exactly the sort of thing nobody wants in
+ * their downloads folder — so the room and the kind survive and the token does
+ * not. Quotes and backslashes are stripped because this string is interpolated
+ * into a Content-Disposition header.
+ */
+export function downloadName(key: string): string {
+  const match = /^keepsakes\/([A-Za-z0-9_-]+)\/(strip|clip)-[A-Za-z0-9_-]+\.([a-z0-9]+)$/.exec(
+    key,
+  );
+  if (match === null) return "festibooth";
+  const [, room, kind, extension] = match;
+  return `festibooth-${room}${kind === "clip" ? "-live" : ""}.${extension}`;
 }
 
 /** Whether a key is one this app is allowed to sign for. */

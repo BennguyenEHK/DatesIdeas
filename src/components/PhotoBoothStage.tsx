@@ -181,16 +181,29 @@ export function PhotoBoothStage({
         )}
       </AnimatePresence>
 
+      {/* The flash, and it must NOT wait for the review to clear.
+
+          It used to be gated on `review === null`, which meant it never once
+          appeared: the timeline schedules the flash and the review at the same
+          instant, React renders them in the same pass, and the guard was
+          therefore false at exactly the moment the flash existed. So a shot was
+          taken with no sign that anything had happened.
+
+          Firing it over the review is also what it should do — the frame whites
+          out at the moment of capture and fades to reveal the photograph
+          underneath, which is what a camera flash actually looks like. Kept
+          short of full white: this is a small booth on a screen, not a bulb in
+          your face. */}
       <AnimatePresence>
-        {review === null && flashing && (
+        {flashing && (
           <motion.div
             key="flash"
             aria-hidden
-            className="pointer-events-none absolute inset-0 bg-white"
-            initial={{ opacity: reduceMotion ? 0.25 : 0.9 }}
+            className="pointer-events-none absolute inset-0 z-10 bg-white"
+            initial={{ opacity: reduceMotion ? 0.2 : 0.72 }}
             animate={{ opacity: 0 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: reduceMotion ? 0.1 : 0.45, ease: "easeOut" }}
+            transition={{ duration: reduceMotion ? 0.1 : 0.42, ease: "easeOut" }}
           />
         )}
       </AnimatePresence>

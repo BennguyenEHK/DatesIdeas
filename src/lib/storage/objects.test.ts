@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { isKeepsakeKey, presignKeepsake, storageConfig } from "./objects";
+import { isKeepsakeKey, presignKeepsake, storageConfig,
+  downloadName,
+} from "./objects";
 
 const requiredStorageVars = [
   "NEON_STORAGE_ENDPOINT",
@@ -99,5 +101,52 @@ describe("presignKeepsake", () => {
     expect(result?.uploadUrl).toContain(key);
     expect(result?.downloadUrl).toContain(key);
     expect(result?.uploadUrl).not.toBe(result?.downloadUrl);
+  });
+});
+
+describe("downloadName", () => {
+  /**
+   * Without a filename the phone saves whatever the URL path suggests, which
+   * is the storage key complete with its random collision token.
+   */
+  it("names a strip after the evening, not after the storage token", () => {
+    expect(downloadName("keepsakes/ABCDEF/strip-9f2a1c.png")).toBe(
+      "festibooth-ABCDEF.png",
+    );
+  });
+
+  it("marks the moving version so it does not collide with the still", () => {
+    expect(downloadName("keepsakes/ABCDEF/clip-9f2a1c.mp4")).toBe(
+      "festibooth-ABCDEF-live.mp4",
+    );
+  });
+
+  it("keeps whatever extension the file actually has", () => {
+    expect(downloadName("keepsakes/ABCDEF/clip-9f2a1c.webm")).toBe(
+      "festibooth-ABCDEF-live.webm",
+    );
+  });
+
+  /**
+   * This string is interpolated into a Content-Disposition header, so a key
+   * that did not come from keepsakeKey must never reach it intact.
+   */
+  it("falls back to a plain name for anything it does not recognise", () => {
+    const QUOTE = String.fromCharCode(34);
+    const BACKSLASH = String.fromCharCode(92);
+    const strange = [
+      "",
+      "nonsense",
+      "keepsakes/A" + QUOTE + "B/strip-1.png",
+      "keepsakes/A" + BACKSLASH + "B/clip-1.mp4",
+      "../etc/passwd",
+      "keepsakes/ABCDEF/other-1.png",
+    ];
+    for (const key of strange) {
+      const name = downloadName(key);
+      expect(name).toBe("festibooth");
+      expect(name.includes(QUOTE)).toBe(false);
+      expect(name.includes(BACKSLASH)).toBe(false);
+    }
   });
 });

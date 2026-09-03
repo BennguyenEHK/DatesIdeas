@@ -291,7 +291,9 @@ export function RoomClient({ code }: { code: string }) {
           .catch(() => null);
       }
       if (blob === null) return { ok: false, error: "there was nothing to send" };
-      return uploadKeepsake(blob, { room: code, kind });
+      // The recorder picks its own format at runtime, so the blob is the only
+      // thing that actually knows what this file is.
+      return uploadKeepsake(blob, { room: code, kind, mimeType: blob.type });
     },
     [booth, code],
   );

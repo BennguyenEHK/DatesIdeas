@@ -7,7 +7,6 @@ import {
   DOWNLOAD_URL_TTL_SEC,
 } from "@/lib/storage/objects";
 import {
-  CONTENT_TYPE,
   MAX_UPLOAD_MB,
   keepsakeKey,
   randomToken,
@@ -18,8 +17,19 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const KINDS: readonly KeepsakeKind[] = ["strip", "clip"];
-/** Only the two shapes this app itself produces. */
+/** Only the shapes this app itself produces. */
 const EXTENSIONS = new Set(["png", "webm", "mp4"]);
+/**
+ * What a keepsake is allowed to be stored as.
+ *
+ * An allowlist rather than a passthrough: the signed URL is issued for exactly
+ * one content type, so an unchecked value would let a caller have this app
+ * sign a link serving whatever it liked from our own bucket.
+ */
+const CONTENT_TYPES: Record<KeepsakeKind, readonly string[]> = {
+  strip: ["image/png"],
+  clip: ["video/mp4", "video/webm"],
+};
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 });
@@ -48,7 +58,7 @@ export async function POST(request: Request) {
     return bad("expected a json body");
   }
 
-  const { room, kind, extension, sizeBytes } = (body ?? {}) as Record<
+  const { room, kind, extension, contentType, sizeBytes } = (body ?? {}) as Record<
     string,
     unknown
   >;
@@ -71,6 +81,12 @@ export async function POST(request: Request) {
   }
 
   const asKind = kind as KeepsakeKind;
+  if (
+    typeof contentType !== "string" ||
+    !CONTENT_TYPES[asKind].includes(contentType)
+  ) {
+    return bad("invalid content type");
+  }
   // Checked again on the server, because the client's limit is a courtesy to
   // the person waiting and this one is the actual rule. A signed URL is a
   // capability: whatever it permits is what will end up in the bucket.
@@ -97,7 +113,7 @@ export async function POST(request: Request) {
   const key = keepsakeKey(code, asKind, extension, randomToken());
   if (!isKeepsakeKey(key)) return bad("could not name that file");
 
-  const signed = await presignKeepsake(key, CONTENT_TYPE[asKind]);
+  const signed = await presignKeepsake(key, contentType);
   if (signed === null) {
     // Configured storage is optional: without it the booth still works and
     // only the QR modes are unavailable. Say so plainly rather than failing

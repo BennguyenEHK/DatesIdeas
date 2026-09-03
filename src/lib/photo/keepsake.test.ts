@@ -159,7 +159,12 @@ describe("keepsake helpers", () => {
     expect(result).toEqual({ ok: false, error: "the upload could not finish" });
   });
 
-  it("posts the ticket request and puts the blob with the ticket content type", async () => {
+  /**
+   * The type must follow the actual bytes. This once asserted "video/webm" for
+   * an MP4 blob, which is what the code did -- and a file stored under the
+   * wrong type is one a phone downloads and then refuses to play.
+   */
+  it("declares the format the blob actually is, not a fixed one", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -180,14 +185,14 @@ describe("keepsake helpers", () => {
       body: JSON.stringify({
         room: "ROOM_1",
         kind: "clip",
-        contentType: "video/webm",
+        contentType: "video/mp4",
         extension: "mp4",
         sizeBytes: 12,
       }),
     }));
     expect(fetchImpl).toHaveBeenNthCalledWith(2, "https://upload", expect.objectContaining({
       method: "PUT",
-      headers: { "Content-Type": "video/webm" },
+      headers: { "Content-Type": "video/mp4" },
       body: source,
     }));
   });

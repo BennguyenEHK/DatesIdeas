@@ -2,15 +2,24 @@
 export const CLIP_FPS = 24;
 
 /**
- * Candidate container/codec strings, best first. WebM is listed before MP4
- * because MediaRecorder support for MP4 is recent and uneven, while every
- * browser that can record at all can record WebM.
+ * Candidate container/codec strings, best first.
+ *
+ * MP4 leads, and it is chosen for where the file ENDS UP rather than for where
+ * it is made. A live photo exists to be scanned onto a phone — and an iPhone
+ * cannot save WebM to Photos at all, while Android puts it somewhere a gallery
+ * often will not look. H.264 in MP4 is the one video format every phone will
+ * simply keep.
+ *
+ * WebM stays behind it as the fallback, because a browser that cannot record
+ * MP4 can always record WebM, and a live photo that plays on a laptop is worth
+ * more than none at all.
  */
 export const CLIP_MIME_TYPES: readonly string[] = [
+  "video/mp4;codecs=avc1.42E01E",
+  "video/mp4",
   "video/webm;codecs=vp9",
   "video/webm;codecs=vp8",
   "video/webm",
-  "video/mp4",
 ];
 
 /**
