@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
+import { HoldHeart } from "./HoldHeart";
 import { qrDataUrl, QR_SIZE } from "@/lib/photo/qr";
 import type { KeepsakeKind } from "@/lib/photo/keepsake";
 
@@ -153,50 +154,18 @@ export function SaveMenu({
         )}
       </AnimatePresence>
 
-      {mode === "local" && <HeartDownload onClick={onDownload} />}
+      {mode === "local" && (
+        <HoldHeart
+          onComplete={onDownload}
+          label="Hold to save the strip to this computer"
+          hint="Hold the heart until it fills"
+        />
+      )}
 
       {(mode === "picture" || mode === "video") && (
         <QrCard busy={busy} qr={qr} link={link} error={error} />
       )}
     </div>
-  );
-}
-
-/**
- * The download itself, as a heart that beats.
- *
- * Deliberately the only thing on screen that moves once the strip has
- * developed: this is the moment someone decides to keep the evening, and a
- * pulse is the difference between a control and a gesture. It beats at about
- * seventy a minute, which is a resting heart rate — faster reads as anxious.
- */
-function HeartDownload({ onClick }: { onClick: () => void }) {
-  const reduceMotion = useReducedMotion();
-
-  return (
-    <motion.button
-      type="button"
-      onClick={onClick}
-      aria-label="Download the strip to this computer"
-      className="relative flex h-20 w-20 items-center justify-center text-[var(--neon)] transition-colors hover:text-[var(--dress)]"
-      animate={reduceMotion ? undefined : { scale: [1, 1.12, 1, 1.06, 1] }}
-      transition={
-        reduceMotion
-          ? undefined
-          : { duration: 0.86, repeat: Infinity, ease: "easeInOut", times: [0, 0.14, 0.34, 0.48, 1] }
-      }
-      whileTap={{ scale: 0.92 }}
-    >
-      <svg viewBox="0 0 32 29" className="h-full w-full drop-shadow-[0_6px_18px_rgba(199,75,109,0.45)]">
-        <path
-          fill="currentColor"
-          d="M16 28.5 3.4 15.9a8 8 0 0 1 11.3-11.3l1.3 1.3 1.3-1.3A8 8 0 0 1 28.6 15.9Z"
-        />
-      </svg>
-      <span className="absolute -bottom-5 whitespace-nowrap text-[0.65rem] tracking-[0.2em] text-[var(--mist)]">
-        SAVE
-      </span>
-    </motion.button>
   );
 }
 
