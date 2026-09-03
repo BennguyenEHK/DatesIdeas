@@ -15,6 +15,16 @@ import {
   type AudioSample,
   type AudioFormat,
 } from "./audioStats";
+import {
+  readTopology,
+  readTraffic,
+  trafficRates,
+  formatReport,
+  type Topology,
+  type TrafficSample,
+  type TrafficRates,
+} from "./diagnostics";
+import { leashSenders, type VideoMode } from "./videoLeash";
 import { getIdentity } from "@/lib/history/identity";
 import {
   useSignaling,
@@ -68,6 +78,10 @@ export interface PeerApi {
   mediaError: string | null;
   clock: SyncedClock | null;
   send: (m: PeerMessage) => void;
+  /** Everything known about the route, as pasteable text. */
+  report: (activity: string | null) => string;
+  /** Caps the outgoing camera, or lets it run free. */
+  setVideoMode: (mode: VideoMode) => void;
   retry: () => void;
 }
 
@@ -79,6 +93,22 @@ const PATH_POLL_MS = 3000;
  * would poll twice a second for the whole call.
  */
 const ICE_SETTLE_GRACE_MS = 15_000;
+
+/**
+ * How long a call may sit in "disconnected" before we go and get it.
+ *
+ * "disconnected" is limbo, not death: packets stopped arriving, but nothing
+ * has formally broken and the browser will often heal it by itself within a
+ * second or two. Restarting immediately would tear down calls that were about
+ * to recover on their own.
+ *
+ * But the browser is also allowed to sit there indefinitely, and it does —
+ * which is the call that appears frozen and never comes back. Waiting for
+ * "failed" is not a plan, because on some networks that transition never
+ * arrives. So: long enough for self-healing, short enough that nobody has
+ * time to give up and reload the page.
+ */
+const DISCONNECTED_GRACE_MS = 4000;
 
 const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
@@ -122,6 +152,15 @@ export function usePeerConnection(
   const clockRef = useRef<SyncedClock | null>(null);
   const offeredRef = useRef(false);
   const pendingIce = useRef<RTCIceCandidateInit[]>([]);
+  // Declared here, above the connection handlers that arm and cancel it: the
+  // React Compiler refuses a ref first written inside a closure below it.
+  const recoveryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Kept in refs rather than state: nothing renders from them, and a report is
+  // only ever built at the instant someone asks for one.
+  const topologyRef = useRef<Topology | null>(null);
+  const trafficRef = useRef<TrafficSample | null>(null);
+  const ratesRef = useRef<TrafficRates | null>(null);
+  const connectedAt = useRef<number | null>(null);
   const onMessageRef = useRef(onMessage);
   useEffect(() => {
     onMessageRef.current = onMessage;
@@ -241,12 +280,31 @@ export function usePeerConnection(
     pc.onconnectionstatechange = () => {
       switch (pc.connectionState) {
         case "connected":
+          // Whatever the blip was, it healed. Stand the rescue down before it
+          // restarts a connection that is now working perfectly well.
+          cancelRecovery(recoveryTimer);
+          // Kept from the FIRST connect, not refreshed on every recovery: the
+          // report should say how long the evening has been going, not how
+          // long since the last hiccup.
+          connectedAt.current ??= Date.now();
           setState("connected");
           break;
         case "disconnected":
           setState("reconnecting");
+          // Only the side that made the offer may restart, or both would
+          // renegotiate at once and collide.
+          if (!offeredRef.current || recoveryTimer.current !== null) break;
+          recoveryTimer.current = setTimeout(() => {
+            recoveryTimer.current = null;
+            // Re-read the live state: four seconds is long enough for the
+            // browser to have quietly fixed it, and restarting a healthy
+            // connection is the one way this can make things worse.
+            if (pc.connectionState !== "disconnected") return;
+            void restartIce(pc, sendSignalRef.current);
+          }, DISCONNECTED_GRACE_MS);
           break;
         case "failed":
+          cancelRecovery(recoveryTimer);
           setState("failed");
           if (offeredRef.current) void restartIce(pc, sendSignalRef.current);
           break;
@@ -326,6 +384,17 @@ export function usePeerConnection(
       if (cancelled) return;
       setPath(selectPath(stats));
 
+      // The evidence behind the report, gathered on the poll that is already
+      // running. Rates need two samples, so they only appear from the second
+      // poll onwards — which is why the button is worth pressing a little way
+      // into a call rather than the instant it connects.
+      topologyRef.current = readTopology(stats);
+      const traffic = readTraffic(stats);
+      if (traffic) {
+        ratesRef.current = trafficRates(trafficRef.current, traffic);
+        trafficRef.current = traffic;
+      }
+
       const sample = readJitter(stats);
       if (sample) {
         setJitterMs(jitterDelayMs(jitterRef.current, sample));
@@ -350,7 +419,9 @@ export function usePeerConnection(
   }, [state]);
 
   useEffect(() => {
+    const pending = recoveryTimer;
     return () => {
+      cancelRecovery(pending);
       clockRef.current?.stop();
       dcRef.current?.close();
       pcRef.current?.close();
@@ -359,7 +430,55 @@ export function usePeerConnection(
     };
   }, [code, attempt]);
 
+  /**
+   * Everything known about the route, as text to paste to someone who can act
+   * on it.
+   *
+   * This exists because the interesting failures happen at eleven at night on
+   * a laptop in another country. A number read off the status bar and typed
+   * into a chat loses the very fields that distinguish "the relay is far away"
+   * from "the video is trampling the voice" — so the app writes them down.
+   */
+  const report = useCallback(
+    (activity: string | null) =>
+      formatReport({
+        topology: topologyRef.current,
+        rates: ratesRef.current,
+        sample: trafficRef.current,
+        netRttMs: path?.netRtt ?? null,
+        pingRttMs: rtt > 0 ? rtt : null,
+        audioJitterMs: audioJitter,
+        videoJitterMs: jitterMs,
+        audioCodec: audioFormat?.codec ?? null,
+        activity,
+        connectedForMs:
+          connectedAt.current === null ? null : Date.now() - connectedAt.current,
+      }),
+    [path, rtt, audioJitter, jitterMs, audioFormat],
+  );
+
+  /**
+   * Puts the camera on a leash, or takes it off.
+   *
+   * Called when karaoke opens and closes. Video is greedy and does not care
+   * who else is using the link: on a relayed intercontinental path an
+   * uncapped 720p stream is enough to push the voice packets into clumps,
+   * which the browser then absorbs by holding the voice back even further.
+   * Every other activity keeps full quality, because only singing is ruined
+   * by the delay this buys back.
+   */
+  const setVideoMode = useCallback((mode: VideoMode) => {
+    const pc = pcRef.current;
+    if (!pc) return;
+    void leashSenders(pc.getSenders(), mode);
+  }, []);
+
   const retry = useCallback(() => {
+    cancelRecovery(recoveryTimer);
+    connectedAt.current = null;
+    topologyRef.current = null;
+    trafficRef.current = null;
+    ratesRef.current = null;
     clockRef.current?.stop();
     dcRef.current?.close();
     pcRef.current?.close();
@@ -397,6 +516,8 @@ export function usePeerConnection(
     mediaError,
     clock,
     send,
+    report,
+    setVideoMode,
     retry,
   };
 }
@@ -416,6 +537,15 @@ async function restartIce(
   const sdp = preferMusicAudio(offer.sdp!);
   await pc.setLocalDescription({ type: "offer", sdp });
   sendSignal({ kind: "offer", sdp, from: getIdentity() });
+}
+
+/** Stands down a pending rescue, wherever the connection ended up. */
+function cancelRecovery(
+  timer: { current: ReturnType<typeof setTimeout> | null },
+): void {
+  if (timer.current === null) return;
+  clearTimeout(timer.current);
+  timer.current = null;
 }
 
 /**

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConnState } from "@/lib/rtc/usePeerConnection";
 import type { PathInfo } from "@/lib/rtc/path";
 import type { AudioFormat } from "@/lib/rtc/audioStats";
@@ -23,6 +24,13 @@ const DOT: Record<ConnState, string> = {
 function Item({ children }: { children: React.ReactNode }) {
   return <span className="text-[var(--mist)]">{children}</span>;
 }
+
+/**
+ * Past this, the other person's singing arrives late enough to hear as
+ * dragging however well the rest of the call is behaving. Worth calling out,
+ * because the buffer is the one part of the delay that is not distance.
+ */
+const LATE_VOICE_BUFFER_MS = 200;
 
 /**
  * Anything below 32kHz is a voice-call profile rather than a music one. The
@@ -51,12 +59,14 @@ export function ConnectionStatus({
   sending,
   rtt,
   jitterMs,
+  audioJitterMs,
   audioFormat,
   audioKbps,
   gestureReady,
   gestureError,
   gesturesOn,
   onToggleGestures,
+  onReport,
   onRetry,
 }: {
   state: ConnState;
@@ -64,12 +74,16 @@ export function ConnectionStatus({
   sending: boolean;
   rtt: number;
   jitterMs: number | null;
+  /** The voice buffer — the one that decides how late their singing lands. */
+  audioJitterMs: number | null;
   audioFormat: AudioFormat | null;
   audioKbps: number | null;
   gestureReady: boolean;
   gestureError: string | null;
   gesturesOn: boolean;
   onToggleGestures: (next: boolean) => void;
+  /** Builds the pasteable diagnostic text, at the moment it is asked for. */
+  onReport: () => string;
   onRetry: () => void;
 }) {
   return (
@@ -131,11 +145,32 @@ export function ConnectionStatus({
         </button>
       )}
 
-      {/* What the browser is holding video back by. Never shows up in `rtt`,
-          which times a text message, yet on a long link it can outweigh the
-          whole journey. Worth watching if the picture starts to stutter. */}
-      {state === "connected" && jitterMs !== null && (
-        <Item>buffer {Math.round(jitterMs)}ms</Item>
+      {/* What the browser is holding back before playing it. Never shows up in
+          `rtt`, which times a text message, yet on a long link it can outweigh
+          the whole journey.
+
+          Both are shown, and the voice comes first. It used to be video alone —
+          which was the wrong one to display, because the voice buffer is what
+          decides how late their singing arrives and it was measured all along
+          without ever being surfaced. The two also behave differently, so an
+          average of them would describe neither. */}
+      {state === "connected" && (audioJitterMs !== null || jitterMs !== null) && (
+        <Item>
+          buffer{" "}
+          {audioJitterMs !== null && (
+            <span
+              className={
+                audioJitterMs > LATE_VOICE_BUFFER_MS
+                  ? "text-[var(--neon)]"
+                  : undefined
+              }
+            >
+              {Math.round(audioJitterMs)}ms voice
+            </span>
+          )}
+          {audioJitterMs !== null && jitterMs !== null && " · "}
+          {jitterMs !== null && `${Math.round(jitterMs)}ms video`}
+        </Item>
       )}
 
       {/* What the voice is actually arriving as.
@@ -159,6 +194,8 @@ export function ConnectionStatus({
         </Item>
       )}
 
+      {state === "connected" && <CopyReport build={onReport} />}
+
       {(state === "failed" || state === "reconnecting") && (
         <button
           onClick={onRetry}
@@ -168,5 +205,64 @@ export function ConnectionStatus({
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * Puts the whole connection report on the clipboard.
+ *
+ * The reason this is a button and not a console log: the calls worth
+ * diagnosing happen late at night, on a laptop, in another country, and the
+ * person having the bad call is not going to open developer tools. One click
+ * and the evidence is in a chat message.
+ *
+ * Falls back to a selectable box when the clipboard refuses — which it does
+ * whenever the page is not focused, and silently. A copy button that quietly
+ * does nothing is worse than no copy button.
+ */
+function CopyReport({ build }: { build: () => string }) {
+  const [copied, setCopied] = useState(false);
+  const [fallback, setFallback] = useState<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const pending = timer;
+    return () => {
+      if (pending.current !== null) clearTimeout(pending.current);
+    };
+  }, []);
+
+  const copy = useCallback(() => {
+    const text = build();
+    const shown = () => {
+      setCopied(true);
+      if (timer.current !== null) clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 2200);
+    };
+    navigator.clipboard?.writeText(text).then(shown, () => setFallback(text));
+  }, [build]);
+
+  if (fallback !== null) {
+    return (
+      <textarea
+        readOnly
+        autoFocus
+        value={fallback}
+        onFocus={(e) => e.currentTarget.select()}
+        aria-label="Connection report — copy this"
+        className="h-20 w-72 rounded-[2px] border border-[var(--edge)] bg-transparent p-2 font-mono text-[0.6rem] text-[var(--mist)]"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Copy everything known about this connection, to paste to someone who can read it"
+      className="text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
+    >
+      {copied ? "Report copied" : "Copy report"}
+    </button>
   );
 }

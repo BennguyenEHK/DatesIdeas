@@ -45,6 +45,9 @@ import {
   smoothLatency,
 } from "@/lib/media/singerTurn";
 import type { PlayerHandle } from "@/lib/media/player";
+import type { SyncPrecision } from "@/lib/media/sync";
+import { useVolumeDuck } from "@/lib/media/useVolumeDuck";
+import { worthDucking } from "@/lib/media/duck";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
 
@@ -232,7 +235,18 @@ export function RoomClient({ code }: { code: string }) {
     [session, mine],
   );
 
-  const media = useSyncedPlayback(player, peer.clock, peer.send, offsetMs / 1000);
+  // A film and a song want opposite things from the same machinery. Half a
+  // second apart is invisible in a film and a third of a beat is not, and on
+  // YouTube every correction is a seek -- so holding a movie to the song's
+  // standard bought nothing anyone could perceive and paid for it in stutters.
+  const precision: SyncPrecision = current === "movie" ? "watching" : "singing";
+  const media = useSyncedPlayback(
+    player,
+    peer.clock,
+    peer.send,
+    offsetMs / 1000,
+    precision,
+  );
   useEffect(() => {
     acceptMedia.current = media.accept;
     clearMedia.current = media.clear;
@@ -274,6 +288,28 @@ export function RoomClient({ code }: { code: string }) {
     player?.setVolume(movie ? movieVolume : musicVolume);
   }, [player, movie, movieVolume, musicVolume]);
 
+  // The camera goes on a leash for karaoke and comes straight off afterwards.
+  //
+  // Video is greedy and does not care who else is using the link. On a relayed
+  // intercontinental path an uncapped 720p stream is enough to push the voice
+  // into clumps, and the browser answers clumpy audio by holding MORE of it
+  // back — so the picture quietly costs the singing twice. Every other
+  // activity keeps full quality, because only singing is ruined by that delay:
+  // cards is a conversation, a film is watched, and the photo booth builds its
+  // pictures locally from frames delay cannot touch.
+  //
+  // Re-applied whenever the connection comes back, because a restart replaces
+  // the senders and a leash tied to the old ones goes with them.
+  //
+  // Pulled out as locals so the effect depends on the two things it actually
+  // uses. Depending on `peer` would re-run it on every render, since the hook
+  // returns a fresh object each time.
+  const { state: peerState, setVideoMode } = peer;
+  useEffect(() => {
+    if (peerState !== "connected") return;
+    setVideoMode(karaoke ? "lean" : "full");
+  }, [karaoke, peerState, setVideoMode]);
+
   // Which of you is listening on what. Asked of the operating system rather
   // than of the person: the answer is already sitting in the device list, and
   // a question standing between someone and the song is a worse way to get it.
@@ -306,12 +342,19 @@ export function RoomClient({ code }: { code: string }) {
   // because a connection at nine in the evening is not the one you tuned to by
   // ear at seven -- but only RECORDED here, never applied. Nothing in this
   // effect moves the player.
+  //
+  // Measured at the ICE layer where one is available. `peer.rtt` times a
+  // DataChannel message, which travels through JavaScript -- so a main thread
+  // busy with gesture detection inflates it, and the music would then be
+  // rewound to accommodate our own CPU rather than the distance to Surabaya.
+  // The browser's own figure is taken below JavaScript and cannot be fooled.
+  const netRtt = peer.path?.netRtt ?? null;
   useEffect(() => {
     if (!karaoke) return;
-    const sample = measuredLatencyMs(peer.rtt, peer.audioJitterMs);
+    const sample = measuredLatencyMs(netRtt ?? peer.rtt, peer.audioJitterMs);
     if (sample === null) return;
     latencySamples.current = [...latencySamples.current, sample].slice(-9);
-  }, [karaoke, peer.rtt, peer.audioJitterMs]);
+  }, [karaoke, netRtt, peer.rtt, peer.audioJitterMs]);
 
   // The delay is decided once, when the turn changes hands, and then held for
   // the whole of that turn.
@@ -327,11 +370,28 @@ export function RoomClient({ code }: { code: string }) {
   // `turn` is the only dependency, which is the whole point: the connection is
   // remeasured every couple of seconds and none of those readings reach the
   // player any more.
+  //
+  // The change is applied inside a dip in the music rather than on top of it.
+  // YouTube cannot glide into a new position — the only correction it accepts
+  // is a seek, which stops and restarts the decoder — so the jump is hidden
+  // under a moment of silence instead of being smoothed away. A change too
+  // small to hear skips the dip: there the cure costs more than the disease.
+  const duck = useVolumeDuck(player, musicVolume);
+  const offsetRef = useRef(offsetMs);
+  useEffect(() => {
+    offsetRef.current = offsetMs;
+  });
   useEffect(() => {
     if (!karaoke || manualOffset) return;
     const wanted = offsetForTurn(turn, smoothLatency(latencySamples.current));
-    setOffsetMs((current) => settledOffset(current, wanted));
-  }, [karaoke, manualOffset, turn]);
+    const next = settledOffset(offsetRef.current, wanted);
+    if (next === offsetRef.current) return;
+    if (!worthDucking((next - offsetRef.current) / 1000)) {
+      setOffsetMs(next);
+      return;
+    }
+    duck(() => setOffsetMs(next));
+  }, [karaoke, manualOffset, turn, duck]);
 
 
 
@@ -505,12 +565,14 @@ export function RoomClient({ code }: { code: string }) {
             sending={peer.sending}
             rtt={peer.rtt}
             jitterMs={peer.jitterMs}
+            audioJitterMs={peer.audioJitterMs}
             audioFormat={peer.audioFormat}
             audioKbps={peer.audioKbps}
             gestureReady={gesture.ready}
             gestureError={gesture.error}
             gesturesOn={gesturesOn}
             onToggleGestures={setGesturesOn}
+            onReport={() => peer.report(current)}
             onRetry={peer.retry}
           />
           {photobooth && (

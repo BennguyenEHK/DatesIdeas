@@ -40,18 +40,46 @@ export interface PlaybackState extends Film {
 }
 
 /**
+ * What the two copies are being kept in step FOR.
+ *
+ * The same machinery serves singing and watching, and they want opposite
+ * things from it. This used to be one number, and singing won — which quietly
+ * made films worse, because the tolerance chosen for a beat is far tighter
+ * than a film needs and every correction it triggers is a visible stutter.
+ */
+export type SyncPrecision = "singing" | "watching";
+
+/**
  * How far out of step a player must be before it is worth seeking.
  *
  * Seeking is disruptive — it rebuffers and clicks the audio — so correcting
  * every small wobble sounds far worse than the wobble.
  *
- * This was a third of a second, chosen for watching a film where it is
- * invisible. For singing it is a third of a beat: the other person sings in
- * time with their own copy, and every millisecond their copy is behind yours
- * arrives as them dragging. Two players decoding the same file drift far
- * slower than this, so the tighter figure costs almost no extra seeking.
+ * A third of a beat. The other person sings in time with their own copy, and
+ * every millisecond their copy is behind yours arrives as them dragging. Two
+ * players decoding the same file drift far slower than this, so the tight
+ * figure costs almost no extra seeking.
  */
-export const DRIFT_TOLERANCE_SEC = 0.12;
+export const SINGING_TOLERANCE_SEC = 0.12;
+
+/**
+ * The same question for a film, where the answer is completely different.
+ *
+ * Nobody can perceive that two people watching together are half a second
+ * apart. Everybody perceives a seek — and on YouTube, which cannot change
+ * speed finely enough to ramp, a seek is the only correction available. So
+ * below this the cure does more damage than the disease, and the right move
+ * is to leave the film alone.
+ */
+export const WATCHING_TOLERANCE_SEC = 0.5;
+
+/** The default, and the tighter of the two: a wrong guess should over-correct
+ *  a film rather than under-correct a song. */
+export const DRIFT_TOLERANCE_SEC = SINGING_TOLERANCE_SEC;
+
+export function toleranceFor(precision: SyncPrecision): number {
+  return precision === "watching" ? WATCHING_TOLERANCE_SEC : SINGING_TOLERANCE_SEC;
+}
 
 /**
  * The largest tempo change a local player may use to catch up without making
@@ -87,9 +115,12 @@ export const NUDGE_LIMIT_SEC = 2;
  * a behind player has to run fast. At three percent, every second held erases
  * three hundredths of a second of error.
  */
-export function rampPlan(errorSec: number): { rate: number; forSec: number } | null {
+export function rampPlan(
+  errorSec: number,
+  toleranceSec: number = DRIFT_TOLERANCE_SEC,
+): { rate: number; forSec: number } | null {
   const magnitude = Math.abs(errorSec);
-  if (magnitude <= DRIFT_TOLERANCE_SEC) return null;
+  if (magnitude <= toleranceSec) return null;
 
   const forSec = magnitude / RAMP_RATE;
   if (forSec > MAX_RAMP_SEC) return null;
@@ -138,8 +169,12 @@ export function targetPosition(
   return Math.max(0, sharedPosition - offsetSec);
 }
 
-export function needsCorrection(actualSec: number, targetSec: number): boolean {
-  return Math.abs(actualSec - targetSec) > DRIFT_TOLERANCE_SEC;
+export function needsCorrection(
+  actualSec: number,
+  targetSec: number,
+  toleranceSec: number = DRIFT_TOLERANCE_SEC,
+): boolean {
+  return Math.abs(actualSec - targetSec) > toleranceSec;
 }
 
 /** The state to broadcast when this peer changes something. */

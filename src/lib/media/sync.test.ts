@@ -4,6 +4,8 @@ import {
   needsCorrection,
   stateAt,
   DRIFT_TOLERANCE_SEC,
+  SINGING_TOLERANCE_SEC,
+  toleranceFor,
   RAMP_RATE,
   MAX_RAMP_SEC,
   rampPlan,
@@ -240,5 +242,78 @@ describe("rampPlan", () => {
 
   it("seeks instead once a ramp would outlast its useful window", () => {
     expect(rampPlan(RAMP_RATE * MAX_RAMP_SEC + 0.001)).toBeNull();
+  });
+});
+
+describe("toleranceFor", () => {
+  it("holds a song to a third of a beat", () => {
+    expect(toleranceFor("singing")).toBe(SINGING_TOLERANCE_SEC);
+  });
+
+  it("gives a film far more room than a song", () => {
+    expect(toleranceFor("watching")).toBeGreaterThan(toleranceFor("singing"));
+  });
+
+  /**
+   * The number that matters. On YouTube every correction is a seek, and a
+   * seek is a stop-and-restart -- so a film policed to singing precision
+   * stutters roughly every time two independent players wobble apart, in
+   * exchange for closing a gap nobody watching could have perceived.
+   */
+  it("lets a film drift half a second before interrupting anyone", () => {
+    expect(toleranceFor("watching")).toBeGreaterThanOrEqual(0.4);
+  });
+
+  it("defaults the shared constant to the tighter of the two", () => {
+    expect(DRIFT_TOLERANCE_SEC).toBe(SINGING_TOLERANCE_SEC);
+  });
+});
+
+describe("needsCorrection with an explicit tolerance", () => {
+  const watching = toleranceFor("watching");
+
+  it("leaves a film alone at a gap that would move a song", () => {
+    expect(needsCorrection(30, 30.3)).toBe(true);
+    expect(needsCorrection(30, 30.3, watching)).toBe(false);
+  });
+
+  it("still corrects a film once it is genuinely adrift", () => {
+    expect(needsCorrection(30, 31.2, watching)).toBe(true);
+  });
+
+  it("measures the gap in both directions", () => {
+    expect(needsCorrection(30.3, 30, watching)).toBe(false);
+    expect(needsCorrection(31.2, 30, watching)).toBe(true);
+  });
+
+  it("treats a gap exactly on the tolerance as acceptable", () => {
+    expect(needsCorrection(30, 30 + watching, watching)).toBe(false);
+  });
+});
+
+describe("rampPlan with an explicit tolerance", () => {
+  const watching = toleranceFor("watching");
+
+  it("declines to chase a gap a film is allowed to have", () => {
+    expect(rampPlan(0.3, watching)).toBeNull();
+  });
+
+  /**
+   * The property that makes a film never change speed, and it falls out of
+   * the two numbers rather than needing a rule of its own: the largest error
+   * a ramp can absorb is RAMP_RATE * MAX_RAMP_SEC, which is smaller than the
+   * gap a film is allowed to have in the first place. So every error big
+   * enough to act on is already too big to ramp, and a film is only ever
+   * corrected by moving the playhead -- never by running fast or slow.
+   */
+  it("can never ramp a film, because the ramp window fits inside the tolerance", () => {
+    expect(RAMP_RATE * MAX_RAMP_SEC).toBeLessThan(watching);
+    for (const error of [0.51, 0.6, 1, 2, 5, -0.51, -0.6, -1, -5]) {
+      expect(rampPlan(error, watching)).toBeNull();
+    }
+  });
+
+  it("keeps the singing tolerance when none is given", () => {
+    expect(rampPlan(0.3)).toEqual(rampPlan(0.3, SINGING_TOLERANCE_SEC));
   });
 });

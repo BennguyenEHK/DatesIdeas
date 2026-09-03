@@ -5,12 +5,14 @@ import type { PlayerHandle } from "./player";
 import {
   needsCorrection,
   rampPlan,
+  toleranceFor,
   NUDGE_LIMIT_SEC,
   stateAt,
   targetPosition,
   NO_FILM,
   type Film,
   type PlaybackState,
+  type SyncPrecision,
 } from "./sync";
 import type { SyncedClock } from "@/lib/sync/SyncedClock";
 import type { PeerMessage } from "@/lib/rtc/protocol";
@@ -61,6 +63,9 @@ export function useSyncedPlayback(
   clock: SyncedClock | null,
   send: (m: PeerMessage) => void,
   offsetSec = 0,
+  /** How tightly to hold the two copies together. A film wants far less than
+   *  a song, and correcting it to a song's standard is what stutters it. */
+  precision: SyncPrecision = "singing",
 ): SyncedPlayback {
   // The handle arrives as a plain value and is kept here for the timers. No
   // ref crosses this hook's boundary in either direction: handing one out
@@ -104,10 +109,12 @@ export function useSyncedPlayback(
   const clockRef = useRef(clock);
   const sendRef = useRef(send);
   const offsetRef = useRef(offsetSec);
+  const precisionRef = useRef(precision);
   useEffect(() => {
     clockRef.current = clock;
     sendRef.current = send;
     offsetRef.current = offsetSec;
+    precisionRef.current = precision;
   });
 
   const now = useCallback(
@@ -241,12 +248,17 @@ export function useSyncedPlayback(
       cancelRamp();
       p.pause();
     }
+    // How far apart the two copies may sit before it is worth interrupting
+    // anyone. A film's answer is four times a song's, and using the song's
+    // figure for both is what made movie nights stutter.
+    const tolerance = toleranceFor(precisionRef.current);
+
     // The ramp creates intentional drift. Correcting it again on the safety
     // timer would turn the smooth repair back into the seek it replaces.
-    if (ramping.current || !needsCorrection(p.currentTime(), want)) return;
+    if (ramping.current || !needsCorrection(p.currentTime(), want, tolerance)) return;
 
     const error = p.currentTime() - want;
-    const plan = rampPlan(error);
+    const plan = rampPlan(error, tolerance);
     if (plan && cur.playing && p.setRate(plan.rate)) {
       startRamp(plan.forSec);
     } else if (Math.abs(error) <= NUDGE_LIMIT_SEC) {
