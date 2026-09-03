@@ -1,6 +1,14 @@
 import type { ShotCount } from "./strip";
 
 export const LEAD_MS = 7000;
+/**
+ * The number the countdown starts from.
+ *
+ * Exported because the live photo begins filming on this exact tick: the clip
+ * is the countdown, so its first frame and the first number on screen have to
+ * be the same instant.
+ */
+export const COUNT_FROM = LEAD_MS / 1000;
 export const REVIEW_MS = 2000;
 export const BETWEEN_MS = REVIEW_MS + LEAD_MS;
 export const REVEAL_MS = 700;
@@ -35,7 +43,7 @@ export function boothTimeline(startAt: number, shots: ShotCount): BoothStep[] {
   const steps: BoothStep[] = [];
   for (let shotIndex = 0; shotIndex < shots; shotIndex += 1) {
     const flashAt = startAt + LEAD_MS + shotIndex * BETWEEN_MS;
-    for (let value = 7; value >= 1; value -= 1) {
+    for (let value = COUNT_FROM; value >= 1; value -= 1) {
       steps.push({ at: flashAt - value * 1000, kind: "count", shotIndex, value });
     }
     steps.push({ at: flashAt, kind: "flash", shotIndex });

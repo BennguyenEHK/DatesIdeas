@@ -8,14 +8,28 @@ import type { SyncedClock } from "@/lib/sync/SyncedClock";
 
 // The heavy parts are covered by their own tests; what matters here is the
 // sequencing and what does or does not go out over the connection.
+let captureSeq = 0;
 vi.mock("./capture", () => ({
-  captureFrame: vi.fn(() => ({ canvas: {}, width: 640, height: 360 })),
+  captureFrame: vi.fn(() => ({
+    canvas: { id: (captureSeq += 1) },
+    width: 640,
+    height: 360,
+  })),
   frameToBlob: vi.fn(() => Promise.resolve(null)),
 }));
 vi.mock("./segment", () => ({
   cutOutOrOriginal: vi.fn((f: unknown) => Promise.resolve(f)),
 }));
-vi.mock("./paint", () => ({ paintStrip: vi.fn() }));
+vi.mock("./paint", () => ({
+  paintStrip: vi.fn(),
+  // Returns a marker rather than a real canvas: jsdom has no 2d context, and
+  // what these tests care about is WHICH captures were composed, not pixels.
+  shotPreview: vi.fn((_t: unknown, shot: { left: unknown; right: unknown }) => ({
+    composed: shot,
+    width: 960,
+    height: 540,
+  })),
+}));
 
 const video = () => createRef<HTMLVideoElement>();
 
@@ -118,21 +132,71 @@ describe("starting a sitting", () => {
     expect(captureFrame).toHaveBeenCalledTimes(4);
   });
 
-  it("shows the local captured photograph for every review", async () => {
+  /**
+   * The picture held up after each flash must contain BOTH of you.
+   *
+   * It used to be the local capture alone, which meant your screen held up you
+   * and theirs held up them -- so neither of you ever saw the two of you
+   * together until the strip finally developed.
+   */
+  it("holds up both of you after every flash, not just the local camera", async () => {
     const { captureFrame } = await import("./capture");
     const { result } = setup();
     act(() => result.current.setShots(2));
     act(() => result.current.start());
 
     await act(async () => void vi.advanceTimersByTime(400 + LEAD_MS));
-    expect(result.current.review).toEqual({
+    const first = vi.mocked(captureFrame).mock.results;
+    expect(result.current.review).toMatchObject({
       shotIndex: 0,
-      frame: vi.mocked(captureFrame).mock.results[0].value,
+      frame: {
+        canvas: {
+          composed: {
+            left: first[0].value.canvas,
+            right: first[1].value.canvas,
+          },
+        },
+      },
     });
+    // Two DIFFERENT captures, which is the whole point: one camera each.
+    expect(first[0].value.canvas).not.toBe(first[1].value.canvas);
+
     await act(async () => void vi.advanceTimersByTime(BETWEEN_MS));
-    expect(result.current.review).toEqual({
+    const second = vi.mocked(captureFrame).mock.results;
+    expect(result.current.review).toMatchObject({
       shotIndex: 1,
-      frame: vi.mocked(captureFrame).mock.results[2].value,
+      frame: {
+        canvas: {
+          composed: {
+            left: second[2].value.canvas,
+            right: second[3].value.canvas,
+          },
+        },
+      },
+    });
+  });
+
+  /**
+   * One camera failing must not send the preview back to showing one person.
+   * The composition still happens; the missing half is simply sky.
+   */
+  it("still composes a photograph when one camera gave nothing", async () => {
+    const { captureFrame } = await import("./capture");
+    const { shotPreview } = await import("./paint");
+    const mine = { canvas: {} as HTMLCanvasElement, width: 640, height: 360 };
+    // Their camera gives nothing; yours works.
+    vi.mocked(captureFrame)
+      .mockReturnValueOnce(mine)
+      .mockReturnValueOnce(null);
+
+    const { result } = setup();
+    act(() => result.current.setShots(2));
+    act(() => result.current.start());
+
+    await act(async () => void vi.advanceTimersByTime(400 + LEAD_MS));
+    expect(vi.mocked(shotPreview).mock.calls[0][1]).toEqual({
+      left: mine.canvas,
+      right: null,
     });
   });
 

@@ -1,6 +1,8 @@
 "use client";
 
 import { motion, useReducedMotion } from "motion/react";
+import { SaveMenu } from "./SaveMenu";
+import type { KeepsakeKind } from "@/lib/photo/keepsake";
 
 /**
  * The strip, developing beside the booth.
@@ -17,6 +19,9 @@ export function PhotoStrip({
   url,
   busy,
   onSave,
+  onUpload,
+  hasClip,
+  clipPending,
   onDiscard,
 }: {
   /** An object URL for the finished strip, or null before there is one. */
@@ -24,6 +29,16 @@ export function PhotoStrip({
   /** True between the last flash and the strip being ready. */
   busy: boolean;
   onSave: () => void;
+  /** Uploads a keepsake and resolves the link a QR code should carry. */
+  onUpload: (kind: KeepsakeKind) => Promise<{
+    ok: boolean;
+    url?: string;
+    error?: string;
+  }>;
+  /** False when this sitting produced no live photo. */
+  hasClip: boolean;
+  /** True while the moving version is still being stitched together. */
+  clipPending: boolean;
   onDiscard: () => void;
 }) {
   const reduceMotion = useReducedMotion();
@@ -63,14 +78,13 @@ export function PhotoStrip({
         alt="The photo strip you just took"
         className="min-h-0 w-auto max-w-full flex-1 rounded-[2px] object-contain shadow-[0_18px_60px_-30px_rgba(0,0,0,0.9)]"
       />
-      <div className="flex shrink-0 gap-2 text-xs">
-        <button
-          type="button"
-          onClick={onSave}
-          className="rounded-[2px] bg-[var(--dress)] px-4 py-1.5 font-medium tracking-wide text-[#1a1405] transition-colors hover:bg-[var(--lamp)]"
-        >
-          Save
-        </button>
+      <div className="flex shrink-0 flex-col items-center gap-3 text-xs">
+        <SaveMenu
+          onDownload={onSave}
+          onUpload={onUpload}
+          hasClip={hasClip}
+          clipPending={clipPending}
+        />
         <button
           type="button"
           onClick={onDiscard}

@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { boothTimeline } from "./booth";
+import { boothTimeline, COUNT_FROM } from "./booth";
 import { captureFrame, frameToBlob, type Frame } from "./capture";
-import { paintStrip, type Shot } from "./paint";
+import { paintStrip, shotPreview, type Shot } from "./paint";
 import { cutOutOrOriginal } from "./segment";
+import { useLiveFilm } from "./useLiveFilm";
+import { buildLiveStrip } from "./liveStrip";
 import { stripLayout, type ShotCount } from "./strip";
 import { DEFAULT_THEME_ID, theme as themeById, type ThemeId } from "./themes";
 import type { SyncedClock } from "@/lib/sync/SyncedClock";
@@ -34,6 +36,19 @@ export interface Booth {
   /** Between the last flash and the strip being ready. */
   busy: boolean;
   stripUrl: string | null;
+  /** Attach to a hidden canvas: the surface the live photo is filmed from. */
+  filmCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** True when this sitting produced at least one live photo. */
+  hasClip: boolean;
+  /** True while a clip is still being finalised after the last flash. */
+  clipPending: boolean;
+  /**
+   * Stitches the shots' clips into one moving strip.
+   *
+   * Built on demand rather than after every sitting: it costs about twelve
+   * seconds of painting and recording, and most evenings nobody asks for it.
+   */
+  liveStrip: () => Promise<Blob | null>;
   start: () => void;
   accept: (msg: PeerMessage) => void;
   save: () => void;
@@ -71,6 +86,8 @@ export function useBooth({
   const [running, setRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stripUrl, setStripUrl] = useState<string | null>(null);
+
+  const film = useLiveFilm({ localVideo, remoteVideo });
 
   // Declared above every callback that writes to them: the React Compiler
   // refuses a ref modified below the hook that closes over it.
@@ -157,14 +174,21 @@ export function useBooth({
         left: null,
         right: null,
       }));
+      film.reset(n);
 
       for (const step of boothTimeline(startAt, n)) {
         at(step.at, () => {
           if (step.kind === "count") {
+            // The clip IS the countdown, so filming opens on the same instant
+            // as the first number rather than a frame either side of it.
+            if (step.value === COUNT_FROM) film.begin(themeById(id));
             setCount(step.value);
             return;
           }
           if (step.kind === "flash") {
+            // Ended before the still is taken, so the clip finishes on the
+            // last moment of posing rather than on the white of the flash.
+            film.end(step.shotIndex);
             setCount(null);
             setFlashing(true);
             // Mirrored to match the preview: you posed against a mirror of
@@ -179,12 +203,25 @@ export function useBooth({
             return;
           }
           if (step.kind === "review") {
-            // The still must be the local mirrored capture rather than a new
-            // draw from video, or the held-up picture would not be the flash
-            // both sides just synchronized around.
+            // Built from the two stills the flash just took, never from a new
+            // draw off the video: the picture held up has to be the instant
+            // both sides synchronized around, not a moment later.
+            //
+            // Both of you, side by side, in the scene. This used to hold up
+            // `.left` alone -- which on your screen is you and on theirs is
+            // them, so neither of you ever saw the two of you together until
+            // the strip finally developed.
+            const pair = captured.current[step.shotIndex];
+            const canvas = shotPreview(themeById(id), {
+              left: pair.left?.canvas ?? null,
+              right: pair.right?.canvas ?? null,
+            });
             setReview({
               shotIndex: step.shotIndex,
-              frame: captured.current[step.shotIndex].left,
+              frame:
+                canvas === null
+                  ? null
+                  : { canvas, width: canvas.width, height: canvas.height },
             });
             return;
           }
@@ -197,7 +234,7 @@ export function useBooth({
         });
       }
     },
-    [at, develop, localVideo, remoteVideo],
+    [at, develop, film, localVideo, remoteVideo],
   );
 
   const start = useCallback(() => {
@@ -233,6 +270,56 @@ export function useBooth({
     });
   }, []);
 
+  /**
+   * The moving strip: every shot's clip playing at once in the strip's own
+   * layout, filmed as one video.
+   *
+   * Object URLs are minted here and handed over to be revoked by the builder,
+   * because a forgotten one pins its blob in memory for the life of the page
+   * and these blobs run to tens of megabytes.
+   */
+  const liveStrip = useCallback(async (): Promise<Blob | null> => {
+    const clips = film.clips;
+    if (!clips.some((clip) => clip !== null)) return null;
+
+    const longest = clips.reduce(
+      (most, clip) => Math.max(most, clip?.durationMs ?? 0),
+      0,
+    );
+
+    const result = await buildLiveStrip(
+      {
+        clipUrls: clips.map((clip) =>
+          clip === null ? null : URL.createObjectURL(clip.blob),
+        ),
+        shots,
+        theme: themeById(themeId),
+        caption: captionRef.current,
+        durationMs: longest,
+      },
+      {
+        makeVideo: (src) => {
+          const video = document.createElement("video");
+          video.src = src;
+          video.playsInline = true;
+          return video;
+        },
+        makeCanvas: (width, height) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          return canvas;
+        },
+        onFrame: (fn) => requestAnimationFrame(fn),
+        cancelFrame: (handle) => cancelAnimationFrame(handle),
+        now: () => Date.now(),
+        revoke: (url) => URL.revokeObjectURL(url),
+      },
+    );
+
+    return result?.blob ?? null;
+  }, [film.clips, shots, themeId]);
+
   return {
     themeId,
     setThemeId,
@@ -244,6 +331,10 @@ export function useBooth({
     running,
     busy,
     stripUrl,
+    filmCanvasRef: film.canvasRef,
+    hasClip: film.clips.some((c) => c !== null),
+    clipPending: film.pending,
+    liveStrip,
     start,
     accept,
     save,

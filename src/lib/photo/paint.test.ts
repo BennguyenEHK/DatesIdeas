@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PERSON_BLUR_ALPHA, PERSON_BLUR_PX, paintStrip, type Shot } from "./paint";
+import {
+  PERSON_BLUR_ALPHA,
+  PERSON_BLUR_PX,
+  paintShot,
+  paintStrip,
+  shotPreview,
+  type Shot,
+} from "./paint";
 import { STRIP_WIDTH, stripLayout } from "./strip";
 import { starsFor, theme } from "./themes";
 
@@ -310,5 +317,80 @@ describe("feathering the two halves into one photograph", () => {
     expect(restoreIndex).toBeGreaterThan(backdropIndex);
     expect(context.globalAlpha).toBe(1);
     expect(context.filter).toBe("none");
+  });
+});
+
+describe("the photograph held up after each flash", () => {
+  const box = { width: 320, height: 180 };
+
+  /**
+   * The bug this exists to prevent. The preview used to be the local capture
+   * alone, so on your screen it held up you and on theirs it held up them, and
+   * neither of you saw the two of you together until the strip developed.
+   */
+  it("draws both people, not just the local one", () => {
+    const context = ctx();
+    const left = {} as CanvasImageSource;
+    const right = {} as CanvasImageSource;
+    paintShot(
+      context as unknown as CanvasRenderingContext2D,
+      theme("griffith"),
+      { left, right },
+      box,
+    );
+
+    const drawn = context.calls.filter(([name]) => name === "drawImage");
+    expect(drawn.some((call) => call[1] === left)).toBe(true);
+    expect(drawn.some((call) => call[1] === right)).toBe(true);
+  });
+
+  it("gives each person exactly half the frame, flush against the other", () => {
+    const context = ctx();
+    paintShot(
+      context as unknown as CanvasRenderingContext2D,
+      theme("griffith"),
+      { left: {} as CanvasImageSource, right: {} as CanvasImageSource },
+      box,
+    );
+
+    // The feathered halves are laid down with the five-argument overload at
+    // their destination, which is where the split is observable.
+    const placed = context.calls
+      .filter(([name, , x]) => name === "drawImage" && typeof x === "number")
+      .map(([, , x, , w]) => [x, w]);
+    expect(placed).toContainEqual([0, box.width / 2]);
+    expect(placed).toContainEqual([box.width / 2, box.width / 2]);
+  });
+
+  it("paints the scene first and the grade last, like the strip does", () => {
+    const context = ctx();
+    paintShot(
+      context as unknown as CanvasRenderingContext2D,
+      theme("griffith"),
+      { left: {} as CanvasImageSource, right: null },
+      box,
+    );
+
+    const names = context.calls.map(([name]) => name);
+    expect(names.indexOf("linear")).toBeLessThan(names.indexOf("drawImage"));
+    expect(names.indexOf("drawImage")).toBeLessThan(names.indexOf("setComposite"));
+  });
+
+  it("still paints the scene when one camera gave nothing", () => {
+    const context = ctx();
+    paintShot(
+      context as unknown as CanvasRenderingContext2D,
+      theme("griffith"),
+      { left: null, right: {} as CanvasImageSource },
+      box,
+    );
+
+    const names = context.calls.map(([name]) => name);
+    expect(names).toContain("linear");
+    expect(names).toContain("drawImage");
+  });
+
+  it("refuses to make a preview of two missing cameras", () => {
+    expect(shotPreview(theme("griffith"), { left: null, right: null })).toBeNull();
   });
 });

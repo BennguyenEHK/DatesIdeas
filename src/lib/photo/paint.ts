@@ -1,5 +1,11 @@
 import { starsFor, type Theme } from "./themes";
-import { STRIP_WIDTH, type Panel, type Rect, type StripLayout } from "./strip";
+import {
+  PANEL_ASPECT,
+  STRIP_WIDTH,
+  type Panel,
+  type Rect,
+  type StripLayout,
+} from "./strip";
 
 /** The portrait falloff at the standard export width. */
 export const PERSON_BLUR_PX = 18;
@@ -222,6 +228,78 @@ export function paintFinish(
   ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, box.width, box.height);
   ctx.restore();
+}
+
+/** How wide the preview held up after each flash is painted. */
+export const PREVIEW_WIDTH = 960;
+
+/**
+ * One photograph on its own: the scene, both of you side by side, the grade
+ * over the pair.
+ *
+ * This exists because the preview shown after each flash used to be the LOCAL
+ * capture alone, stretched across the frame — so each person's preview held up
+ * only themselves, and the two of you never appeared together until the strip
+ * finally developed. It was a picture of one camera pretending to be a
+ * photograph of two people.
+ *
+ * Painted by the same functions as the strip and the live stage, in the same
+ * 16:9 shape a panel has, so what is held up is a true miniature of what the
+ * strip will contain rather than a differently-cropped rehearsal.
+ */
+export function paintShot(
+  ctx: CanvasRenderingContext2D,
+  t: Theme,
+  shot: Shot | undefined,
+  box: { width: number; height: number },
+): void {
+  const blurRadius = Math.max(1, Math.round(PERSON_BLUR_PX * (box.width / STRIP_WIDTH)));
+  const half = box.width / 2;
+  const panel: Panel = {
+    x: 0,
+    y: 0,
+    width: box.width,
+    height: box.height,
+    left: { x: 0, y: 0, width: half, height: box.height },
+    right: { x: half, y: 0, width: half, height: box.height },
+  };
+
+  paintScene(ctx, t, box);
+
+  ctx.save();
+  ctx.filter = sceneFilter(t);
+  paintPeople(ctx, panel, shot, blurRadius);
+  ctx.restore();
+
+  paintFinish(ctx, t, box, [{ x: 0, y: 0, width: box.width, height: box.height }]);
+}
+
+/**
+ * Paints one shot onto a fresh canvas, or returns null when there is nothing
+ * of either of you to show.
+ *
+ * Deliberately NOT cut out. Segmentation costs about a tenth of a second per
+ * image and the preview appears on the same instant as the flash — but more
+ * than that, seeing yourselves lifted out of your own rooms is what the strip
+ * developing IS. Cutting the preview out would spend the surprise early.
+ */
+export function shotPreview(
+  t: Theme,
+  shot: Shot,
+  width = PREVIEW_WIDTH,
+): HTMLCanvasElement | null {
+  if (shot.left === null && shot.right === null) return null;
+  if (typeof document === "undefined") return null;
+
+  const height = Math.round(width / PANEL_ASPECT);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) return null;
+
+  paintShot(ctx, t, shot, { width, height });
+  return canvas;
 }
 
 export function paintStrip(

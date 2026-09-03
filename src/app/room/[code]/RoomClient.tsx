@@ -48,6 +48,7 @@ import type { PlayerHandle } from "@/lib/media/player";
 import type { SyncPrecision } from "@/lib/media/sync";
 import { useVolumeDuck } from "@/lib/media/useVolumeDuck";
 import { worthDucking } from "@/lib/media/duck";
+import { uploadKeepsake, type KeepsakeKind } from "@/lib/photo/keepsake";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
 
@@ -272,6 +273,29 @@ export function RoomClient({ code }: { code: string }) {
     acceptPhoto.current = booth.accept;
   });
 
+  /**
+   * Sends one keepsake away so a QR code has something to point at.
+   *
+   * The still is already sitting in memory as an object URL; the moving strip
+   * is stitched only when asked for, because it costs about twelve seconds of
+   * painting and most evenings nobody wants it.
+   */
+  const onUploadKeepsake = useCallback(
+    async (kind: KeepsakeKind) => {
+      let blob: Blob | null = null;
+      if (kind === "clip") {
+        blob = await booth.liveStrip();
+      } else if (booth.stripUrl !== null) {
+        blob = await fetch(booth.stripUrl)
+          .then((r) => r.blob())
+          .catch(() => null);
+      }
+      if (blob === null) return { ok: false, error: "there was nothing to send" };
+      return uploadKeepsake(blob, { room: code, kind });
+    },
+    [booth, code],
+  );
+
   const karaoke = current === "karaoke";
   const movie = current === "movie";
   const photobooth = current === "photobooth";
@@ -279,7 +303,18 @@ export function RoomClient({ code }: { code: string }) {
   // No karaoke exception. Pausing gestures there meant the status bar had a
   // state it could not name and reported a warm-up that would never finish --
   // and reactions are worth more mid-song than the CPU they cost.
-  const gesture = useGestureDetection(peer.localStream, onGesture, gesturesOn);
+  //
+  // A booth sitting IS the exception, and for a different reason. Filming the
+  // live photo paints both of you into a scene twenty-four times a second,
+  // which is the same camera and the same main thread MediaPipe is using; run
+  // together, the recording stutters and the countdown along with it. You are
+  // posing for seven seconds, not reacting, so the trade is free. It comes
+  // straight back the moment the sitting ends.
+  const gesture = useGestureDetection(
+    peer.localStream,
+    onGesture,
+    gesturesOn && !booth.running,
+  );
   const kind = current === null ? "companion" : activity(current).kind;
 
   // Applied here rather than through the sync layer: loudness is this side's
@@ -496,11 +531,15 @@ export function RoomClient({ code }: { code: string }) {
                 shots={booth.shots}
                 localVideoRef={localVideo}
                 remoteVideoRef={remoteVideo}
+                filmCanvasRef={booth.filmCanvasRef}
               >
                 <PhotoStrip
                   url={booth.stripUrl}
                   busy={booth.busy}
                   onSave={booth.save}
+                  onUpload={onUploadKeepsake}
+                  hasClip={booth.hasClip}
+                  clipPending={booth.clipPending}
                   onDiscard={booth.discard}
                 />
               </PhotoBoothStage>

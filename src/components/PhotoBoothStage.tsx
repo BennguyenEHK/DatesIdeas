@@ -38,6 +38,7 @@ export function PhotoBoothStage({
   shots,
   localVideoRef,
   remoteVideoRef,
+  filmCanvasRef,
   children,
 }: {
   theme: Theme;
@@ -53,6 +54,8 @@ export function PhotoBoothStage({
   /** Handed up so the capture can read pixels out of these exact elements. */
   localVideoRef: React.RefObject<HTMLVideoElement | null>;
   remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
+  /** The off-screen surface the live photo is filmed from. */
+  filmCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** The strip, developing in the column beside the booth. */
   children: React.ReactNode;
 }) {
@@ -93,7 +96,7 @@ export function PhotoBoothStage({
 
   return (
     <div
-      className="stage grid grid-cols-1 gap-3 md:grid-cols-[var(--stage-cols)] md:gap-4"
+      className="stage relative grid grid-cols-1 gap-3 md:grid-cols-[var(--stage-cols)] md:gap-4"
       style={
         {
           "--stage-aspect": takeoverAspect(),
@@ -194,6 +197,16 @@ export function PhotoBoothStage({
       </div>
 
       <div className="min-h-0 md:content-center">{children}</div>
+
+      {/* Where the live photo is actually painted and filmed.
+          Kept in the DOM rather than detached, because a canvas that has never
+          been laid out gives some browsers nothing to capture a stream from —
+          but hidden, since it is a duplicate of the booth beside it. */}
+      <canvas
+        ref={filmCanvasRef}
+        aria-hidden
+        className="pointer-events-none absolute h-px w-px opacity-0"
+      />
     </div>
   );
 }
