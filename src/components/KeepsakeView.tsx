@@ -100,9 +100,10 @@ export function KeepsakeView({
       return;
     }
 
-    const outcome = await shareFile(fileFromBlob(blob, filename, contentType), {
-      title: "FestiBooth",
-    });
+    // No title/text alongside the file: iOS is more likely to rank
+    // "Save to Photos"/"Save Video" first in the sheet when the payload is
+    // file-only, rather than burying it behind a mixed text+file share.
+    const outcome = await shareFile(fileFromBlob(blob, filename, contentType));
     // Cancelling the sheet is a decision, not a fault, so it goes quietly back
     // to the start rather than showing anyone an error.
     setStage(
@@ -144,12 +145,12 @@ export function KeepsakeView({
           stage === "saved"
             ? canShare
               ? "Saved"
-              : "Downloaded"
+              : "Download succeeded"
             : stage === "failed"
               ? "That didn’t save — the link may have closed with the room"
               : canShare
                 ? "Hold the heart until it fills"
-                : "Hold to download"
+                : "Hold to fill, for download"
         }
       />
 
