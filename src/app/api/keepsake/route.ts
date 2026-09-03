@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isValidRoomCode } from "@/lib/room/code";
-import {
-  isKeepsakeKey,
-  presignKeepsake,
-  DOWNLOAD_URL_TTL_SEC,
-} from "@/lib/storage/objects";
+import { isKeepsakeKey, presignKeepsake } from "@/lib/storage/objects";
+import { newShareId, rememberKeepsake } from "@/lib/keepsakes/store";
 import {
   MAX_UPLOAD_MB,
   keepsakeKey,
@@ -113,6 +110,9 @@ export async function POST(request: Request) {
   const key = keepsakeKey(code, asKind, extension, randomToken());
   if (!isKeepsakeKey(key)) return bad("could not name that file");
 
+  // Only the upload link is needed here. The download link is minted fresh
+  // when someone opens the share page, so a code scanned hours later never
+  // carries one that expired in the meantime.
   const signed = await presignKeepsake(key, contentType);
   if (signed === null) {
     // Configured storage is optional: without it the booth still works and
@@ -124,8 +124,29 @@ export async function POST(request: Request) {
     );
   }
 
+  // The short id, not the signed link, is what the QR will carry. A presigned
+  // URL is six hundred-odd characters and makes a code dense enough that a
+  // phone camera has to work at it; ten characters scans first time.
+  const shareId = newShareId();
+  const stored = await rememberKeepsake(sql, {
+    id: shareId,
+    roomCode: code,
+    objectKey: key,
+    kind: asKind,
+    contentType,
+  });
+  if (!stored) {
+    // The room closed between the check above and this write. Rare, but the
+    // insert is the authority and it said no.
+    return NextResponse.json({ error: "this room has closed" }, { status: 410 });
+  }
+
   return NextResponse.json(
-    { ...signed, expiresInSec: DOWNLOAD_URL_TTL_SEC },
+    {
+      uploadUrl: signed.uploadUrl,
+      shareUrl: new URL(`/k/${shareId}`, request.url).toString(),
+      key,
+    },
     { status: 200 },
   );
 }

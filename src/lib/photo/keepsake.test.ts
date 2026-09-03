@@ -147,7 +147,7 @@ describe("keepsake helpers", () => {
   it("reports a refused PUT", async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ uploadUrl: "https://upload", downloadUrl: "https://download", key: "key" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ uploadUrl: "https://upload", shareUrl: "https://app/k/abc123", key: "key" })))
       .mockResolvedValueOnce(new Response(null, { status: 403 }));
     const result = await uploadKeepsake(blob(1), { room: "room", kind: "strip", fetchImpl });
     expect(result).toEqual({ ok: false, error: "the upload was refused" });
@@ -168,7 +168,7 @@ describe("keepsake helpers", () => {
     const fetchImpl = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ uploadUrl: "https://upload", downloadUrl: "https://download", key: "key" })),
+        new Response(JSON.stringify({ uploadUrl: "https://upload", shareUrl: "https://app/k/abc123", key: "key" })),
       )
       .mockResolvedValueOnce(new Response(null, { status: 201 }));
     const source = blob(12, "video/mp4");
@@ -179,7 +179,7 @@ describe("keepsake helpers", () => {
       fetchImpl,
     });
 
-    expect(result).toEqual({ ok: true, url: "https://download" });
+    expect(result).toEqual({ ok: true, url: "https://app/k/abc123" });
     expect(fetchImpl).toHaveBeenNthCalledWith(1, "/api/keepsake", expect.objectContaining({
       method: "POST",
       body: JSON.stringify({

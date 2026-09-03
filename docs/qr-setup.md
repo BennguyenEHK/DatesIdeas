@@ -89,12 +89,49 @@ applies to `DATABASE_URL` and your Cloudflare token.
 If you ever see one of these names with `NEXT_PUBLIC_` on it, delete the
 variable and rotate the key. Do not just rename it: it has already shipped.
 
-## Step 4 — Redeploy
+## Step 4 — Allow the page to read the file (CORS)
+
+This is the step that makes **Save to Photos** work, and without it the button
+will fail while everything else looks fine.
+
+Scanning a QR opens a page on *your* app, but the file lives on *storage* —
+two different addresses. Browsers refuse to let one read the other's bytes
+unless the second one says it is allowed. That is CORS, and it exists so a
+malicious page cannot quietly read your files.
+
+The share sheet needs the actual bytes, so the page has to fetch them, so
+storage has to permit it.
+
+In the Neon Console, on the bucket, set its CORS rules to:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://YOUR-APP.vercel.app", "http://localhost:3000"],
+    "AllowedMethods": ["GET", "PUT"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["Content-Length", "Content-Type"],
+    "MaxAgeSeconds": 3000
+  }
+]
+```
+
+Replace `YOUR-APP.vercel.app` with your real domain. Keep `localhost` if you
+want the booth to work while developing.
+
+`PUT` is there because the browser uploads directly to storage too — the app
+never carries the file — so the upload needs the same permission as the read.
+
+**If the Save button says the file could not be fetched, this is why.** The
+plain download link underneath keeps working regardless: it is the browser
+following a link rather than the page reading bytes, which needs no permission.
+
+## Step 5 — Redeploy
 
 Environment variables are read at build time, so an existing deployment will
 not pick them up. In Vercel: **Deployments → the latest one → Redeploy**.
 
-## Step 5 — Check it
+## Step 6 — Check it
 
 Open a room, take some photos, and on the finished strip open **Save**.
 

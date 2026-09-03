@@ -74,8 +74,17 @@ export function randomToken(bytes = 8): string {
 export interface UploadTicket {
   /** Presigned PUT URL. Short-lived. */
   uploadUrl: string;
-  /** Presigned GET URL, valid until the room expires. This is what the QR encodes. */
-  downloadUrl: string;
+  /**
+   * A short page on this app, and what the QR encodes.
+   *
+   * Deliberately not the signed storage link. That is six hundred-odd
+   * characters, which makes a QR dense enough that a phone camera has to work
+   * at it — and it would go stale in a few hours, whereas the page mints a
+   * fresh one whenever somebody actually opens it. The page is also the only
+   * place a phone can be offered its own "save to Photos", which a raw file
+   * download can never reach.
+   */
+  shareUrl: string;
   key: string;
 }
 
@@ -93,8 +102,8 @@ function isUploadTicket(value: unknown): value is UploadTicket {
   return (
     typeof ticket.uploadUrl === "string" &&
     ticket.uploadUrl.length > 0 &&
-    typeof ticket.downloadUrl === "string" &&
-    ticket.downloadUrl.length > 0 &&
+    typeof ticket.shareUrl === "string" &&
+    ticket.shareUrl.length > 0 &&
     typeof ticket.key === "string"
   );
 }
@@ -188,7 +197,7 @@ export async function uploadKeepsake(
     });
     if (!uploadResponse.ok) return { ok: false, error: "the upload was refused" };
 
-    return { ok: true, url: ticketBody.downloadUrl };
+    return { ok: true, url: ticketBody.shareUrl };
   } catch {
     return { ok: false, error: "the upload could not finish" };
   }
