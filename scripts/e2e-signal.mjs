@@ -11,8 +11,15 @@ const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
-// Unambiguous alphabet, matching src/lib/room/code.ts
-const ROOM = "T" + Math.random().toString(36).slice(2, 7).toUpperCase().replace(/[01OIL]/g, "2");
+/**
+ * The room is OPENED through the real endpoint rather than invented here.
+ *
+ * Signalling refuses a room that does not exist, so a made-up code made every
+ * handshake check fail with a 410 -- which looked exactly like a broken
+ * handshake and hid whatever was actually wrong. The server mints the code
+ * anyway, so asking it is both more honest and less work.
+ */
+let ROOM = "";
 
 let pass = 0;
 let fail = 0;
@@ -43,6 +50,15 @@ async function poll(from, after) {
   if (!res.ok) throw new Error(`poll failed: ${res.status}`);
   return res.json();
 }
+
+const opened = await post("/api/rooms", {});
+if (opened.status !== 201) {
+  console.error(`
+could not open a room (${opened.status}). Is the dev server running?
+`);
+  process.exit(1);
+}
+ROOM = (await opened.json()).code;
 
 console.log(`\nroom ${ROOM}\n`);
 

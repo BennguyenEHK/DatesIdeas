@@ -9,7 +9,20 @@ export interface PeerInfo {
 }
 
 export type SignalMessage =
-  | { kind: "join"; identity: string; joinedAt: number }
+  | {
+      kind: "join";
+      identity: string;
+      /** When this peer FIRST arrived. Stable: it decides who offers. */
+      joinedAt: number;
+      /**
+       * When this particular announcement was posted.
+       *
+       * Separate from joinedAt because the two answer different questions:
+       * who arrived first never changes, but "is this peer still here?" has to
+       * be re-asked. Optional so a peer on an older build still pairs.
+       */
+      sentAt?: number;
+    }
   | { kind: "offer"; sdp: string; from: string }
   | { kind: "answer"; sdp: string; from: string }
   | { kind: "ice"; candidate: RTCIceCandidateInit; from: string };
@@ -49,6 +62,20 @@ const POLL_PAIRING_MS = 500;
 const POLL_IDLE_MS = 5000;
 /** A join older than this is a leftover from a previous sitting. */
 const JOIN_FRESHNESS_MS = 2 * 60 * 1000;
+/**
+ * How often an unpaired peer says it is still here.
+ *
+ * Announcing once was a single point of failure in the one situation this app
+ * is actually used in: someone opens the room, waits, and the other person
+ * arrives minutes later. The waiting peer's announcement goes stale after two
+ * minutes and is swept from the table after fifteen -- so a peer whose laptop
+ * slept and then woke had nothing left to find, and neither side ever offered
+ * even though both were sitting in the room looking at each other's absence.
+ *
+ * Repeating it makes discovery self-healing, which is the same reason the
+ * playback state is broadcast whole rather than as events.
+ */
+const REANNOUNCE_MS = 20_000;
 
 /**
  * WebRTC signalling over a polled Postgres table.
@@ -127,6 +154,7 @@ export function useSignaling(
 
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
+    let lastAnnouncedAt = 0;
     closedRef.current = false;
 
     function handle(msg: SignalMessage) {
@@ -134,7 +162,11 @@ export function useSignaling(
         case "join": {
           // Ignore our own echo and anything left over from an earlier sitting.
           if (msg.identity === identity) return;
-          if (Date.now() - msg.joinedAt > JOIN_FRESHNESS_MS) return;
+          // Judged on when they last SPOKE, not on when they arrived. The
+          // old check read joinedAt, so a peer who had been waiting patiently
+          // for three minutes was discarded as debris from a previous evening.
+          const announcedAt = msg.sentAt ?? msg.joinedAt;
+          if (Date.now() - announcedAt > JOIN_FRESHNESS_MS) return;
           // Both peers see each other's join row, so guard against acting twice.
           if (seenPeerRef.current === msg.identity) return;
           seenPeerRef.current = msg.identity;
@@ -182,28 +214,53 @@ export function useSignaling(
         // Transient failure. Keep polling; the next tick usually succeeds.
       }
       if (stopped || closedRef.current) return;
+      // Still alone: remind the room. This is what lets a peer that woke from
+      // sleep find someone who arrived while it was out.
+      if (!pairedRef.current && Date.now() - lastAnnouncedAt >= REANNOUNCE_MS) {
+        void announce(false);
+      }
       timer = setTimeout(poll, pairedRef.current ? POLL_IDLE_MS : POLL_PAIRING_MS);
     }
 
-    // Announce ourselves, then start listening for the other side.
-    void fetch("/api/signal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code,
-        from: identity,
-        payload: { kind: "join", identity, joinedAt } satisfies SignalMessage,
-      }),
-    })
-      .then((res) => {
+    /**
+     * Say we are here. Repeated while unpaired, never after.
+     *
+     * `joinedAt` stays exactly as it was so the two sides keep agreeing about
+     * who offers -- refreshing it would let a patient peer overtake the other
+     * and leave both of them answering, or both offering.
+     */
+    async function announce(first: boolean) {
+      lastAnnouncedAt = Date.now();
+      try {
+        const res = await fetch("/api/signal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            code,
+            from: identity,
+            payload: {
+              kind: "join",
+              identity,
+              joinedAt,
+              sentAt: Date.now(),
+            } satisfies SignalMessage,
+          }),
+        });
+        if (stopped) return;
         if (res.status === 410) {
           closedRef.current = true;
           setStatus("closed");
           return;
         }
-        setStatus("waiting");
-      })
-      .catch(() => setStatus("error"));
+        // Only the first one moves the status. A later one must not drag a
+        // pairing peer back to "waiting".
+        if (first) setStatus("waiting");
+      } catch {
+        if (first && !stopped) setStatus("error");
+      }
+    }
+
+    void announce(true);
 
     void poll();
 
