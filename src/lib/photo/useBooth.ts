@@ -40,6 +40,12 @@ export interface Booth {
   filmCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** True when this sitting produced at least one live photo. */
   hasClip: boolean;
+  /**
+   * What this browser recorded the live photos in, or null when it recorded
+   * none. It decides whether a phone can keep the moving strip at all, which
+   * is worth knowing before a QR is offered rather than after one is scanned.
+   */
+  clipMimeType: string | null;
   /** True while a clip is still being finalised after the last flash. */
   clipPending: boolean;
   /**
@@ -333,6 +339,11 @@ export function useBooth({
     stripUrl,
     filmCanvasRef: film.canvasRef,
     hasClip: film.clips.some((c) => c !== null),
+    // What this browser actually chose to record in. Every clip in a sitting
+    // gets it from the same picker, so the first one that exists speaks for the
+    // live strip that will later be stitched out of them — and it is known now,
+    // while there is still time to say so, rather than after a QR is scanned.
+    clipMimeType: film.clips.find((c) => c !== null)?.mimeType ?? null,
     clipPending: film.pending,
     liveStrip,
     start,

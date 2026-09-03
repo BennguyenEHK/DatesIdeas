@@ -541,6 +541,7 @@ export function RoomClient({ code }: { code: string }) {
                   onSave={booth.save}
                   onUpload={onUploadKeepsake}
                   hasClip={booth.hasClip}
+                  clipMimeType={booth.clipMimeType}
                   clipPending={booth.clipPending}
                   onDiscard={booth.discard}
                 />

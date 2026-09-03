@@ -21,6 +21,7 @@ export function PhotoStrip({
   onSave,
   onUpload,
   hasClip,
+  clipMimeType,
   clipPending,
   onDiscard,
 }: {
@@ -37,6 +38,8 @@ export function PhotoStrip({
   }>;
   /** False when this sitting produced no live photo. */
   hasClip: boolean;
+  /** What the browser recorded in, which decides whether a phone can keep it. */
+  clipMimeType: string | null;
   /** True while the moving version is still being stitched together. */
   clipPending: boolean;
   onDiscard: () => void;
@@ -83,6 +86,7 @@ export function PhotoStrip({
           onDownload={onSave}
           onUpload={onUpload}
           hasClip={hasClip}
+          clipMimeType={clipMimeType}
           clipPending={clipPending}
         />
         <button

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { HoldHeart } from "./HoldHeart";
 import { qrDataUrl, QR_SIZE } from "@/lib/photo/qr";
+import { phoneCanKeep } from "@/lib/photo/record";
 import type { KeepsakeKind } from "@/lib/photo/keepsake";
 
 /** Which way of taking the strip away is open. */
@@ -32,10 +33,32 @@ const CHOICES: readonly Choice[] = [
   { mode: "video", label: "QR — live strip", note: "The moving version. Bigger, slower to send." },
 ];
 
+/**
+ * What to say under a choice, given what this sitting actually produced.
+ *
+ * The live-strip line is the one that changes, and it changes because a QR is a
+ * promise: somebody walks over to a phone and scans it. Finding out there that
+ * the video will not go into their photos is finding out too late, so the menu
+ * says it while the choice is still being made.
+ */
+function noteFor(
+  choice: Choice,
+  state: { hasClip: boolean; clipPending: boolean; clipTravels: boolean },
+): string {
+  if (choice.mode !== "video") return choice.note;
+  if (!state.hasClip) return "No live photo from this sitting.";
+  if (state.clipPending) return "Still stitching the moving version…";
+  if (!state.clipTravels) {
+    return "This browser recorded WebM — it plays on a computer, but a phone’s photos won’t take it.";
+  }
+  return choice.note;
+}
+
 export function SaveMenu({
   onDownload,
   onUpload,
   hasClip,
+  clipMimeType,
   clipPending,
 }: {
   onDownload: () => void;
@@ -43,6 +66,8 @@ export function SaveMenu({
   onUpload: (kind: KeepsakeKind) => Promise<{ ok: boolean; url?: string; error?: string }>;
   /** False when this sitting produced no live photo to offer. */
   hasClip: boolean;
+  /** What the browser recorded in, which decides whether a phone can keep it. */
+  clipMimeType: string | null;
   /** True while the live strip is still being stitched together. */
   clipPending: boolean;
 }) {
@@ -128,6 +153,9 @@ export function SaveMenu({
           >
             {CHOICES.map((choice) => {
               const unavailable = choice.mode === "video" && !hasClip;
+              // A WebM live strip stays offered rather than disabled: it is a
+              // real file that plays perfectly on the computer it was made on.
+              // Only the phone cannot keep it, and that is what the note says.
               return (
                 <button
                   key={choice.mode}
@@ -141,11 +169,11 @@ export function SaveMenu({
                     {choice.label}
                   </span>
                   <span className="block text-[0.65rem] leading-snug text-[var(--mist)]">
-                    {unavailable
-                      ? "No live photo from this sitting."
-                      : choice.mode === "video" && clipPending
-                        ? "Still stitching the moving version…"
-                        : choice.note}
+                    {noteFor(choice, {
+                      hasClip,
+                      clipPending,
+                      clipTravels: phoneCanKeep(clipMimeType),
+                    })}
                   </span>
                 </button>
               );
