@@ -26,6 +26,8 @@ import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel } from "@/components/KaraokePanel";
+import { LyricsRoll } from "@/components/LyricsRoll";
+import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
 import { MoviePanel } from "@/components/MoviePanel";
 import { LocalFilePlayer } from "@/components/LocalFilePlayer";
 import { PhotoBoothStage } from "@/components/PhotoBoothStage";
@@ -82,6 +84,10 @@ export function RoomClient({ code }: { code: string }) {
   // playing: in a noisy room the microphone processing that ruins singing is
   // the same processing keeping the singing audible at all.
   const [noisy, setNoisy] = useState(false);
+  // Whether karaoke is singing to a file you own rather than to a video. Set
+  // when a track is chosen and cleared when a YouTube link is loaded, so the
+  // two ways of choosing a song cannot both claim to be current.
+  const [trackMode, setTrackMode] = useState(false);
   // Browsing for the next song. Local on purpose — opening the picker used to
   // clear the video through shared state, which cut the other person off
   // mid-verse just because you went looking for the next track.
@@ -241,8 +247,23 @@ export function RoomClient({ code }: { code: string }) {
   // YouTube every correction is a seek -- so holding a movie to the song's
   // standard bought nothing anyone could perceive and paid for it in stutters.
   const precision: SyncPrecision = current === "movie" ? "watching" : "singing";
+
+  const track = useKaraokeTrack();
+  /**
+   * Which player the sync layer is holding.
+   *
+   * Chosen while rendering rather than copied into state by an effect. The
+   * effect version read better and was wrong twice over: it made the handle
+   * lag a frame behind the song it belongs to, and the React Compiler rejects
+   * setting state from an effect precisely because that lag is a bug.
+   *
+   * The flag is explicit rather than derived from the playback state, because
+   * the playback state is produced by the very hook this feeds — asking it
+   * which player to use would be a circle.
+   */
+  const ownTrack = current === "karaoke" && trackMode && track.ready;
   const media = useSyncedPlayback(
-    player,
+    ownTrack ? track.player : player,
     peer.clock,
     peer.send,
     offsetMs / 1000,
@@ -299,6 +320,38 @@ export function RoomClient({ code }: { code: string }) {
   );
 
   const karaoke = current === "karaoke";
+
+  // Read every animation frame by the lyrics, so it must not close over a
+  // player that a re-render has replaced.
+  const readTrackPosition = useCallback(
+    () => track.player?.currentTime() ?? 0,
+    [track.player],
+  );
+
+  const onTrackAudio = useCallback(
+    (file: File) => {
+      void track.chooseAudio(file).then((seconds) => {
+        if (seconds === null) return;
+        setTrackMode(true);
+        // The last refusal was about the last song, not this one.
+        setVideoError(null);
+        setPicking(false);
+        // The name identifies it loosely and the length identifies it properly:
+        // for a track each side opened itself, the duration is the only way to
+        // notice you are singing along to two different files.
+        media.load({ videoId: file.name, source: "local", durationSec: seconds });
+        media.reportDuration(seconds);
+      });
+    },
+    [track, media],
+  );
+
+  const onTrackLyrics = useCallback(
+    (file: File) => {
+      void track.chooseLyrics(file);
+    },
+    [track],
+  );
   const movie = current === "movie";
   const photobooth = current === "photobooth";
 
@@ -554,7 +607,13 @@ export function RoomClient({ code }: { code: string }) {
                 remoteMemes={theirs.memes}
                 mediaError={peer.mediaError}
               >
-                {karaoke || (movie && media.film.source === "youtube") ? (
+                {ownTrack ? (
+                  <LyricsRoll
+                    lines={track.lyrics}
+                    positionSec={readTrackPosition}
+                    paused={!media.playing}
+                  />
+                ) : karaoke || (movie && media.film.source === "youtube") ? (
                   <YouTubePlayer ref={setPlayer} onError={setVideoError} />
                 ) : movie ? (
                   <LocalFilePlayer
@@ -684,10 +743,21 @@ export function RoomClient({ code }: { code: string }) {
               manual={manualOffset}
               onManual={setManualOffset}
               onOffsetMs={setOffsetMs}
+              track={{
+                ready: track.ready,
+                loading: track.loading,
+                hasLyrics: track.lyrics.length > 0,
+                error: track.error,
+                onAudioFile: onTrackAudio,
+                onLyricsFile: onTrackLyrics,
+              }}
               picking={picking}
               onPick={() => setPicking(true)}
               onCancelPick={() => setPicking(false)}
               onLoad={(id) => {
+                // Going back to a video gives up the speed control a file
+                // bought, so the two modes cannot both be current.
+                setTrackMode(false);
                 // A new attempt starts clean; the last refusal was about the
                 // last video, not this one.
                 setVideoError(null);

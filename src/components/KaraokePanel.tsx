@@ -9,6 +9,23 @@ import { MAX_OFFSET_MS, type SingingTurn } from "@/lib/media/singerTurn";
 export { MAX_OFFSET_MS };
 
 /**
+ * Singing to a track you own rather than to a video.
+ *
+ * The file never leaves the machine it was picked on, which is the same
+ * arrangement a local film already has: only the position crosses the
+ * connection, so each side opens its own copy. That is also why the length
+ * matters — it is the only way to notice the two of you opened different files.
+ */
+export interface TrackChoice {
+  ready: boolean;
+  loading: boolean;
+  hasLyrics: boolean;
+  error: string | null;
+  onAudioFile: (file: File) => void;
+  onLyricsFile: (file: File) => void;
+}
+
+/**
  * The karaoke control panel, living in the bottom letterbox bar under the
  * video. The transport stays available before a song is loaded, so choosing a
  * song remains an action inside the room rather than an entry gate.
@@ -23,6 +40,8 @@ export function KaraokePanel(props: {
   noisy: boolean;
   onNoisy: (noisy: boolean) => void;
   onLoad: (videoId: string) => void;
+  /** Everything about singing to a file you own rather than to YouTube. */
+  track: TrackChoice;
   picking: boolean;
   onPick: () => void;
   onCancelPick: () => void;
@@ -46,6 +65,7 @@ export function KaraokePanel(props: {
     noisy,
     onNoisy,
     onLoad,
+    track,
     picking,
     onPick,
     onCancelPick,
@@ -68,6 +88,7 @@ export function KaraokePanel(props: {
           videoError={videoError}
           hasSong={videoId !== null}
           onCancel={onCancelPick}
+          track={track}
         />
       ) : (
         <Transport
@@ -174,20 +195,99 @@ function videoErrorMessage(code: number): string {
   }
 }
 
+/**
+ * Picking a track you own, which is the only way this app can change speed.
+ *
+ * Two files rather than one, and that is not an oversight: the audio carries no
+ * words and lyrics carry no sound. An .lrc is a plain text file of timestamps,
+ * and without one the song still plays perfectly — you simply sing from memory.
+ */
+function TrackPicker({ track }: { track: TrackChoice }) {
+  const audioId = useId();
+  const lyricsId = useId();
+
+  return (
+    <div className="flex w-full flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <label
+          htmlFor={audioId}
+          className="cursor-pointer rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10"
+        >
+          {track.ready ? "Change the audio" : "Choose the audio"}
+        </label>
+        <input
+          id={audioId}
+          type="file"
+          accept="audio/*"
+          className="sr-only"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) track.onAudioFile(file);
+            // Cleared so choosing the same file twice still fires a change.
+            e.target.value = "";
+          }}
+        />
+
+        <label
+          htmlFor={lyricsId}
+          className="cursor-pointer rounded-[2px] px-2 py-1.5 text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
+        >
+          {track.hasLyrics ? "Change the lyrics" : "Add lyrics (.lrc, optional)"}
+        </label>
+        <input
+          id={lyricsId}
+          type="file"
+          accept=".lrc,text/plain"
+          className="sr-only"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) track.onLyricsFile(file);
+            e.target.value = "";
+          }}
+        />
+
+        {track.loading && (
+          <span className="tracking-[0.3em] text-[var(--lamp)]">DECODING</span>
+        )}
+      </div>
+
+      <p className="text-[0.65rem] leading-relaxed text-[var(--mist)]">
+        {track.error !== null ? (
+          <span role="alert" className="text-[var(--cream)]">
+            <span aria-hidden className="mr-1 text-[var(--neon)]">
+              ●
+            </span>
+            {track.error}
+          </span>
+        ) : (
+          <>
+            The file stays on this computer — only the position is shared, so you
+            each open your own copy. In exchange the song can be nudged a few
+            thousandths faster to close a gap, which a YouTube video cannot do.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function SongPicker({
   onLoad,
   videoError,
   hasSong,
   onCancel,
+  track,
 }: {
   onLoad: (videoId: string) => void;
   videoError: number | null;
   /** Whether closing returns to a song, or to a transport waiting for one. */
   hasSong: boolean;
   onCancel: () => void;
+  track: TrackChoice;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState(false);
+  const [own, setOwn] = useState(false);
   const inputId = useId();
   const helperId = useId();
 
@@ -207,10 +307,52 @@ function SongPicker({
       onSubmit={handleSubmit}
       className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 text-xs"
     >
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div className="flex w-full basis-full items-center gap-3">
         <span aria-hidden className="shrink-0 text-base">
           🎤
         </span>
+        {/* Two genuinely different things, not two ways to do one: a video
+            cannot change speed, and a file has no words of its own. Naming
+            them as a choice is cheaper than explaining it afterwards. */}
+        <div role="tablist" aria-label="Where the song comes from" className="flex gap-1">
+          {[
+            { own: false, label: "YouTube link" },
+            { own: true, label: "A track you own" },
+          ].map((tab) => (
+            <button
+              key={tab.label}
+              type="button"
+              role="tab"
+              aria-selected={own === tab.own}
+              onClick={() => setOwn(tab.own)}
+              className={`rounded-[2px] px-3 py-1 tracking-wide transition-colors ${
+                own === tab.own
+                  ? "bg-[var(--lamp)]/15 text-[var(--lamp)]"
+                  : "text-[var(--mist)] hover:text-[var(--cream)]"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label={
+            hasSong ? "Close and keep the current song" : "Close without choosing a song"
+          }
+          className="ml-auto shrink-0 rounded-[2px] px-2 py-1.5 text-base leading-none text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
+        >
+          ✕
+        </button>
+      </div>
+
+      {own ? (
+        <TrackPicker track={track} />
+      ) : (
+        <>
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <label htmlFor={inputId} className="sr-only">
           YouTube link
         </label>
@@ -243,17 +385,6 @@ function SongPicker({
         Load song
       </button>
 
-      {/* type="button" matters: inside a form, a bare button submits, so
-          cancelling would try to load whatever half-typed text was there. */}
-      <button
-        type="button"
-        onClick={onCancel}
-        aria-label={hasSong ? "Close and keep the current song" : "Close without choosing a song"}
-        className="shrink-0 rounded-[2px] px-2 py-1.5 text-base leading-none text-[var(--mist)] transition-colors hover:text-[var(--cream)]"
-      >
-        ✕
-      </button>
-
       {/* Same slot carries the helper copy or the error, so the row's
           height does not change between the two — only role="alert" swaps
           in, so the error is announced without the helper text being
@@ -279,6 +410,8 @@ function SongPicker({
           <p className="text-[var(--mist)]">A karaoke or lyrics video works best.</p>
         )}
       </div>
+        </>
+      )}
     </form>
   );
 }
