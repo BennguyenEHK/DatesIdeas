@@ -63,6 +63,15 @@ export function KeepsakeView({
     () => false,
   );
 
+  // Long-press-to-save is a genuinely chooser-free route, but it's an iOS
+  // Safari context-menu behaviour, not something this code can offer anywhere
+  // else — so the tip only appears where it will actually work.
+  const isIOS = useSyncExternalStore(
+    subscribeNever,
+    () => /iPad|iPhone|iPod/.test(globalThis.navigator?.userAgent ?? ""),
+    () => false,
+  );
+
   /**
    * Starts fetching the moment the heart is pressed, not when it fills.
    *
@@ -136,21 +145,13 @@ export function KeepsakeView({
         onPrime={prime}
         onComplete={() => void keep()}
         busy={stage === "working"}
-        label={
-          canShare
-            ? `Hold to save this ${noun} to your photos`
-            : `Hold to download this ${noun}`
-        }
+        label={`Hold to download this ${noun}`}
         hint={
           stage === "saved"
-            ? canShare
-              ? "Saved"
-              : "Download succeeded"
+            ? "Download succeeded"
             : stage === "failed"
               ? "That didn’t save — the link may have closed with the room"
-              : canShare
-                ? "Hold the heart until it fills"
-                : "Hold to fill, for download"
+              : "Hold to fill, for download"
         }
       />
 
@@ -159,6 +160,12 @@ export function KeepsakeView({
           ? "Your phone will ask where to keep it. Choose Save Image or Save Video and it goes straight to your photos."
           : "This link stops working when the room does."}
       </p>
+
+      {canShare && isIOS && kind === "strip" && (
+        <p className="max-w-xs text-center text-[0.65rem] leading-relaxed text-[var(--mist)]">
+          Tip: press and hold the photo above to save it directly — no menu.
+        </p>
+      )}
     </div>
   );
 }
