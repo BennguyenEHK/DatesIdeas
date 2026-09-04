@@ -28,6 +28,8 @@ import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel } from "@/components/KaraokePanel";
 import { LyricsRoll } from "@/components/LyricsRoll";
 import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
+import { useKaraokeHelper } from "@/lib/karaoke/useKaraokeHelper";
+import { useTrackTransfer, type ReceivedTrack } from "@/lib/karaoke/useTrackTransfer";
 import { MoviePanel } from "@/components/MoviePanel";
 import { LocalFilePlayer } from "@/components/LocalFilePlayer";
 import { PhotoBoothStage } from "@/components/PhotoBoothStage";
@@ -76,6 +78,10 @@ export function RoomClient({ code }: { code: string }) {
   // result, which would make every read of it a ref read.
   const acceptMedia = useRef<((m: PeerMessage) => void) | null>(null);
   const clearMedia = useRef<(() => void) | null>(null);
+  // Same reaching-backwards trick: the transfer needs the peer's file channel,
+  // so it cannot exist until after the handler that feeds it is written.
+  const acceptTrack = useRef<((m: PeerMessage) => void) | null>(null);
+  const serveTrack = useRef<((url: string, requestId: string) => void) | null>(null);
   const [videoError, setVideoError] = useState<number | null>(null);
   // Local to this side, never sent. Starts below full because the reported
   // problem was the backing track burying the other person's voice.
@@ -180,6 +186,21 @@ export function RoomClient({ code }: { code: string }) {
       }
       if (msg.t === "singing") {
         acceptSinging.current?.(msg);
+        return;
+      }
+      if (
+        msg.t === "track-meta" ||
+        msg.t === "track-done" ||
+        msg.t === "track-error"
+      ) {
+        acceptTrack.current?.(msg);
+        return;
+      }
+      if (msg.t === "track-request") {
+        // Only the side with a helper can answer this, and it answers by
+        // fetching and then pushing the result back. The asking side never
+        // learns which of the two machines did the work.
+        serveTrack.current?.(msg.url, msg.requestId);
         return;
       }
       if (msg.t === "activity") {
@@ -351,6 +372,94 @@ export function RoomClient({ code }: { code: string }) {
       void track.chooseLyrics(file);
     },
     [track],
+  );
+
+  const helper = useKaraokeHelper();
+
+  /**
+   * Takes a track this side now holds and makes it the song.
+   *
+   * The same path whether it was fetched here or arrived from the other side,
+   * because by this point there is no difference: both are bytes in memory
+   * waiting to be decoded.
+   */
+  const adoptTrack = useCallback(
+    (arrived: ReceivedTrack) => {
+      void track.chooseAudio(arrived.audio).then((seconds) => {
+        if (seconds === null) return;
+        if (arrived.lrc !== null) track.setLyricsText(arrived.lrc);
+        setTrackMode(true);
+        setVideoError(null);
+        setPicking(false);
+        media.load({
+          videoId: arrived.title,
+          source: "local",
+          durationSec: seconds,
+        });
+        media.reportDuration(seconds);
+      });
+    },
+    [track, media],
+  );
+
+  const transfer = useTrackTransfer({
+    sendMessage: peer.send,
+    sendFileChunk: peer.sendFileChunk,
+    onFileChunk: peer.onFileChunk,
+    onReceived: adoptTrack,
+  });
+  useEffect(() => {
+    acceptTrack.current = transfer.handleMessage;
+  });
+
+  /**
+   * Fetches a pasted link and gives the result to both sides.
+   *
+   * `mayDelegate` is what stops the two of you bouncing the same failure back
+   * and forth: a request that arrived from the peer is never handed back to
+   * them, so a link nobody can fetch fails once and says so.
+   */
+  const fetchAndShare = useCallback(
+    async (url: string, requestId: string, mayDelegate: boolean) => {
+      const got = await helper.request(url);
+      if (got === null) {
+        // The other side may reach the helper when this one cannot -- one of
+        // you is usually on the same network as the machine running it.
+        if (mayDelegate) peer.send({ t: "track-request", url, requestId });
+        else {
+          peer.send({
+            t: "track-error",
+            requestId,
+            message: "That song could not be fetched on either computer.",
+          });
+        }
+        return;
+      }
+
+      adoptTrack({
+        audio: new Blob([got.audio], { type: got.contentType }),
+        title: got.title,
+        durationSec: got.durationSec,
+        lrc: got.lrc,
+      });
+      await transfer.sendTrack({ requestId, ...got });
+    },
+    [helper, peer, adoptTrack, transfer],
+  );
+
+  useEffect(() => {
+    serveTrack.current = (url, requestId) => {
+      void fetchAndShare(url, requestId, false);
+    };
+  });
+
+  const onFetchUrl = useCallback(
+    (url: string) => {
+      // Loose enough to tell two requests apart, which is all the id is for.
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      void fetchAndShare(url, requestId, true);
+    },
+    [fetchAndShare],
   );
   const movie = current === "movie";
   const photobooth = current === "photobooth";
@@ -750,6 +859,22 @@ export function RoomClient({ code }: { code: string }) {
                 error: track.error,
                 onAudioFile: onTrackAudio,
                 onLyricsFile: onTrackLyrics,
+              }}
+              helper={{
+                available: helper.available,
+                busy: helper.stage === "fetching" || transfer.incoming !== null,
+                note:
+                  transfer.incoming !== null
+                    ? `Receiving the song — ${Math.round(
+                        (transfer.incoming.receivedBytes /
+                          Math.max(1, transfer.incoming.expectedBytes)) *
+                          100,
+                      )}%`
+                    : helper.stage === "fetching"
+                      ? "Fetching the song and its words…"
+                      : null,
+                error: helper.error ?? transfer.error,
+                onFetchUrl,
               }}
               picking={picking}
               onPick={() => setPicking(true)}

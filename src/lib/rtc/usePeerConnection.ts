@@ -25,6 +25,7 @@ import {
   type TrafficRates,
 } from "./diagnostics";
 import { leashSenders, type VideoMode } from "./videoLeash";
+import { shouldPause } from "./fileChannel";
 import { getIdentity } from "@/lib/history/identity";
 import {
   useSignaling,
@@ -78,6 +79,12 @@ export interface PeerApi {
   mediaError: string | null;
   clock: SyncedClock | null;
   send: (m: PeerMessage) => void;
+  /** Sends one chunk of a file. Returns false when the channel is not open
+   *  or the send buffer is too full to accept more right now. */
+  sendFileChunk: (chunk: ArrayBuffer) => boolean;
+  /** Registers the receiver for inbound file chunks. Returns an unsubscribe
+   *  function. Only one receiver at a time; a second call replaces the first. */
+  onFileChunk: (handler: (chunk: ArrayBuffer) => void) => () => void;
   /** Everything known about the route, as pasteable text. */
   report: (activity: string | null) => string;
   /** Caps the outgoing camera, or lets it run free. */
@@ -149,6 +156,7 @@ export function usePeerConnection(
   const jitterRef = useRef<JitterSample | null>(null);
   const audioRef = useRef<AudioSample | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
+  const fileDcRef = useRef<RTCDataChannel | null>(null);
   const clockRef = useRef<SyncedClock | null>(null);
   const offeredRef = useRef(false);
   const pendingIce = useRef<RTCIceCandidateInit[]>([]);
@@ -162,6 +170,7 @@ export function usePeerConnection(
   const ratesRef = useRef<TrafficRates | null>(null);
   const connectedAt = useRef<number | null>(null);
   const onMessageRef = useRef(onMessage);
+  const onFileChunkRef = useRef<((chunk: ArrayBuffer) => void) | null>(null);
   useEffect(() => {
     onMessageRef.current = onMessage;
   });
@@ -170,6 +179,22 @@ export function usePeerConnection(
   const send = useCallback((m: PeerMessage) => {
     const dc = dcRef.current;
     if (dc?.readyState === "open") dc.send(encode(m));
+  }, []);
+
+  const sendFileChunk = useCallback((chunk: ArrayBuffer) => {
+    const dc = fileDcRef.current;
+    if (!dc || dc.readyState !== "open" || shouldPause(dc.bufferedAmount)) {
+      return false;
+    }
+    dc.send(chunk);
+    return true;
+  }, []);
+
+  const onFileChunk = useCallback((handler: (chunk: ArrayBuffer) => void) => {
+    onFileChunkRef.current = handler;
+    return () => {
+      if (onFileChunkRef.current === handler) onFileChunkRef.current = null;
+    };
   }, []);
 
   const wireDataChannel = useCallback((dc: RTCDataChannel) => {
@@ -202,6 +227,20 @@ export function usePeerConnection(
       setClock(null);
     };
   }, [send]);
+
+  const wireFileChannel = useCallback((dc: RTCDataChannel) => {
+    dc.binaryType = "arraybuffer";
+    fileDcRef.current = dc;
+    dc.onmessage = (e) => {
+      // Some browsers ignore binaryType and deliver Blob; callers only accept
+      // ArrayBuffer chunks, so never hand them a payload they cannot assemble.
+      if (!(e.data instanceof ArrayBuffer)) return;
+      onFileChunkRef.current?.(e.data);
+    };
+    dc.onclose = () => {
+      if (fileDcRef.current === dc) fileDcRef.current = null;
+    };
+  }, []);
 
   // Acquire local media once per attempt.
   useEffect(() => {
@@ -259,7 +298,13 @@ export function usePeerConnection(
       setRemoteStream(e.streams[0] ?? null);
       shortenJitterBuffer(e.receiver);
     };
-    pc.ondatachannel = (e) => wireDataChannel(e.channel);
+    pc.ondatachannel = (e) => {
+      if (e.channel.label === "sync") {
+        wireDataChannel(e.channel);
+        return;
+      }
+      if (e.channel.label === "files") wireFileChannel(e.channel);
+    };
     pc.onicecandidate = (e) => {
       if (e.candidate) {
         sendSignalRef.current({
@@ -311,7 +356,7 @@ export function usePeerConnection(
       }
     };
     return pc;
-  }, [localStream, wireDataChannel]);
+  }, [localStream, wireDataChannel, wireFileChannel]);
 
   const signaling = useSignaling(
     code,
@@ -327,6 +372,7 @@ export function usePeerConnection(
       setState("connecting");
       const pc = pcRef.current ?? (await buildConnection());
       wireDataChannel(pc.createDataChannel("sync", { ordered: true }));
+      wireFileChannel(pc.createDataChannel("files", { ordered: true }));
       const offer = await pc.createOffer();
       // Rewritten before it is set, because there is no API for these: the
       // browser negotiates audio for a phone call and this is the only place
@@ -429,6 +475,8 @@ export function usePeerConnection(
       cancelRecovery(pending);
       clockRef.current?.stop();
       dcRef.current?.close();
+      fileDcRef.current?.close();
+      fileDcRef.current = null;
       pcRef.current?.close();
       pcRef.current = null;
       offeredRef.current = false;
@@ -499,6 +547,8 @@ export function usePeerConnection(
     setClock(null);
     dcRef.current?.close();
     dcRef.current = null;
+    fileDcRef.current?.close();
+    fileDcRef.current = null;
     pcRef.current?.close();
     pcRef.current = null;
     offeredRef.current = false;
@@ -521,6 +571,8 @@ export function usePeerConnection(
     ratesRef.current = null;
     clockRef.current?.stop();
     dcRef.current?.close();
+    fileDcRef.current?.close();
+    fileDcRef.current = null;
     pcRef.current?.close();
     pcRef.current = null;
     offeredRef.current = false;
@@ -556,6 +608,8 @@ export function usePeerConnection(
     mediaError,
     clock,
     send,
+    sendFileChunk,
+    onFileChunk,
     report,
     setVideoMode,
     retry,

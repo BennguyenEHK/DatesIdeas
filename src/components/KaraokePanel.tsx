@@ -26,6 +26,25 @@ export interface TrackChoice {
 }
 
 /**
+ * Fetching a song from a pasted link, through the helper on one of the two
+ * computers.
+ *
+ * `available` is null until it has been looked up, and that distinction is
+ * load-bearing: with no helper the link box has to fall back to embedding the
+ * video, which cannot change speed. Guessing wrong in either direction sends
+ * someone down the wrong path silently.
+ */
+export interface HelperFetch {
+  available: boolean | null;
+  /** True while fetching or transferring, so the form should not be resubmitted. */
+  busy: boolean;
+  /** What is happening right now, for the wait that is otherwise 30 blank seconds. */
+  note: string | null;
+  error: string | null;
+  onFetchUrl: (url: string) => void;
+}
+
+/**
  * The karaoke control panel, living in the bottom letterbox bar under the
  * video. The transport stays available before a song is loaded, so choosing a
  * song remains an action inside the room rather than an entry gate.
@@ -42,6 +61,8 @@ export function KaraokePanel(props: {
   onLoad: (videoId: string) => void;
   /** Everything about singing to a file you own rather than to YouTube. */
   track: TrackChoice;
+  /** Fetching a pasted link through the helper, when there is one. */
+  helper: HelperFetch;
   picking: boolean;
   onPick: () => void;
   onCancelPick: () => void;
@@ -66,6 +87,7 @@ export function KaraokePanel(props: {
     onNoisy,
     onLoad,
     track,
+    helper,
     picking,
     onPick,
     onCancelPick,
@@ -89,6 +111,7 @@ export function KaraokePanel(props: {
           hasSong={videoId !== null}
           onCancel={onCancelPick}
           track={track}
+          helper={helper}
         />
       ) : (
         <Transport
@@ -277,6 +300,7 @@ function SongPicker({
   hasSong,
   onCancel,
   track,
+  helper,
 }: {
   onLoad: (videoId: string) => void;
   videoError: number | null;
@@ -284,6 +308,7 @@ function SongPicker({
   hasSong: boolean;
   onCancel: () => void;
   track: TrackChoice;
+  helper: HelperFetch;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState(false);
@@ -293,13 +318,21 @@ function SongPicker({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (helper.busy) return;
+
     const id = youTubeId(value);
     if (id === null) {
       setError(true);
       return;
     }
     setError(false);
-    onLoad(id);
+
+    // The same link means two different things depending on whether a helper
+    // answered. With one, the audio is fetched and both sides sing to a file
+    // that can be nudged faster to close a gap. Without one, the video is
+    // embedded, which is instant and cannot change speed at all.
+    if (helper.available === true) helper.onFetchUrl(value);
+    else onLoad(id);
   }
 
   return (
@@ -380,9 +413,10 @@ function SongPicker({
 
       <button
         type="submit"
-        className="shrink-0 rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10"
+        disabled={helper.busy}
+        className="shrink-0 rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10 disabled:cursor-not-allowed disabled:border-[var(--mist)]/30 disabled:text-[var(--mist)]"
       >
-        Load song
+        {helper.busy ? "Working…" : "Load song"}
       </button>
 
       {/* Same slot carries the helper copy or the error, so the row's
@@ -397,6 +431,20 @@ function SongPicker({
             </span>
             That doesn&rsquo;t look like a YouTube link — try pasting it again.
           </p>
+        ) : helper.error !== null ? (
+          <p role="alert" className="text-[var(--cream)]">
+            <span aria-hidden className="mr-1 text-[var(--neon)]">
+              ●
+            </span>
+            {helper.error}
+          </p>
+        ) : helper.note !== null ? (
+          // Fetching and transferring together take the better part of a
+          // minute. Saying which of them is happening is the difference
+          // between a wait and an app that looks broken.
+          <p aria-live="polite" className="text-[var(--lamp)]">
+            {helper.note}
+          </p>
         ) : videoError !== null ? (
           // YouTube refused the video after it loaded, which is a different
           // failure from a bad link and needs a different suggestion.
@@ -407,7 +455,11 @@ function SongPicker({
             {videoErrorMessage(videoError)}
           </p>
         ) : (
-          <p className="text-[var(--mist)]">A karaoke or lyrics video works best.</p>
+          <p className="text-[var(--mist)]">
+            {helper.available === true
+              ? "A karaoke or lyrics video works best. The audio and the words are fetched for both of you — it takes a moment."
+              : "A karaoke or lyrics video works best."}
+          </p>
         )}
       </div>
         </>

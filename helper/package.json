@@ -1,0 +1,13 @@
+{
+  "name": "datesidea-karaoke-helper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.mjs",
+    "test": "node --test extract.test.mjs token.test.mjs tunnel.test.mjs"
+  }
+}

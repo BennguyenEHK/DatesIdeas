@@ -73,7 +73,22 @@ export type PeerMessage =
   // the same distance it started at -- so the pair of you cannot both be
   // accommodating at once. This message is what decides whose turn it is:
   // whoever is singing stays on the beat, and the one listening moves.
-  | { t: "singing"; on: boolean };
+  | { t: "singing"; on: boolean }
+  | { t: "track-request"; url: string; requestId: string }
+  // Lyrics ride with the transfer plan because their small text payload does
+  // not justify competing with the audio bytes on the file channel. `null`
+  // remains meaningful: the track can play when no timed lyrics were found.
+  | {
+      t: "track-meta";
+      requestId: string;
+      title: string;
+      durationSec: number;
+      bytes: number;
+      chunks: number;
+      lrc: string | null;
+    }
+  | { t: "track-done"; requestId: string }
+  | { t: "track-error"; requestId: string; message: string };
 
 export function encode(m: PeerMessage): string {
   return JSON.stringify(m);
@@ -158,6 +173,35 @@ export function decode(raw: string): PeerMessage | null {
         : null;
     case "singing":
       return typeof m.on === "boolean" ? { t: "singing", on: m.on } : null;
+    case "track-request":
+      return isStr(m.url) && isStr(m.requestId)
+        ? { t: "track-request", url: m.url, requestId: m.requestId }
+        : null;
+    case "track-meta":
+      return isStr(m.requestId) &&
+        isStr(m.title) &&
+        isNum(m.durationSec) &&
+        isNum(m.bytes) &&
+        m.bytes >= 0 &&
+        isNum(m.chunks) &&
+        m.chunks >= 1 &&
+        (m.lrc === null || isStr(m.lrc))
+        ? {
+            t: "track-meta",
+            requestId: m.requestId,
+            title: m.title,
+            durationSec: m.durationSec,
+            bytes: m.bytes,
+            chunks: m.chunks,
+            lrc: m.lrc,
+          }
+        : null;
+    case "track-done":
+      return isStr(m.requestId) ? { t: "track-done", requestId: m.requestId } : null;
+    case "track-error":
+      return isStr(m.requestId) && isStr(m.message)
+        ? { t: "track-error", requestId: m.requestId, message: m.message }
+        : null;
     default:
       return null;
   }

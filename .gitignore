@@ -32,9 +32,12 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
-# ...but the template carries no values and must be committed, or a fresh
-# clone has no way to know which variables the app needs.
+# ...but the templates carry no values and must be committed, or a fresh
+# clone has no way to know which variables the app needs. Both are named
+# explicitly rather than with a wildcard: a rule broad enough to re-admit
+# every "example" file is one typo away from committing a real secret.
 !.env.local.example
+!helper/.env.example
 
 # vercel
 .vercel

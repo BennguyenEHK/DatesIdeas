@@ -27,3 +27,19 @@ export function serverEnv(): ServerEnv {
     databaseUrl: required("DATABASE_URL", process.env.DATABASE_URL),
   };
 }
+
+/**
+ * The karaoke helper's shared secret, read on its own rather than as part of
+ * ServerEnv.
+ *
+ * Kept separate because db() calls serverEnv(), so folding this in would make
+ * every room, card and keepsake in the app fail with a missing-variable error
+ * until the helper happened to be configured. An optional feature must not be
+ * able to take down the room it lives in.
+ *
+ * Same rule as the connection string: never NEXT_PUBLIC_, never a client
+ * import. This one grants the ability to drive someone's home machine.
+ */
+export function helperSecret(): string {
+  return required("HELPER_SECRET", process.env.HELPER_SECRET);
+}

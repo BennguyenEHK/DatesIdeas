@@ -21,6 +21,13 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
       onAudioFile: vi.fn(),
       onLyricsFile: vi.fn(),
     },
+    helper: {
+      available: false as boolean | null,
+      busy: false,
+      note: null as string | null,
+      error: null as string | null,
+      onFetchUrl: vi.fn(),
+    },
     picking: false,
     onPick: vi.fn(),
     onCancelPick: vi.fn(),
@@ -84,6 +91,81 @@ describe("transport-first karaoke controls", () => {
   it("reports a video error in the transport", () => {
     setup({ videoError: 150 });
     expect(screen.getByRole("alert").textContent).toMatch(/outside youtube/i);
+  });
+});
+
+describe("pasting a link when a helper can fetch it", () => {
+  const HELPER = {
+    available: true,
+    busy: false,
+    note: null,
+    error: null,
+    onFetchUrl: vi.fn(),
+  };
+
+  function paste(props = {}) {
+    const p = setup({ picking: true, helper: { ...HELPER, onFetchUrl: vi.fn() }, ...props });
+    fireEvent.change(screen.getByPlaceholderText(/paste a youtube link/i), {
+      target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
+    });
+    return p;
+  }
+
+  it("fetches through the helper instead of embedding the video", () => {
+    // The whole point of the helper: the same link becomes audio both sides
+    // can nudge faster, rather than a video that cannot change speed at all.
+    const p = paste();
+    fireEvent.click(screen.getByRole("button", { name: /load song/i }));
+    expect(p.helper.onFetchUrl).toHaveBeenCalledWith(
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    );
+    expect(p.onLoad).not.toHaveBeenCalled();
+  });
+
+  it("embeds the video when no helper answered", () => {
+    const p = setup({ picking: true, helper: { ...HELPER, available: false, onFetchUrl: vi.fn() } });
+    fireEvent.change(screen.getByPlaceholderText(/paste a youtube link/i), {
+      target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load song/i }));
+    expect(p.onLoad).toHaveBeenCalledWith("dQw4w9WgXcQ");
+    expect(p.helper.onFetchUrl).not.toHaveBeenCalled();
+  });
+
+  it("does not fetch a link that is not YouTube", () => {
+    const p = setup({ picking: true, helper: { ...HELPER, onFetchUrl: vi.fn() } });
+    fireEvent.change(screen.getByPlaceholderText(/paste a youtube link/i), {
+      target: { value: "https://vimeo.com/12345" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load song/i }));
+    expect(p.helper.onFetchUrl).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toMatch(/doesn.t look like a youtube link/i);
+  });
+
+  it("refuses a second submit while one is already running", () => {
+    // Fetching takes the better part of a minute, which is exactly long
+    // enough for someone to press the button again.
+    const p = paste({ helper: { ...HELPER, busy: true, onFetchUrl: vi.fn() } });
+    const button = screen.getByRole("button", { name: /working/i });
+    expect(button).toHaveProperty("disabled", true);
+    fireEvent.click(button);
+    expect(p.helper.onFetchUrl).not.toHaveBeenCalled();
+  });
+
+  it("says what is happening during the wait", () => {
+    setup({
+      picking: true,
+      helper: { ...HELPER, busy: true, note: "Receiving the song — 40%" },
+    });
+    expect(screen.getByText(/receiving the song — 40%/i)).toBeTruthy();
+  });
+
+  it("shows a helper failure in place of the hint", () => {
+    setup({
+      picking: true,
+      helper: { ...HELPER, error: "The helper on your computer did not answer." },
+    });
+    expect(screen.getByRole("alert").textContent).toMatch(/did not answer/i);
   });
 });
 

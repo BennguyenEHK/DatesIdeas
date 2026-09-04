@@ -26,13 +26,23 @@ export interface KaraokeTrack {
   /** A sentence to show someone, or null. */
   error: string | null;
   /**
-   * Decode an audio file and hold it, resolving its length in seconds, or null
-   * when it could not be used. The length is the answer the room needs: it is
-   * what tells the other side which song this is.
+   * Decode audio and hold it, resolving its length in seconds, or null when it
+   * could not be used. The length is the answer the room needs: it is what
+   * tells the other side which song this is.
+   *
+   * Takes a Blob rather than a File so the same path serves both ways a track
+   * arrives: picked from this machine, or received from the other side over the
+   * data channel and wrapped around its bytes.
    */
-  chooseAudio: (file: File) => Promise<number | null>;
+  chooseAudio: (file: Blob) => Promise<number | null>;
   /** Read an .lrc file and hold its timed lines. */
   chooseLyrics: (file: File) => Promise<void>;
+  /**
+   * Hold already-read lyrics text. The helper and the peer both deliver an
+   * .lrc as a string rather than a file, and neither should have to build a
+   * Blob just to be handed straight back its own contents.
+   */
+  setLyricsText: (text: string) => void;
   /** Forget the track and release the audio graph. */
   clear: () => void;
 }
@@ -81,7 +91,7 @@ export function useKaraokeTrack(): KaraokeTrack {
   }, []);
 
   const chooseAudio = useCallback(
-    async (file: File): Promise<number | null> => {
+    async (file: Blob): Promise<number | null> => {
       setError(null);
       setLoading(true);
       try {
@@ -109,23 +119,29 @@ export function useKaraokeTrack(): KaraokeTrack {
     [ensurePlayer],
   );
 
-  const chooseLyrics = useCallback(async (file: File) => {
-    try {
-      const text = await file.text();
-      const parsed = parseLrc(text);
-      if (parsed.length === 0) {
-        // Deliberately not an error that clears the song: the audio is the
-        // point and lyrics are the decoration, so a bad .lrc must not cost
-        // somebody the track they already loaded.
-        setError("No timed lines were found in that file. The song still plays.");
-        return;
-      }
-      setLyrics(parsed);
-      setError(null);
-    } catch {
-      setError("That lyrics file could not be read.");
+  const setLyricsText = useCallback((text: string) => {
+    const parsed = parseLrc(text);
+    if (parsed.length === 0) {
+      // Deliberately not an error that clears the song: the audio is the
+      // point and lyrics are the decoration, so a bad .lrc must not cost
+      // somebody the track they already loaded.
+      setError("No timed lines were found in that file. The song still plays.");
+      return;
     }
+    setLyrics(parsed);
+    setError(null);
   }, []);
+
+  const chooseLyrics = useCallback(
+    async (file: File) => {
+      try {
+        setLyricsText(await file.text());
+      } catch {
+        setError("That lyrics file could not be read.");
+      }
+    },
+    [setLyricsText],
+  );
 
   const clear = useCallback(() => {
     playerRef.current?.setTrack(null);
@@ -152,6 +168,7 @@ export function useKaraokeTrack(): KaraokeTrack {
     error,
     chooseAudio,
     chooseLyrics,
+    setLyricsText,
     clear,
   };
 }

@@ -218,3 +218,72 @@ describe("starting a photo booth sitting", () => {
     expect(decode(JSON.stringify({ ...shot, startAt: "soon" }))).toBeNull();
   });
 });
+
+describe("karaoke track messages", () => {
+  const request = {
+    t: "track-request" as const,
+    url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    requestId: "request-1",
+  };
+  const meta = {
+    t: "track-meta" as const,
+    requestId: "request-1",
+    title: "Never Gonna Give You Up",
+    durationSec: 212,
+    bytes: 5_242_880,
+    chunks: 320,
+    lrc: "[00:00.00]Never gonna give you up",
+  };
+  const done = { t: "track-done" as const, requestId: "request-1" };
+  const error = {
+    t: "track-error" as const,
+    requestId: "request-1",
+    message: "The helper could not fetch this track.",
+  };
+
+  it.each([request, meta, done, error])("round-trips %o", (msg) => {
+    expect(decode(encode(msg))).toEqual(msg);
+  });
+
+  it("accepts metadata without synced lyrics", () => {
+    // Missing timed lyrics do not make the audio unusable, so absence has its
+    // own valid representation instead of looking like a broken transfer.
+    expect(decode(encode({ ...meta, lrc: null }))).toEqual({ ...meta, lrc: null });
+  });
+
+  it("rejects a non-text lyric payload", () => {
+    expect(decode(JSON.stringify({ ...meta, lrc: 42 }))).toBeNull();
+  });
+
+  it.each([
+    [request, "url", 42],
+    [request, "requestId", 42],
+    [meta, "requestId", 42],
+    [meta, "title", 42],
+    [meta, "durationSec", "212"],
+    [meta, "bytes", "5242880"],
+    [meta, "chunks", "320"],
+    [meta, "lrc", 42],
+    [done, "requestId", 42],
+    [error, "requestId", 42],
+    [error, "message", 42],
+  ] as const)("rejects %s with a missing or wrong-typed %s", (msg, field, wrongValue) => {
+    const missing = { ...msg } as Record<string, unknown>;
+    delete missing[field];
+    expect(decode(JSON.stringify(missing))).toBeNull();
+    expect(decode(JSON.stringify({ ...msg, [field]: wrongValue }))).toBeNull();
+  });
+
+  it("rejects an impossible transfer declaration", () => {
+    expect(decode(JSON.stringify({ ...meta, chunks: 0 }))).toBeNull();
+    expect(decode(JSON.stringify({ ...meta, bytes: -1 }))).toBeNull();
+  });
+
+  it("still rejects unknown message types", () => {
+    expect(decode(JSON.stringify({ t: "track-progress" }))).toBeNull();
+  });
+
+  it("still rejects malformed JSON", () => {
+    expect(decode('{"t":"track-meta"')).toBeNull();
+  });
+});
