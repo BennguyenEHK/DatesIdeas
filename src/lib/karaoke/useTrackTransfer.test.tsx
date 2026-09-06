@@ -102,6 +102,29 @@ describe("sendTrack", () => {
     expect(t.sendFileChunk).not.toHaveBeenCalled();
   });
 
+  it("THE REGRESSION: waits for a channel that is still opening", async () => {
+    // A data channel is not open the instant a peer appears, and a fetch can
+    // finish inside that window. Checking once and giving up turns "still
+    // connecting" into "nobody there", and the other person never receives the
+    // song at all -- they are left watching a player that was never sent one.
+    vi.useFakeTimers();
+    let opens = 0;
+    const t = setup({
+      // Shut for the first second of asking, then open, as a real one does.
+      channelOpen: () => ++opens > 5,
+    });
+
+    await act(async () => {
+      const p = t.view.result.current.sendTrack(track());
+      await vi.advanceTimersByTimeAsync(30_000);
+      await p;
+    });
+
+    expect(t.messages.at(0)?.t).toBe("track-meta");
+    expect(t.messages.at(-1)?.t).toBe("track-done");
+    expect(t.sent.length).toBeGreaterThan(0);
+  });
+
   it("still waits out real backpressure rather than treating it as a dead peer", async () => {
     // The channel is open the whole time; it just refuses the first few
     // attempts. Giving up here would break sending over a slow connection,

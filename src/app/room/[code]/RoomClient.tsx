@@ -49,6 +49,7 @@ import {
 } from "@/lib/media/singerTurn";
 import type { PlayerHandle } from "@/lib/media/player";
 import type { SyncPrecision } from "@/lib/media/sync";
+import { stagePlayer } from "@/lib/media/stagePlayer";
 import { useVolumeDuck } from "@/lib/media/useVolumeDuck";
 import { worthDucking } from "@/lib/media/duck";
 import { uploadKeepsake, type KeepsakeKind } from "@/lib/photo/keepsake";
@@ -89,10 +90,6 @@ export function RoomClient({ code }: { code: string }) {
   // playing: in a noisy room the microphone processing that ruins singing is
   // the same processing keeping the singing audible at all.
   const [noisy, setNoisy] = useState(false);
-  // Whether karaoke is singing to a file you own rather than to a video. Set
-  // when a track is chosen and cleared when a YouTube link is loaded, so the
-  // two ways of choosing a song cannot both claim to be current.
-  const [trackMode, setTrackMode] = useState(false);
   // Browsing for the next song. Local on purpose — opening the picker used to
   // clear the video through shared state, which cut the other person off
   // mid-verse just because you went looking for the next track.
@@ -279,8 +276,22 @@ export function RoomClient({ code }: { code: string }) {
    * still answers is whether the pair of you can nudge the song's speed, which
    * only a file you hold allows.
    */
-  const ownTrack = current === "karaoke" && trackMode && track.ready;
   const media = useSyncedPlayback(player, peer.clock, peer.send, offsetMs / 1000, precision);
+  /**
+   * Which player the stage should be showing, decided in one place.
+   *
+   * This used to be read off a flag meaning "this side holds the file", which
+   * answers a different question -- whether the song's speed can be nudged --
+   * and left the side WITHOUT the file falling through to the YouTube player.
+   * The sync layer then handed that player the shared id, which for a fetched
+   * track is the song's title, and the other person got "Video unavailable"
+   * while the sender watched it play perfectly.
+   */
+  const stage = stagePlayer({
+    activity: current,
+    filmSource: media.film.source,
+    hasFile: current === "karaoke" ? track.ready : movieFile !== null,
+  });
   useEffect(() => {
     acceptMedia.current = media.accept;
     clearMedia.current = media.clear;
@@ -337,7 +348,6 @@ export function RoomClient({ code }: { code: string }) {
     (file: File) => {
       void track.chooseMedia(file).then((seconds) => {
         if (seconds === null) return;
-        setTrackMode(true);
         // The last refusal was about the last song, not this one.
         setVideoError(null);
         setPicking(false);
@@ -368,7 +378,6 @@ export function RoomClient({ code }: { code: string }) {
     (arrived: ReceivedTrack) => {
       void track.chooseMedia(arrived.media, arrived.durationSec).then((seconds) => {
         if (seconds === null) return;
-        setTrackMode(true);
         setVideoError(null);
         setPicking(false);
         media.load({
@@ -712,7 +721,7 @@ export function RoomClient({ code }: { code: string }) {
                 remoteMemes={theirs.memes}
                 mediaError={peer.mediaError}
               >
-                {ownTrack ? (
+                {karaoke && stage === "local" ? (
                   // The karaoke video itself, in the same <video> element a
                   // local film uses. Its words are burned into the picture,
                   // which is why the scrolling lyrics that used to live here are
@@ -726,7 +735,17 @@ export function RoomClient({ code }: { code: string }) {
                     }}
                     onError={setFileError}
                   />
-                ) : karaoke || (movie && media.film.source === "youtube") ? (
+                ) : stage === "waiting" ? (
+                  // Deliberately no player at all. Mounting the YouTube one
+                  // here is what showed the other person "Video unavailable":
+                  // the sync layer would hand it the shared id, which for a
+                  // fetched track is the song's title rather than a video.
+                  <div className="flex h-full w-full items-center justify-center px-8 text-center">
+                    <p className="text-sm text-[var(--mist)]">
+                      The song is coming over from their computer.
+                    </p>
+                  </div>
+                ) : stage === "youtube" ? (
                   <YouTubePlayer ref={setPlayer} onError={setVideoError} />
                 ) : movie ? (
                   <LocalFilePlayer
@@ -883,7 +902,6 @@ export function RoomClient({ code }: { code: string }) {
                     onLoad={(id) => {
                       // Going back to a video gives up the speed control a file
                       // bought, so the two modes cannot both be current.
-                      setTrackMode(false);
                       // A new attempt starts clean; the last refusal was about the
                       // last video, not this one.
                       setVideoError(null);

@@ -51,6 +51,17 @@ const BACKPRESSURE_WAIT_MS = 50;
  */
 const SEND_GIVE_UP_MS = 15_000;
 
+/**
+ * How long to let a file channel finish opening before deciding nobody is there.
+ *
+ * A data channel is not open the instant the other person appears, and a fetch
+ * can easily land inside that gap. Asking once and giving up reads "still
+ * connecting" as "alone", which costs the other person the song entirely --
+ * they are left watching a player that was never sent anything. Waiting instead
+ * costs a few seconds in the case where they really are absent.
+ */
+const CHANNEL_OPEN_WAIT_MS = 10_000;
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -171,10 +182,14 @@ export function useTrackTransfer(args: {
       title: string;
       durationSec: number;
     }) => {
-      // Nothing on the other end, so there is nothing to announce. Not an
-      // error: the track is already loaded on this side, and someone trying a
-      // song out while the other person is offline is not owed a failure.
-      if (!fileChannelOpen()) return;
+      // Give the channel a chance to finish opening before concluding there is
+      // nobody on the other end. Not an error either way: the track is already
+      // loaded on this side, and someone trying a song out while the other
+      // person is offline is not owed a failure.
+      for (let waited = 0; !fileChannelOpen(); waited += BACKPRESSURE_WAIT_MS) {
+        if (waited >= CHANNEL_OPEN_WAIT_MS) return;
+        await wait(BACKPRESSURE_WAIT_MS);
+      }
 
       sendMessage({
         t: "track-meta",
