@@ -5,7 +5,7 @@ import { EXPOSED_HEADERS, corsHeaders } from './cors.mjs';
 const APP = 'https://datesideas.vercel.app';
 
 test('THE BUG: the track headers are exposed, or the browser cannot read them', () => {
-  // Everything about this request succeeded -- three megabytes of audio
+  // Everything about this request succeeded -- a video
   // arrived -- and the page still reported that the song could not be
   // fetched, because a browser hides every custom response header from
   // fetch() unless the server names it here. curl obeys no such rule, which
@@ -14,18 +14,18 @@ test('THE BUG: the track headers are exposed, or the browser cannot read them', 
   assert.ok(headers, 'the app origin must be allowed');
   const exposed = headers['Access-Control-Expose-Headers'];
   assert.ok(exposed, 'no Access-Control-Expose-Headers at all');
-  for (const name of ['X-Track-Title', 'X-Track-Duration', 'X-Track-Lrc']) {
+  for (const name of ['X-Track-Title', 'X-Track-Duration']) {
     assert.ok(exposed.includes(name), `${name} is unreadable in a browser`);
   }
 });
 
 test('every header the client reads is in the exposed list', () => {
-  // src/lib/karaoke/helperClient.ts reads exactly these three, and treats a
+  // src/lib/karaoke/helperClient.ts reads exactly these two, and treats a
   // missing title or duration as a failed extraction. Adding a fourth reader
   // there without adding it here would fail the same silent way.
   assert.deepEqual(
     [...EXPOSED_HEADERS].sort(),
-    ['X-Track-Duration', 'X-Track-Lrc', 'X-Track-Title'],
+    ['X-Track-Duration', 'X-Track-Title'],
   );
 });
 

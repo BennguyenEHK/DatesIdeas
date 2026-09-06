@@ -11,10 +11,9 @@ import type { PeerMessage } from "@/lib/rtc/protocol";
 
 /** A track that has fully arrived from the other side. */
 export interface ReceivedTrack {
-  audio: Blob;
+  media: Blob;
   title: string;
   durationSec: number;
-  lrc: string | null;
 }
 
 export interface TrackTransfer {
@@ -27,11 +26,10 @@ export interface TrackTransfer {
   /** Push a fetched track to the other side. Resolves when the last chunk is queued. */
   sendTrack: (args: {
     requestId: string;
-    audio: ArrayBuffer;
+    media: ArrayBuffer;
     contentType: string;
     title: string;
     durationSec: number;
-    lrc: string | null;
   }) => Promise<void>;
 }
 
@@ -73,9 +71,7 @@ export function useTrackTransfer(args: {
   // Every ref above the closures that write to them: the React Compiler
   // refuses a ref first modified inside a closure declared below it.
   const assemblerRef = useRef<Assembler | null>(null);
-  const pendingRef = useRef<{ title: string; durationSec: number; lrc: string | null } | null>(
-    null,
-  );
+  const pendingRef = useRef<{ title: string; durationSec: number } | null>(null);
   const onReceivedRef = useRef(onReceived);
   useEffect(() => {
     onReceivedRef.current = onReceived;
@@ -111,13 +107,13 @@ export function useTrackTransfer(args: {
 
       setError(null);
       onReceivedRef.current({
-        // The type is asserted rather than carried: every track the helper
-        // produces is AAC in an MP4 container, and decodeAudioData sniffs the
-        // container anyway, so a wrong label here costs nothing.
-        audio: new Blob([state.bytes], { type: "audio/mp4" }),
+        // The type is asserted rather than carried, and now it matters more than
+        // it used to: a <video> element decides whether to show a picture from
+        // this label, where the old audio path sniffed the container and could
+        // not be misled by a wrong one.
+        media: new Blob([state.bytes], { type: "video/mp4" }),
         title: pending.title,
         durationSec: pending.durationSec,
-        lrc: pending.lrc,
       });
     });
   }, [onFileChunk]);
@@ -128,7 +124,6 @@ export function useTrackTransfer(args: {
       pendingRef.current = {
         title: message.title,
         durationSec: message.durationSec,
-        lrc: message.lrc,
       };
       setError(null);
       setIncoming({ receivedBytes: 0, expectedBytes: message.bytes });
@@ -159,23 +154,21 @@ export function useTrackTransfer(args: {
   const sendTrack = useCallback(
     async (track: {
       requestId: string;
-      audio: ArrayBuffer;
+      media: ArrayBuffer;
       contentType: string;
       title: string;
       durationSec: number;
-      lrc: string | null;
     }) => {
       sendMessage({
         t: "track-meta",
         requestId: track.requestId,
         title: track.title,
         durationSec: track.durationSec,
-        bytes: track.audio.byteLength,
-        chunks: chunkCount(track.audio.byteLength),
-        lrc: track.lrc,
+        bytes: track.media.byteLength,
+        chunks: chunkCount(track.media.byteLength),
       });
 
-      for (const chunk of chunkTrack(track.audio)) {
+      for (const chunk of chunkTrack(track.media)) {
         // Retries rather than queues: the channel reports when its buffer is
         // full, and pushing past that is how a data channel gets dropped.
         while (!sendFileChunk(chunk)) await wait(BACKPRESSURE_WAIT_MS);

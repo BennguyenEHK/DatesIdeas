@@ -1,89 +1,90 @@
-import { describe, it, expect } from "vitest";
-import { decodeTrack, MAX_TRACK_MB, trackSizeMb, type DecodeTarget } from "./decode";
+import { describe, it, expect, vi } from "vitest";
+import {
+  MAX_TRACK_MB,
+  prepareTrack,
+  probeVideoDuration,
+  trackSizeMb,
+  type DurationProbe,
+} from "./decode";
 
-function fakeBlob(size: number, data: ArrayBuffer = new ArrayBuffer(1)): Blob {
-  return {
-    size,
-    arrayBuffer: async () => data,
-  } as unknown as Blob;
+function fakeBlob(size: number): Blob {
+  return { size } as unknown as Blob;
 }
 
-function fakeTarget(result: AudioBuffer | Promise<never>): DecodeTarget {
-  return {
-    decodeAudioData: async () => result,
-  };
-}
-
-function fakeBuffer(duration: number, numberOfChannels: number): AudioBuffer {
-  return { duration, numberOfChannels } as unknown as AudioBuffer;
-}
-
-describe("decodeTrack", () => {
+describe("prepareTrack", () => {
   it("reports sizes in megabytes and keeps the memory limit explicit", () => {
     expect(MAX_TRACK_MB).toBe(60);
     expect(trackSizeMb(fakeBlob(1.5 * 1024 * 1024))).toBe(1.5);
   });
 
-  it("rejects an empty file before decoding", async () => {
-    let decoded = false;
-    const target: DecodeTarget = {
-      decodeAudioData: async () => {
-        decoded = true;
-        return fakeBuffer(1, 2);
-      },
-    };
+  it("uses a valid duration hint without probing", async () => {
+    const probe = vi.fn<DurationProbe>();
+    const result = await prepareTrack(new Blob(["video"]), 93.25, probe);
 
-    expect(await decodeTrack(fakeBlob(0), target)).toEqual({ ok: false, reason: "empty" });
-    expect(decoded).toBe(false);
+    expect(probe).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, durationSec: 93.25 });
+    if (result.ok) {
+      expect(result.file).toBeInstanceOf(File);
+      expect(result.file.name).toBe("track.mp4");
+      expect(result.file.type).toBe("video/mp4");
+    }
+  });
+
+  it("uses the probe without a duration hint", async () => {
+    const probe = vi.fn<DurationProbe>().mockResolvedValue(42);
+
+    await expect(prepareTrack(new Blob(["video"]), null, probe)).resolves.toMatchObject({
+      ok: true,
+      durationSec: 42,
+    });
+    expect(probe).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an empty file before probing", async () => {
+    const probe = vi.fn<DurationProbe>();
+
+    await expect(prepareTrack(fakeBlob(0), null, probe)).resolves.toEqual({ ok: false, reason: "empty" });
+    expect(probe).not.toHaveBeenCalled();
   });
 
   it("rejects files over the memory limit", async () => {
-    const target: DecodeTarget = fakeTarget(fakeBuffer(1, 2));
-    expect(await decodeTrack(fakeBlob((MAX_TRACK_MB * 1024 * 1024) + 1), target)).toEqual({
+    const probe = vi.fn<DurationProbe>();
+
+    await expect(prepareTrack(fakeBlob((MAX_TRACK_MB * 1024 * 1024) + 1), null, probe)).resolves.toEqual({
       ok: false,
       reason: "too-big",
     });
   });
 
-  it("reports files that cannot be read", async () => {
-    const target: DecodeTarget = fakeTarget(fakeBuffer(1, 2));
-    const missingReader = { size: 1 } as unknown as Blob;
-    const rejectedReader = fakeBlob(1);
-    rejectedReader.arrayBuffer = async () => Promise.reject(new Error("read failed"));
+  it("rejects a missing duration", async () => {
+    const probe = vi.fn<DurationProbe>().mockResolvedValue(0);
 
-    await expect(decodeTrack(missingReader, target)).resolves.toEqual({
+    await expect(prepareTrack(new Blob(["video"]), null, probe)).resolves.toEqual({
       ok: false,
-      reason: "unreadable",
-    });
-    await expect(decodeTrack(rejectedReader, target)).resolves.toEqual({
-      ok: false,
-      reason: "unreadable",
+      reason: "no-duration",
     });
   });
+});
 
-  it("reports data the decoder cannot recognize", async () => {
-    const target: DecodeTarget = {
-      decodeAudioData: async () => Promise.reject(new Error("unsupported format")),
-    };
+describe("probeVideoDuration", () => {
+  it("gives up rather than hanging when metadata never arrives", async () => {
+    // jsdom never fires loadedmetadata, which is exactly the stuck decoder this
+    // guards against: without a timeout the promise never settles and the panel
+    // says it is still reading the file forever.
+    vi.useFakeTimers();
+    try {
+      URL.createObjectURL = vi.fn(() => "blob:probe-test");
+      URL.revokeObjectURL = vi.fn();
 
-    expect(await decodeTrack(fakeBlob(1), target)).toEqual({ ok: false, reason: "not-audio" });
-  });
-
-  it("reports decoded audio with no duration or channels", async () => {
-    const target = fakeTarget(fakeBuffer(0, 2));
-    const noChannels = fakeTarget(fakeBuffer(1, 0));
-
-    expect(await decodeTrack(fakeBlob(1), target)).toEqual({ ok: false, reason: "empty" });
-    expect(await decodeTrack(fakeBlob(1), noChannels)).toEqual({ ok: false, reason: "empty" });
-  });
-
-  it("returns the decoded buffer and its decoded duration", async () => {
-    const buffer = fakeBuffer(93.25, 2);
-
-    await expect(decodeTrack(fakeBlob(1), fakeTarget(buffer))).resolves.toEqual({
-      ok: true,
-      buffer,
-      durationSec: 93.25,
-    });
+      const pending = probeVideoDuration(new Blob(["bytes"]));
+      const settled = expect(pending).rejects.toThrow(/too long/i);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await settled;
+      // The object URL is released on the timeout path too, or a file that
+      // failed to load would be retained for the life of the page.
+      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:probe-test");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

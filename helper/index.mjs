@@ -41,7 +41,7 @@ function applyCors(request, response) {
  * An extraction failure in one line, ending at whatever yt-dlp actually said.
  *
  * The useful sentence is always the innermost one -- "HTTP Error 403" rather
- * than "Could not download the audio" -- so the chain is followed to its end
+ * than "Could not download the video" -- so the chain is followed to its end
  * and yt-dlp's own last words are appended. Trimmed to the tail because its
  * stderr can run to tens of kilobytes and the diagnosis is at the bottom.
  */
@@ -105,14 +105,13 @@ const server = createServer(async (request, response) => {
       timeoutMs: Number(process.env.TIMEOUT_MS) || undefined,
     });
     const headers = {
-      'Content-Type': 'audio/mp4',
-      'Content-Length': String(track.audio.length),
+      'Content-Type': 'video/mp4',
+      'Content-Length': String(track.media.length),
       'X-Track-Title': encodeURIComponent(track.title),
       'X-Track-Duration': String(track.durationSec),
     };
-    if (track.lrc) headers['X-Track-Lrc'] = encodeURIComponent(track.lrc);
     response.writeHead(200, headers);
-    response.end(track.audio);
+    response.end(track.media);
   } catch (error) {
     const status = error instanceof ExtractError && error.kind === 'not-found' ? 404
       : error instanceof ExtractError && error.kind === 'too-large' ? 413 : 500;

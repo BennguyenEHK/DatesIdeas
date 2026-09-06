@@ -1,6 +1,6 @@
 # DatesIdea karaoke helper
 
-This is the small Windows service that downloads YouTube karaoke audio over your home connection. Keep it running only while you are comfortable exposing its Cloudflare Tunnel URL: it accepts requests only with `HELPER_SECRET`.
+This is the small Windows service that downloads YouTube karaoke videos over your home connection. Keep it running only while you are comfortable exposing its Cloudflare Tunnel URL: it accepts requests only with `HELPER_SECRET`.
 
 ## 1. Install the prerequisites
 
@@ -80,4 +80,4 @@ If `cloudflared` is not on the system `PATH` for the scheduled task, set `CLOUDF
 
 ## Notes
 
-The requested yt-dlp selector prefers M4A but falls back to any best audio stream. With no ffmpeg (by design), that fallback can be WebM/Opus even though the wire contract labels the response `audio/mp4`; use an M4A-available video for guaranteed MP4 bytes.
+The helper requests a single pre-muxed MP4 video, so ffmpeg is not required. The response includes the karaoke lyrics already burned into the video picture.

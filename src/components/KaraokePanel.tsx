@@ -5,8 +5,6 @@ import { motion, useReducedMotion } from "motion/react";
 import { youTubeId } from "@/lib/media/youtube";
 import type { AudioMode } from "@/lib/media/micProfile";
 import { MAX_OFFSET_MS, type SingingTurn } from "@/lib/media/singerTurn";
-import { TrackDisc } from "./TrackDisc";
-import type { TrackDiscProps } from "./TrackDisc";
 
 export { MAX_OFFSET_MS };
 
@@ -17,14 +15,16 @@ export { MAX_OFFSET_MS };
  * arrangement a local film already has: only the position crosses the
  * connection, so each side opens its own copy. That is also why the length
  * matters — it is the only way to notice the two of you opened different files.
+ *
+ * There is no lyrics file any more. The helper fetches the karaoke video itself,
+ * and those videos carry their words in the picture, so a separate .lrc would be
+ * a second copy of something already on screen.
  */
 export interface TrackChoice {
   ready: boolean;
   loading: boolean;
-  hasLyrics: boolean;
   error: string | null;
-  onAudioFile: (file: File) => void;
-  onLyricsFile: (file: File) => void;
+  onMediaFile: (file: File) => void;
 }
 
 /**
@@ -42,6 +42,15 @@ export interface HelperFetch {
   busy: boolean;
   /** What is happening right now, for the wait that is otherwise 30 blank seconds. */
   note: string | null;
+  /**
+   * How far along, or null when the share is genuinely unknown.
+   *
+   * Null is not zero and must not be drawn as an empty bar. While the helper is
+   * still downloading there is no total to measure against, so the bar shows
+   * motion without a figure; only once bytes are crossing between the two of you
+   * is there a real fraction to report.
+   */
+  percent: number | null;
   error: string | null;
   onFetchUrl: (url: string) => void;
 }
@@ -65,13 +74,6 @@ export function KaraokePanel(props: {
   track: TrackChoice;
   /** Fetching a pasted link through the helper, when there is one. */
   helper: HelperFetch;
-  /**
-   * The record: present when a track is held in memory, turning when it plays.
-   *
-   * Not a loading indicator, though it has a state for the wait. Rotation is
-   * bound to playback alone, so a disc that turns always means audio is moving.
-   */
-  disc: TrackDiscProps;
   picking: boolean;
   onPick: () => void;
   onCancelPick: () => void;
@@ -97,7 +99,6 @@ export function KaraokePanel(props: {
     onLoad,
     track,
     helper,
-    disc,
     picking,
     onPick,
     onCancelPick,
@@ -122,7 +123,6 @@ export function KaraokePanel(props: {
           onCancel={onCancelPick}
           track={track}
           helper={helper}
-          disc={disc}
         />
       ) : (
         <Transport
@@ -144,7 +144,7 @@ export function KaraokePanel(props: {
           onPlayPause={onPlayPause}
           onResync={onResync}
           onPick={onPick}
-          disc={disc}
+          helper={helper}
         />
       )}
     </section>
@@ -233,56 +233,37 @@ function videoErrorMessage(code: number): string {
 /**
  * Picking a track you own, which is the only way this app can change speed.
  *
- * Two files rather than one, and that is not an oversight: the audio carries no
- * words and lyrics carry no sound. An .lrc is a plain text file of timestamps,
- * and without one the song still plays perfectly — you simply sing from memory.
+ * One file now, where there used to be two. A karaoke video carries its words in
+ * the picture, so the separate lyrics file it used to ask for would only ever
+ * have duplicated what you are already looking at.
  */
 function TrackPicker({ track }: { track: TrackChoice }) {
-  const audioId = useId();
-  const lyricsId = useId();
+  const mediaId = useId();
 
   return (
     <div className="flex w-full flex-col gap-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <label
-          htmlFor={audioId}
+          htmlFor={mediaId}
           className="cursor-pointer rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10"
         >
-          {track.ready ? "Change the audio" : "Choose the audio"}
+          {track.ready ? "Change the video" : "Choose the video"}
         </label>
         <input
-          id={audioId}
+          id={mediaId}
           type="file"
-          accept="audio/*"
+          accept="video/*"
           className="sr-only"
           onChange={(e) => {
             const file = e.target.files?.[0];
-            if (file) track.onAudioFile(file);
+            if (file) track.onMediaFile(file);
             // Cleared so choosing the same file twice still fires a change.
             e.target.value = "";
           }}
         />
 
-        <label
-          htmlFor={lyricsId}
-          className="cursor-pointer rounded-[2px] px-2 py-1.5 text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
-        >
-          {track.hasLyrics ? "Change the lyrics" : "Add lyrics (.lrc, optional)"}
-        </label>
-        <input
-          id={lyricsId}
-          type="file"
-          accept=".lrc,text/plain"
-          className="sr-only"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) track.onLyricsFile(file);
-            e.target.value = "";
-          }}
-        />
-
         {track.loading && (
-          <span className="tracking-[0.3em] text-[var(--lamp)]">DECODING</span>
+          <span className="tracking-[0.3em] text-[var(--lamp)]">READING</span>
         )}
       </div>
 
@@ -306,6 +287,54 @@ function TrackPicker({ track }: { track: TrackChoice }) {
   );
 }
 
+/**
+ * The wait, drawn honestly.
+ *
+ * This replaces a record that turned while a song loaded. The record was the
+ * wrong picture twice over: a spinning disc means sound is playing, and the
+ * thing being fetched is now a video rather than a record at all. A bar says the
+ * one thing that is actually true here — how much of the wait is left.
+ *
+ * A null percent is the helper's own download, where there is no total to
+ * measure against, so the bar sweeps instead of filling. Drawing that as 0%
+ * would be a lie that looks like a stall.
+ */
+function FetchProgress({ percent }: { percent: number | null }) {
+  const still = useReducedMotion();
+  const known = percent !== null && Number.isFinite(percent);
+  const width = known ? Math.min(100, Math.max(0, percent)) : 100;
+
+  return (
+    <div
+      role="progressbar"
+      aria-label="Loading the song"
+      // Omitted entirely when unknown: a progressbar with no aria-valuenow is
+      // how the platform says "indeterminate", where 0 would be announced as no
+      // progress at all.
+      aria-valuenow={known ? Math.round(width) : undefined}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      className="mt-1.5 h-[2px] w-full overflow-hidden rounded-full bg-[var(--edge)]"
+    >
+      <motion.div
+        className="h-full rounded-full bg-[var(--lamp)]"
+        style={{ boxShadow: "0 0 6px var(--lamp)" }}
+        initial={false}
+        animate={
+          known || still
+            ? { width: `${width}%`, opacity: 1 }
+            : { width: "100%", opacity: [0.25, 1, 0.25] }
+        }
+        transition={
+          known || still
+            ? { duration: 0.3, ease: "easeOut" }
+            : { duration: 1.6, repeat: Infinity, ease: "easeInOut" }
+        }
+      />
+    </div>
+  );
+}
+
 function SongPicker({
   onLoad,
   videoError,
@@ -313,7 +342,6 @@ function SongPicker({
   onCancel,
   track,
   helper,
-  disc,
 }: {
   onLoad: (videoId: string) => void;
   videoError: number | null;
@@ -322,7 +350,6 @@ function SongPicker({
   onCancel: () => void;
   track: TrackChoice;
   helper: HelperFetch;
-  disc: TrackDiscProps;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState(false);
@@ -425,11 +452,6 @@ function SongPicker({
         />
       </div>
 
-      {/* Full size here, where there is room for the title: this is the panel
-          someone is looking at through the half minute a fetch takes. It
-          renders nothing of its own accord when there is no track. */}
-      <TrackDisc {...disc} />
-
       <button
         type="submit"
         disabled={helper.busy}
@@ -461,9 +483,12 @@ function SongPicker({
           // Fetching and transferring together take the better part of a
           // minute. Saying which of them is happening is the difference
           // between a wait and an app that looks broken.
-          <p aria-live="polite" className="text-[var(--lamp)]">
-            {helper.note}
-          </p>
+          <>
+            <p aria-live="polite" className="text-[var(--lamp)]">
+              {helper.note}
+            </p>
+            <FetchProgress percent={helper.percent} />
+          </>
         ) : videoError !== null ? (
           // YouTube refused the video after it loaded, which is a different
           // failure from a bad link and needs a different suggestion.
@@ -477,7 +502,7 @@ function SongPicker({
           <>
             <p className="text-[var(--mist)]">
               {helper.available === true
-                ? "A karaoke or lyrics video works best. The audio and the words are fetched for both of you — it takes a moment."
+                ? "A karaoke or lyrics video works best — the whole video is fetched for both of you, words and all, which takes a moment."
                 : "A karaoke or lyrics video works best."}
             </p>
             {helper.available === true && (
@@ -623,7 +648,7 @@ function Transport({
   onPlayPause,
   onResync,
   onPick,
-  disc,
+  helper,
 }: {
   videoId: string | null;
   videoError: number | null;
@@ -643,23 +668,16 @@ function Transport({
   onPlayPause: () => void;
   onResync: () => void;
   onPick: () => void;
-  disc: TrackDiscProps;
+  helper: HelperFetch;
 }) {
   const reduceMotion = useReducedMotion();
 
   return (
     <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 text-xs">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-        {/* The record takes the microphone's place once there is one, because
-            here -- beside the play button -- is where its turning actually
-            means something. With nothing held, the microphone keeps the spot. */}
-        {disc.state === "absent" ? (
-          <span aria-hidden className="shrink-0 text-base">
-            🎤
-          </span>
-        ) : (
-          <TrackDisc {...disc} size="sm" />
-        )}
+        <span aria-hidden className="shrink-0 text-base">
+          🎤
+        </span>
 
         <button
           type="button"
@@ -728,6 +746,21 @@ function Transport({
 
         <NoisyToggle noisy={noisy} onNoisy={onNoisy} />
       </div>
+
+      {/* A fetch outlives the picker that started it, so the wait has to be
+          visible from here too. Without this the panel someone is actually
+          looking at goes quiet for half a minute, which is the exact thing that
+          made this feature look broken before. */}
+      {helper.busy && (
+        <div className="w-full basis-full">
+          {helper.note !== null && (
+            <p aria-live="polite" className="text-[0.65rem] text-[var(--lamp)]">
+              {helper.note}
+            </p>
+          )}
+          <FetchProgress percent={helper.percent} />
+        </div>
+      )}
 
       <p className="w-full basis-full text-[0.65rem] text-[var(--mist)]">
         {videoError !== null ? (

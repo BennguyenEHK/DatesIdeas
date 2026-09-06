@@ -75,9 +75,10 @@ export type PeerMessage =
   // whoever is singing stays on the beat, and the one listening moves.
   | { t: "singing"; on: boolean }
   | { t: "track-request"; url: string; requestId: string }
-  // Lyrics ride with the transfer plan because their small text payload does
-  // not justify competing with the audio bytes on the file channel. `null`
-  // remains meaningful: the track can play when no timed lyrics were found.
+  // No lyrics field. The helper now fetches the video rather than its sound, and
+  // the karaoke videos people paste already have the words burned into the
+  // picture -- so timed lyrics would be a second copy of something already on
+  // screen, fetched from a service that has no idea which video was chosen.
   | {
       t: "track-meta";
       requestId: string;
@@ -85,7 +86,6 @@ export type PeerMessage =
       durationSec: number;
       bytes: number;
       chunks: number;
-      lrc: string | null;
     }
   | { t: "track-done"; requestId: string }
   | { t: "track-error"; requestId: string; message: string };
@@ -184,8 +184,7 @@ export function decode(raw: string): PeerMessage | null {
         isNum(m.bytes) &&
         m.bytes >= 0 &&
         isNum(m.chunks) &&
-        m.chunks >= 1 &&
-        (m.lrc === null || isStr(m.lrc))
+        m.chunks >= 1
         ? {
             t: "track-meta",
             requestId: m.requestId,
@@ -193,7 +192,6 @@ export function decode(raw: string): PeerMessage | null {
             durationSec: m.durationSec,
             bytes: m.bytes,
             chunks: m.chunks,
-            lrc: m.lrc,
           }
         : null;
     case "track-done":

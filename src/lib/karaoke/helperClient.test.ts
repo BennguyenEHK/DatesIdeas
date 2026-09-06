@@ -83,16 +83,15 @@ describe("fetchTrack", () => {
     });
   });
 
-  it("returns intact audio and decoded metadata", async () => {
+  it("returns intact media and decoded metadata", async () => {
     const bytes = Uint8Array.from({ length: 1024 }, (_, index) => index % 251);
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
       new Response(bytes, {
         status: 200,
         headers: {
-          "Content-Type": "audio/mp4",
+          "Content-Type": "video/mp4",
           "X-Track-Title": encodeURIComponent("Cà phê"),
           "X-Track-Duration": "123.45",
-          "X-Track-Lrc": encodeURIComponent("[00:01.00] hello"),
         },
       }),
     );
@@ -100,27 +99,16 @@ describe("fetchTrack", () => {
     const result = await fetchTrack("http://helper.test", "secret", "https://youtu.be/abc", { fetch });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.track.audio.byteLength).toBe(bytes.byteLength);
-      expect(new Uint8Array(result.track.audio)[10]).toBe(bytes[10]);
+      expect(result.track.media.byteLength).toBe(bytes.byteLength);
+      expect(new Uint8Array(result.track.media)[10]).toBe(bytes[10]);
       expect(result.track).toMatchObject({
-        contentType: "audio/mp4",
+        contentType: "video/mp4",
         title: "Cà phê",
         durationSec: 123.45,
-        lrc: "[00:01.00] hello",
       });
     }
   });
 
-  it("allows absent lyrics", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(
-      new Response(new Uint8Array(1024), {
-        headers: { "X-Track-Title": "Song", "X-Track-Duration": "10" },
-      }),
-    );
-    const result = await fetchTrack("http://helper.test", "secret", "https://youtu.be/abc", { fetch });
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.track.lrc).toBeNull();
-  });
 
   it("reports malformed encoded headers without throwing", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(

@@ -4,7 +4,6 @@ import {
   DEFAULT_PLAYER_CLIENTS,
   buildMetadataArgs,
   buildYtDlpArgs,
-  chooseLyrics,
   isAllowedYouTubeUrl,
   playerClients,
   run,
@@ -36,9 +35,15 @@ test('buildYtDlpArgs returns isolated arguments with format and duration filter'
   const args = buildYtDlpArgs(url, 'C:/temp/example');
   assert.ok(Array.isArray(args));
   assert.ok(args.includes(url));
-  assert.ok(args.includes('bestaudio[ext=m4a]/bestaudio'));
+  assert.ok(args.includes('best[ext=mp4][vcodec!=none][acodec!=none]/18/best[ext=mp4]'));
   assert.ok(args.some((value) => value.startsWith('duration <= ')));
   assert.ok(args.every((value) => !value.includes('yt-dlp ') && !value.includes(' && ') && !value.includes(' | ')));
+});
+
+test('the video format selector never requests a merge', () => {
+  const format = valueAfter(buildYtDlpArgs('https://youtu.be/example', 'C:/temp/example'), '--format');
+  assert.ok(format, 'no --format selector in the download command');
+  assert.ok(!format.includes('+'), `format selector requires a merge: ${format}`);
 });
 
 test('THE BUG: the download asks for a player client that is allowed to serve media', () => {
@@ -65,7 +70,7 @@ test('THE OTHER BUG: metadata asks for a few fields, not the whole format list',
   const template = valueAfter(args, '--print');
   assert.ok(template, 'no --print template');
   assert.match(template, /^%\(\.\{[^}]+\}\)j$/, `not a JSON field subset: ${template}`);
-  for (const field of ['duration', 'title', 'track', 'artist', 'uploader']) {
+  for (const field of ['duration', 'title']) {
     assert.ok(template.includes(field), `metadata drops ${field}, which is read later`);
   }
 });
@@ -98,7 +103,7 @@ test('run refuses absurd output instead of silently keeping part of it', async (
 
 test('the metadata command asks for the same clients as the download', () => {
   // Duration decides whether a song is refused as too long, so metadata read
-  // through a different client than the audio is a chance for the two to
+  // through a different client than the video is a chance for the two to
   // disagree about what they are describing.
   assert.equal(
     valueAfter(buildMetadataArgs('https://youtu.be/example'), '--extractor-args'),
@@ -127,23 +132,4 @@ test('the default list keeps fallbacks behind the working client', () => {
   const clients = DEFAULT_PLAYER_CLIENTS.split(',');
   assert.ok(clients.length > 1, 'a single client is a single point of failure');
   assert.equal(clients[0], 'web_embedded');
-});
-
-test('chooseLyrics returns synced lyrics from the closest duration', () => {
-  const result = chooseLyrics([
-    { duration: 190, syncedLyrics: '[00:00.00]far' },
-    { duration: 181, syncedLyrics: '[00:00.00]near' },
-    { duration: 180, plainLyrics: 'plain only' },
-  ], 180);
-  assert.equal(result, '[00:00.00]near');
-});
-
-test('chooseLyrics rejects candidates more than three seconds away', () => {
-  assert.equal(chooseLyrics([{ duration: 184, syncedLyrics: '[00:00.00]no' }], 180), null);
-});
-
-test('chooseLyrics ignores plain-only entries and malformed input', () => {
-  assert.equal(chooseLyrics([{ duration: 180, plainLyrics: 'no timestamps' }], 180), null);
-  assert.equal(chooseLyrics('not an array', 180), null);
-  assert.equal(chooseLyrics([null, { duration: 'nope', syncedLyrics: 'x' }], Number.NaN), null);
 });

@@ -9,16 +9,16 @@
 
 /**
  * The track's details ride on the response as headers rather than in the body,
- * because the body is the audio itself.
+ * because the body is the video itself.
  *
  * They are useless unless they are named here. A browser lets a page read only
  * a handful of response headers by default -- Content-Type and a few others --
  * and every other one is silently invisible to fetch(), including these. curl
  * has no such rule, so a request that works perfectly from a terminal can
- * arrive in a browser with the audio intact and the title missing, and the page
+ * arrive in a browser with the video intact and the title missing, and the page
  * throws away three megabytes of song for want of its name.
  */
-export const EXPOSED_HEADERS = ['X-Track-Title', 'X-Track-Duration', 'X-Track-Lrc'];
+export const EXPOSED_HEADERS = ['X-Track-Title', 'X-Track-Duration'];
 
 /**
  * The CORS headers for a request, or null when the origin is not the app.

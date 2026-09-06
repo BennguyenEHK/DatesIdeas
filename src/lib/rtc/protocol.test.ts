@@ -232,7 +232,6 @@ describe("karaoke track messages", () => {
     durationSec: 212,
     bytes: 5_242_880,
     chunks: 320,
-    lrc: "[00:00.00]Never gonna give you up",
   };
   const done = { t: "track-done" as const, requestId: "request-1" };
   const error = {
@@ -245,14 +244,13 @@ describe("karaoke track messages", () => {
     expect(decode(encode(msg))).toEqual(msg);
   });
 
-  it("accepts metadata without synced lyrics", () => {
-    // Missing timed lyrics do not make the audio unusable, so absence has its
-    // own valid representation instead of looking like a broken transfer.
-    expect(decode(encode({ ...meta, lrc: null }))).toEqual({ ...meta, lrc: null });
-  });
-
-  it("rejects a non-text lyric payload", () => {
-    expect(decode(JSON.stringify({ ...meta, lrc: 42 }))).toBeNull();
+  it("ignores a lyrics field from a peer running the older build", () => {
+    // The two of you can be on different versions for as long as one of you has
+    // not reloaded. A peer that still sends `lrc` must not be rejected over a
+    // field this side no longer has any use for -- decode names the fields it
+    // keeps, so the stale one is dropped rather than being copied through.
+    const stale = JSON.stringify({ ...meta, lrc: "[00:00.00]old build" });
+    expect(decode(stale)).toEqual(meta);
   });
 
   it.each([
@@ -263,7 +261,6 @@ describe("karaoke track messages", () => {
     [meta, "durationSec", "212"],
     [meta, "bytes", "5242880"],
     [meta, "chunks", "320"],
-    [meta, "lrc", 42],
     [done, "requestId", 42],
     [error, "requestId", 42],
     [error, "message", 42],

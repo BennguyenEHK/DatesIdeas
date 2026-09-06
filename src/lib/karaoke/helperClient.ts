@@ -7,11 +7,10 @@ export type HelperFailure =
   | "too-large";
 
 export interface HelperTrack {
-  audio: ArrayBuffer;
+  media: ArrayBuffer;
   contentType: string;
   title: string;
   durationSec: number;
-  lrc: string | null;
 }
 
 export type HelperResult =
@@ -102,17 +101,15 @@ export async function fetchTrack(
     const failure = statusFailure(response.status);
     if (failure !== null) return { ok: false, reason: failure };
 
-    const audio = await response.arrayBuffer();
-    if (audio.byteLength < 1024) return { ok: false, reason: "extract-failed" };
+    const media = await response.arrayBuffer();
+    if (media.byteLength < 1024) return { ok: false, reason: "extract-failed" };
 
     const encodedTitle = response.headers.get("X-Track-Title");
     const title = decodeHeader(encodedTitle);
-    const lrcHeader = response.headers.get("X-Track-Lrc");
-    const lrc = decodeHeader(lrcHeader);
     const durationText = response.headers.get("X-Track-Duration");
     const durationSec = durationText === null ? Number.NaN : Number(durationText.trim());
 
-    if (title === null || (lrcHeader !== null && lrc === null) || durationText?.trim() === "") {
+    if (title === null || durationText?.trim() === "") {
       return { ok: false, reason: "extract-failed" };
     }
     if (!Number.isFinite(durationSec) || durationSec < 0) {
@@ -122,11 +119,10 @@ export async function fetchTrack(
     return {
       ok: true,
       track: {
-        audio,
+        media,
         contentType: response.headers.get("Content-Type") ?? "",
         title,
         durationSec,
-        lrc,
       },
     };
   } catch {

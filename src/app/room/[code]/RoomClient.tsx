@@ -26,11 +26,9 @@ import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel } from "@/components/KaraokePanel";
-import { LyricsRoll } from "@/components/LyricsRoll";
 import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
 import { useKaraokeHelper } from "@/lib/karaoke/useKaraokeHelper";
 import { useTrackTransfer, type ReceivedTrack } from "@/lib/karaoke/useTrackTransfer";
-import type { TrackDiscProps } from "@/components/TrackDisc";
 import { MoviePanel } from "@/components/MoviePanel";
 import { LocalFilePlayer } from "@/components/LocalFilePlayer";
 import { PhotoBoothStage } from "@/components/PhotoBoothStage";
@@ -272,25 +270,17 @@ export function RoomClient({ code }: { code: string }) {
 
   const track = useKaraokeTrack();
   /**
-   * Which player the sync layer is holding.
+   * Whether the song being sung is a file this browser holds, rather than a
+   * YouTube embed.
    *
-   * Chosen while rendering rather than copied into state by an effect. The
-   * effect version read better and was wrong twice over: it made the handle
-   * lag a frame behind the song it belongs to, and the React Compiler rejects
-   * setting state from an effect precisely because that lag is a bug.
-   *
-   * The flag is explicit rather than derived from the playback state, because
-   * the playback state is produced by the very hook this feeds — asking it
-   * which player to use would be a circle.
+   * It no longer picks between two kinds of player. A fetched track is now an
+   * mp4 shown in the same <video> element a local film uses, so exactly one
+   * player is ever mounted and `player` is always the right handle. What this
+   * still answers is whether the pair of you can nudge the song's speed, which
+   * only a file you hold allows.
    */
   const ownTrack = current === "karaoke" && trackMode && track.ready;
-  const media = useSyncedPlayback(
-    ownTrack ? track.player : player,
-    peer.clock,
-    peer.send,
-    offsetMs / 1000,
-    precision,
-  );
+  const media = useSyncedPlayback(player, peer.clock, peer.send, offsetMs / 1000, precision);
   useEffect(() => {
     acceptMedia.current = media.accept;
     clearMedia.current = media.clear;
@@ -343,16 +333,9 @@ export function RoomClient({ code }: { code: string }) {
 
   const karaoke = current === "karaoke";
 
-  // Read every animation frame by the lyrics, so it must not close over a
-  // player that a re-render has replaced.
-  const readTrackPosition = useCallback(
-    () => track.player?.currentTime() ?? 0,
-    [track.player],
-  );
-
-  const onTrackAudio = useCallback(
+  const onTrackMedia = useCallback(
     (file: File) => {
-      void track.chooseAudio(file).then((seconds) => {
+      void track.chooseMedia(file).then((seconds) => {
         if (seconds === null) return;
         setTrackMode(true);
         // The last refusal was about the last song, not this one.
@@ -368,13 +351,6 @@ export function RoomClient({ code }: { code: string }) {
     [track, media],
   );
 
-  const onTrackLyrics = useCallback(
-    (file: File) => {
-      void track.chooseLyrics(file);
-    },
-    [track],
-  );
-
   const helper = useKaraokeHelper();
 
   /**
@@ -382,13 +358,16 @@ export function RoomClient({ code }: { code: string }) {
    *
    * The same path whether it was fetched here or arrived from the other side,
    * because by this point there is no difference: both are bytes in memory
-   * waiting to be decoded.
+   * waiting to be shown.
+   *
+   * The length is passed as a hint rather than measured again. The other side
+   * already established it, and asking this browser to re-read it from the file
+   * would risk the two of you disagreeing about how long the same song is.
    */
   const adoptTrack = useCallback(
     (arrived: ReceivedTrack) => {
-      void track.chooseAudio(arrived.audio).then((seconds) => {
+      void track.chooseMedia(arrived.media, arrived.durationSec).then((seconds) => {
         if (seconds === null) return;
-        if (arrived.lrc !== null) track.setLyricsText(arrived.lrc);
         setTrackMode(true);
         setVideoError(null);
         setPicking(false);
@@ -438,10 +417,9 @@ export function RoomClient({ code }: { code: string }) {
       }
 
       adoptTrack({
-        audio: new Blob([got.audio], { type: got.contentType }),
+        media: new Blob([got.media], { type: got.contentType }),
         title: got.title,
         durationSec: got.durationSec,
-        lrc: got.lrc,
       });
       await transfer.sendTrack({ requestId, ...got });
     },
@@ -463,32 +441,20 @@ export function RoomClient({ code }: { code: string }) {
     [fetchAndShare],
   );
   /**
-   * What the record on the panel is showing.
+   * How far along the wait is, or null when the share is genuinely unknown.
    *
-   * Two separate facts, deliberately not collapsed into one. The disc being
-   * THERE says a decoded track is held in this browser's memory; the disc
-   * TURNING says it is playing. A song can sit in memory while a YouTube video
-   * plays over the top of it, and in that case the record is present and still
-   * -- which is the truth, and what a real turntable would show.
-   *
-   * `playing` is gated on ownTrack rather than on media.playing alone, because
-   * media.playing is true for a YouTube video too, and a record spinning to
-   * someone else's audio would be a lie.
+   * Only the transfer between the two of you can be measured: it announces its
+   * total up front. The helper's own download cannot, because yt-dlp is fetching
+   * to a temporary file on the other machine and nothing here is told how big it
+   * will be. Reporting 0% through those twenty-odd seconds would look like a
+   * stall, so the bar is told to sweep instead.
    */
-  const disc: TrackDiscProps = {
-    state:
-      helper.stage === "fetching" || transfer.incoming !== null || track.loading
-        ? "loading"
-        : track.ready
-          ? "held"
-          : "absent",
-    playing: ownTrack && media.playing,
-    // For a track the helper fetched, the shared state carries its title where
-    // a YouTube film would carry an id; asking for it on the YouTube path would
-    // put an eleven-character video id on screen as though it were a song name.
-    title: media.film.source === "local" ? media.videoId : null,
-    durationSec: track.durationSec,
-  };
+  const fetchPercent =
+    transfer.incoming !== null && transfer.incoming.expectedBytes > 0
+      ? Math.round(
+          (transfer.incoming.receivedBytes / transfer.incoming.expectedBytes) * 100,
+        )
+      : null;
 
   const movie = current === "movie";
   const photobooth = current === "photobooth";
@@ -746,10 +712,18 @@ export function RoomClient({ code }: { code: string }) {
                 mediaError={peer.mediaError}
               >
                 {ownTrack ? (
-                  <LyricsRoll
-                    lines={track.lyrics}
-                    positionSec={readTrackPosition}
-                    paused={!media.playing}
+                  // The karaoke video itself, in the same <video> element a
+                  // local film uses. Its words are burned into the picture,
+                  // which is why the scrolling lyrics that used to live here are
+                  // gone -- and why this takes `setPlayer` like every other
+                  // player, leaving exactly one handle for the sync layer.
+                  <LocalFilePlayer
+                    ref={setPlayer}
+                    file={track.file}
+                    onDuration={(seconds) => {
+                      if (seconds !== null) media.reportDuration(seconds);
+                    }}
+                    onError={setFileError}
                   />
                 ) : karaoke || (movie && media.film.source === "youtube") ? (
                   <YouTubePlayer ref={setPlayer} onError={setVideoError} />
@@ -884,28 +858,24 @@ export function RoomClient({ code }: { code: string }) {
                     track={{
                       ready: track.ready,
                       loading: track.loading,
-                      hasLyrics: track.lyrics.length > 0,
                       error: track.error,
-                      onAudioFile: onTrackAudio,
-                      onLyricsFile: onTrackLyrics,
+                      onMediaFile: onTrackMedia,
                     }}
                     helper={{
                       available: helper.available,
                       busy: helper.stage === "fetching" || transfer.incoming !== null,
                       note:
                         transfer.incoming !== null
-                          ? `The song is arriving from their computer — ${Math.round(
-                              (transfer.incoming.receivedBytes /
-                                Math.max(1, transfer.incoming.expectedBytes)) *
-                                100,
-                            )}%`
+                          ? `The song is arriving from their computer${
+                              fetchPercent === null ? "" : ` — ${fetchPercent}%`
+                            }`
                           : helper.stage === "fetching"
-                            ? "The helper is downloading the audio — this takes about 30 seconds."
+                            ? "The helper is downloading the video — this takes about half a minute."
                             : null,
+                      percent: fetchPercent,
                       error: helper.error ?? transfer.error,
                       onFetchUrl,
                     }}
-                    disc={disc}
                     picking={picking}
                     onPick={() => setPicking(true)}
                     onCancelPick={() => setPicking(false)}

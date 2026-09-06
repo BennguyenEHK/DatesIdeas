@@ -22,11 +22,12 @@ const YOUTUBE_HOSTS = new Set([
 ]);
 
 export const DEFAULT_MAX_DURATION_SEC = 12 * 60;
-export const DEFAULT_MAX_BYTES = 30 * 1024 * 1024;
+// Video needs more room than audio, while 60 MB keeps a 12-minute 360p clip bounded.
+export const DEFAULT_MAX_BYTES = 60 * 1024 * 1024;
 export const DEFAULT_TIMEOUT_MS = 120_000;
 
 /**
- * Which of YouTube's own front ends to impersonate when asking for the audio.
+ * Which of YouTube's own front ends to impersonate when asking for the video.
  *
  * YouTube's default `web` client now hands back format URLs that answer 403
  * Forbidden without a proof-of-origin token, while still answering metadata
@@ -57,13 +58,11 @@ export function playerClients(env = process.env) {
 /**
  * Everything read off a video, and nothing else.
  *
- * `duration` gates the length limit, `title` names the track, and the last
- * three are what the lyrics search is built from -- `track`/`artist` when the
- * uploader filled them in, `title`/`uploader` when they did not.
+ * `duration` gates the length limit and `title` names the track.
  */
-export const METADATA_FIELDS = ['id', 'title', 'duration', 'track', 'artist', 'uploader'];
+export const METADATA_FIELDS = ['id', 'title', 'duration'];
 
-/** The clients argument, shared so metadata and audio describe the same thing. */
+/** The clients argument, shared so metadata and video describe the same thing. */
 function extractorArgs() {
   return ['--extractor-args', `youtube:player_client=${playerClients()}`];
 }
@@ -73,7 +72,7 @@ function extractorArgs() {
  *
  * Carries the same client list as the download on purpose. The duration read
  * here decides whether a song is refused as too long, and metadata read
- * through a different client than the audio is a chance for the two to
+ * through a different client than the video is a chance for the two to
  * disagree about what they are describing.
  */
 export function buildMetadataArgs(url) {
@@ -82,7 +81,7 @@ export function buildMetadataArgs(url) {
     '--no-warnings',
     ...extractorArgs(),
     '--skip-download',
-    // Five fields, not every format YouTube offers. The full dump for an
+    // Three fields, not every format YouTube offers. The full dump for an
     // ordinary song runs past six hundred kilobytes, almost all of it format
     // descriptions nothing here reads; this returns about a hundred and fifty
     // bytes. Absent fields are simply omitted, which the readers below expect.
@@ -117,12 +116,12 @@ export function buildYtDlpArgs(url, tmpDir, limits = {}) {
   const maxBytes = limits.maxBytes ?? DEFAULT_MAX_BYTES;
   const outputTemplate = path.join(tmpDir, '%(id)s.%(ext)s');
 
-  // AAC in an MP4 container plays natively in current browsers, so transcoding with ffmpeg is unnecessary.
+  // A single pre-muxed MP4 is required so downloading never triggers an ffmpeg merge.
   return [
     '--no-playlist',
     '--no-warnings',
     ...extractorArgs(),
-    '--format', 'bestaudio[ext=m4a]/bestaudio',
+    '--format', 'best[ext=mp4][vcodec!=none][acodec!=none]/18/best[ext=mp4]',
     '--match-filter', `duration <= ${maxDurationSec}`,
     '--max-filesize', String(maxBytes),
     '--output', outputTemplate,
@@ -211,43 +210,6 @@ async function readMetadata(url, tmpDir, timeoutMs) {
   }
 }
 
-export function chooseLyrics(results, durationSec) {
-  if (!Array.isArray(results) || !Number.isFinite(durationSec)) return null;
-
-  let closest = null;
-  let closestDifference = Infinity;
-  for (const result of results) {
-    if (!result || typeof result.syncedLyrics !== 'string' || result.syncedLyrics.trim() === '') continue;
-    const candidateDuration = Number(result.duration);
-    if (!Number.isFinite(candidateDuration)) continue;
-    const difference = Math.abs(candidateDuration - durationSec);
-    if (difference <= 3 && difference < closestDifference) {
-      closest = result.syncedLyrics;
-      closestDifference = difference;
-    }
-  }
-  return closest;
-}
-
-async function findLyrics(metadata, durationSec) {
-  const trackName = typeof metadata.track === 'string' && metadata.track.trim()
-    ? metadata.track : metadata.title;
-  const artistName = typeof metadata.artist === 'string' && metadata.artist.trim()
-    ? metadata.artist : (metadata.uploader ?? '');
-  if (typeof trackName !== 'string' || trackName.trim() === '') return null;
-
-  const params = new URLSearchParams({ track_name: trackName, artist_name: String(artistName) });
-  const signal = AbortSignal.timeout(10_000);
-  try {
-    const response = await fetch(`https://lrclib.net/api/search?${params}`, { signal });
-    if (!response.ok) return null;
-    return chooseLyrics(await response.json(), durationSec);
-  } catch {
-    // Lyrics are optional; an outage must not stop playback.
-    return null;
-  }
-}
-
 async function findOutputFile(tmpDir, stdout) {
   const printedPath = stdout.trim().split(/\r?\n/).filter(Boolean).at(-1);
   if (printedPath) {
@@ -281,17 +243,17 @@ export async function extractTrack(url, limits = {}) {
     try {
       download = await run(ytDlp(), buildYtDlpArgs(url, tmpDir, { maxDurationSec, maxBytes }), { timeoutMs, cwd: tmpDir });
     } catch (error) {
-      throw new ExtractError(classifyYtDlpError(error), 'Could not download the audio', error);
+      throw new ExtractError(classifyYtDlpError(error), 'Could not download the video', error);
     }
     const filePath = await findOutputFile(tmpDir, download.stdout);
-    if (!filePath) throw new ExtractError('failed', 'yt-dlp did not create an audio file');
+    if (!filePath) throw new ExtractError('failed', 'yt-dlp did not create a video file');
     const fileInfo = await stat(filePath);
-    if (fileInfo.size > maxBytes) throw new ExtractError('too-large', 'Audio is too large');
+    if (fileInfo.size > maxBytes) throw new ExtractError('too-large', 'Video is too large');
 
-    const [audio, lrc] = await Promise.all([readFile(filePath), findLyrics(metadata, durationSec)]);
-    return { audio, title: String(metadata.title ?? 'YouTube track'), durationSec, lrc };
+    const media = await readFile(filePath);
+    return { media, title: String(metadata.title ?? 'YouTube track'), durationSec };
   } finally {
-    // The audio is transient: always remove it, including on errors and timeouts.
+    // The video is transient: always remove it, including on errors and timeouts.
     await rm(tmpDir, { recursive: true, force: true });
   }
 }

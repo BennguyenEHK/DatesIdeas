@@ -16,23 +16,16 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
     track: {
       ready: false,
       loading: false,
-      hasLyrics: false,
       error: null,
-      onAudioFile: vi.fn(),
-      onLyricsFile: vi.fn(),
+      onMediaFile: vi.fn(),
     },
     helper: {
       available: false as boolean | null,
       busy: false,
       note: null as string | null,
+      percent: null as number | null,
       error: null as string | null,
       onFetchUrl: vi.fn(),
-    },
-    disc: {
-      state: "absent" as const,
-      playing: false,
-      title: null,
-      durationSec: 0,
     },
     picking: false,
     onPick: vi.fn(),
@@ -105,6 +98,7 @@ describe("pasting a link when a helper can fetch it", () => {
     available: true,
     busy: false,
     note: null,
+    percent: null,
     error: null,
     onFetchUrl: vi.fn(),
   };
@@ -191,10 +185,10 @@ describe("choosing a track you own", () => {
     );
   });
 
-  it("swaps the link box for file pickers on the own-track tab", () => {
+  it("swaps the link box for a file picker on the own-track tab", () => {
     openOwnTrack();
     expect(screen.queryByPlaceholderText(/paste a youtube link/i)).toBeNull();
-    expect(screen.getByLabelText(/choose the audio/i)).toBeTruthy();
+    expect(screen.getByLabelText(/choose the video/i)).toBeTruthy();
   });
 
   it("says plainly that the file stays put and what is bought by that", () => {
@@ -205,29 +199,27 @@ describe("choosing a track you own", () => {
     expect(screen.getByText(/a youtube video cannot do/i)).toBeTruthy();
   });
 
-  it("hands an audio file straight to the room", () => {
+  it("hands a video file straight to the room", () => {
     const p = openOwnTrack();
-    const file = new File(["bytes"], "song.mp3", { type: "audio/mpeg" });
-    fireEvent.change(screen.getByLabelText(/choose the audio/i), {
+    const file = new File(["bytes"], "song.mp4", { type: "video/mp4" });
+    fireEvent.change(screen.getByLabelText(/choose the video/i), {
       target: { files: [file] },
     });
-    expect(p.track.onAudioFile).toHaveBeenCalledWith(file);
+    expect(p.track.onMediaFile).toHaveBeenCalledWith(file);
   });
 
-  it("keeps lyrics optional and marked as such", () => {
+  it("no longer asks for a lyrics file, because the picture carries the words", () => {
     openOwnTrack();
-    expect(screen.getByLabelText(/add lyrics .*optional/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/lyrics/i)).toBeNull();
   });
 
-  it("shows a decode failure instead of the explanation", () => {
+  it("shows a failure instead of the explanation", () => {
     openOwnTrack({
       track: {
         ready: false,
         loading: false,
-        hasLyrics: false,
         error: "This browser cannot decode that file.",
-        onAudioFile: vi.fn(),
-        onLyricsFile: vi.fn(),
+        onMediaFile: vi.fn(),
       },
     });
     expect(screen.getByRole("alert").textContent).toMatch(/cannot decode/i);
@@ -243,57 +235,59 @@ describe("choosing a track you own", () => {
   });
 });
 
-describe("disc visibility and helper wait messages", () => {
-  it("does not render the disc when it is absent", () => {
-    setup({
-      picking: true,
-      disc: { state: "absent", playing: false, title: null, durationSec: 0 },
-    });
-    // The disc should not be rendered when absent; there should be no canvas or video element added for it
-    // We're mainly testing that no error occurs when the disc is absent
-    expect(screen.getByPlaceholderText(/paste a youtube link/i)).toBeTruthy();
+describe("the wait, and how honestly it is drawn", () => {
+  const waiting = (note: string, percent: number | null) => ({
+    available: true,
+    busy: true,
+    note,
+    percent,
+    error: null,
+    onFetchUrl: vi.fn(),
   });
 
-  it("renders the disc when loading", () => {
-    setup({
-      picking: true,
-      disc: { state: "loading", playing: false, title: "Song Name", durationSec: 180 },
-    });
-    // The disc component should be rendered; we verify it's in the document
-    // Since TrackDisc is being imported from another file, we just verify no error
-    expect(screen.getByPlaceholderText(/paste a youtube link/i)).toBeTruthy();
+  it("shows no progress bar at all when nothing is being fetched", () => {
+    setup({ picking: true });
+    expect(screen.queryByRole("progressbar")).toBeNull();
   });
 
-  it("shows updated helper message during download", () => {
+  it("reports a real figure once the share is known", () => {
     setup({
       picking: true,
-      helper: {
-        available: true,
-        busy: true,
-        note: "The helper is downloading the audio — this takes about 30 seconds.",
-        error: null,
-        onFetchUrl: vi.fn(),
-      },
+      helper: waiting("The song is arriving from their computer — 60%", 60),
     });
-    expect(
-      screen.getByText(/the helper is downloading the audio — this takes about 30 seconds/i),
-    ).toBeTruthy();
+    const bar = screen.getByRole("progressbar");
+    expect(bar.getAttribute("aria-valuenow")).toBe("60");
   });
 
-  it("shows updated helper message during receiving", () => {
+  it("THE RULE: an unknown share is indeterminate, never zero", () => {
+    // The helper's own download reports no total, and drawing that as 0% would
+    // read as a stall for the twenty-odd seconds it takes -- which is exactly
+    // the impression that made this feature look broken before. Omitting
+    // aria-valuenow is how the platform spells "indeterminate".
     setup({
       picking: true,
-      helper: {
-        available: true,
-        busy: true,
-        note: "The song is arriving from their computer — 60%",
-        error: null,
-        onFetchUrl: vi.fn(),
-      },
+      helper: waiting("The helper is downloading the video — this takes about half a minute.", null),
     });
-    expect(
-      screen.getByText(/the song is arriving from their computer — 60%/i),
-    ).toBeTruthy();
+    const bar = screen.getByRole("progressbar");
+    expect(bar.getAttribute("aria-valuenow")).toBeNull();
+  });
+
+  it("says which of the two waits is happening", () => {
+    setup({
+      picking: true,
+      helper: waiting("The helper is downloading the video — this takes about half a minute.", null),
+    });
+    expect(screen.getByText(/downloading the video/i)).toBeTruthy();
+  });
+
+  it("keeps the wait visible from the transport, not only the picker", () => {
+    // A fetch outlives the picker that started it. If the bar lived only in the
+    // picker, closing it would leave the panel silent mid-download.
+    setup({
+      picking: false,
+      helper: waiting("The song is arriving from their computer — 30%", 30),
+    });
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("30");
   });
 
   it("shows guidance that only one person needs to paste", () => {
@@ -303,6 +297,7 @@ describe("disc visibility and helper wait messages", () => {
         available: true,
         busy: false,
         note: null,
+        percent: null,
         error: null,
         onFetchUrl: vi.fn(),
       },
@@ -321,6 +316,7 @@ describe("disc visibility and helper wait messages", () => {
         available: false,
         busy: false,
         note: null,
+        percent: null,
         error: null,
         onFetchUrl: vi.fn(),
       },
