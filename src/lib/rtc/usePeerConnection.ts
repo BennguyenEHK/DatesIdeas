@@ -82,6 +82,15 @@ export interface PeerApi {
   /** Sends one chunk of a file. Returns false when the channel is not open
    *  or the send buffer is too full to accept more right now. */
   sendFileChunk: (chunk: ArrayBuffer) => boolean;
+  /**
+   * Whether there is a file channel to send on at all.
+   *
+   * Separate from sendFileChunk because its `false` answers two questions at
+   * once: a full buffer, which drains if you wait, and a closed channel, which
+   * never does. A sender that cannot tell them apart waits on the second one
+   * forever.
+   */
+  fileChannelOpen: () => boolean;
   /** Registers the receiver for inbound file chunks. Returns an unsubscribe
    *  function. Only one receiver at a time; a second call replaces the first. */
   onFileChunk: (handler: (chunk: ArrayBuffer) => void) => () => void;
@@ -188,6 +197,11 @@ export function usePeerConnection(
     }
     dc.send(chunk);
     return true;
+  }, []);
+
+  const fileChannelOpen = useCallback(() => {
+    const dc = fileDcRef.current;
+    return dc !== null && dc !== undefined && dc.readyState === "open";
   }, []);
 
   const onFileChunk = useCallback((handler: (chunk: ArrayBuffer) => void) => {
@@ -609,6 +623,7 @@ export function usePeerConnection(
     clock,
     send,
     sendFileChunk,
+    fileChannelOpen,
     onFileChunk,
     report,
     setVideoMode,

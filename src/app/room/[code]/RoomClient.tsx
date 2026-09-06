@@ -385,6 +385,7 @@ export function RoomClient({ code }: { code: string }) {
   const transfer = useTrackTransfer({
     sendMessage: peer.send,
     sendFileChunk: peer.sendFileChunk,
+    fileChannelOpen: peer.fileChannelOpen,
     onFileChunk: peer.onFileChunk,
     onReceived: adoptTrack,
   });

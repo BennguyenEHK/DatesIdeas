@@ -41,6 +41,16 @@ export interface TrackTransfer {
  */
 const BACKPRESSURE_WAIT_MS = 50;
 
+/**
+ * How long one chunk may sit unaccepted by an OPEN channel before the send is
+ * abandoned.
+ *
+ * Real backpressure clears in milliseconds, so this is not a budget -- it is a
+ * floor under a case the channel state cannot express: open, and never willing.
+ * Without it, that case is the same endless loop as a closed channel.
+ */
+const SEND_GIVE_UP_MS = 15_000;
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -56,11 +66,13 @@ function wait(ms: number): Promise<void> {
 export function useTrackTransfer(args: {
   sendMessage: (message: PeerMessage) => void;
   sendFileChunk: (chunk: ArrayBuffer) => boolean;
+  /** Whether there is anyone to send to. See the retry loop in sendTrack. */
+  fileChannelOpen: () => boolean;
   onFileChunk: (handler: (chunk: ArrayBuffer) => void) => () => void;
   /** Called once a track has fully arrived and passed its integrity check. */
   onReceived: (track: ReceivedTrack) => void;
 }): TrackTransfer {
-  const { sendMessage, sendFileChunk, onFileChunk, onReceived } = args;
+  const { sendMessage, sendFileChunk, fileChannelOpen, onFileChunk, onReceived } = args;
 
   const [incoming, setIncoming] = useState<{
     receivedBytes: number;
@@ -159,6 +171,11 @@ export function useTrackTransfer(args: {
       title: string;
       durationSec: number;
     }) => {
+      // Nothing on the other end, so there is nothing to announce. Not an
+      // error: the track is already loaded on this side, and someone trying a
+      // song out while the other person is offline is not owed a failure.
+      if (!fileChannelOpen()) return;
+
       sendMessage({
         t: "track-meta",
         requestId: track.requestId,
@@ -171,12 +188,25 @@ export function useTrackTransfer(args: {
       for (const chunk of chunkTrack(track.media)) {
         // Retries rather than queues: the channel reports when its buffer is
         // full, and pushing past that is how a data channel gets dropped.
-        while (!sendFileChunk(chunk)) await wait(BACKPRESSURE_WAIT_MS);
+        let waited = 0;
+        while (!sendFileChunk(chunk)) {
+          // One `false`, two opposite meanings. A full buffer drains if you
+          // wait; a closed channel does not, and waiting on it is a loop with
+          // no exit -- which is what this did, twenty times a second, for as
+          // long as the page stayed open.
+          if (!fileChannelOpen()) return;
+          // A backstop for the case the channel is open but permanently
+          // unwilling. Far longer than real backpressure, which clears in
+          // milliseconds, and still finite.
+          if (waited >= SEND_GIVE_UP_MS) return;
+          await wait(BACKPRESSURE_WAIT_MS);
+          waited += BACKPRESSURE_WAIT_MS;
+        }
       }
 
       sendMessage({ t: "track-done", requestId: track.requestId });
     },
-    [sendMessage, sendFileChunk],
+    [sendMessage, sendFileChunk, fileChannelOpen],
   );
 
   return { incoming, error, handleMessage, sendTrack };
