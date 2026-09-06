@@ -53,3 +53,14 @@ next-env.d.ts
 # Screenshots dropped in the project root while reporting a bug. They are
 # photographs of two people's faces and this repository is public.
 /Screenshot*.png
+
+# The photobooth capture, for the same reason as the screenshots above. It has
+# been kept unstaged by hand until now; a rule is safer than a habit, because a
+# habit fails the first time `git add -A` is typed without thinking.
+/photobooth.png
+
+# Knowledge graph output. Derived, rebuilt on demand, and large -- but the real
+# reason is that it is a map of the whole codebase written by a tool that was
+# pointed at every file in the tree, and this repository is public. Nothing
+# derived from a private file should be able to reach it by default.
+/graphify-out/
