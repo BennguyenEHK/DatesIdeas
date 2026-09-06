@@ -2,6 +2,16 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveTool } from './tools.mjs';
+
+/**
+ * Where yt-dlp actually is, asked fresh each time rather than fixed at import.
+ *
+ * Resolving once at module load would pin whatever was true when the process
+ * started, which is the same staleness this exists to escape -- and it would
+ * make YTDLP_PATH impossible to correct without a restart.
+ */
+const ytDlp = () => resolveTool('yt-dlp');
 
 const YOUTUBE_HOSTS = new Set([
   'youtube.com',
@@ -95,7 +105,7 @@ function classifyYtDlpError(error) {
 }
 
 async function readMetadata(url, tmpDir, timeoutMs) {
-  const { stdout } = await run('yt-dlp', ['--no-playlist', '--no-warnings', '--dump-single-json', '--skip-download', '--', url], {
+  const { stdout } = await run(ytDlp(), ['--no-playlist', '--no-warnings', '--dump-single-json', '--skip-download', '--', url], {
     timeoutMs,
     cwd: tmpDir,
   });
@@ -176,7 +186,7 @@ export async function extractTrack(url, limits = {}) {
 
     let download;
     try {
-      download = await run('yt-dlp', buildYtDlpArgs(url, tmpDir, { maxDurationSec, maxBytes }), { timeoutMs, cwd: tmpDir });
+      download = await run(ytDlp(), buildYtDlpArgs(url, tmpDir, { maxDurationSec, maxBytes }), { timeoutMs, cwd: tmpDir });
     } catch (error) {
       throw new ExtractError(classifyYtDlpError(error), 'Could not download the audio', error);
     }

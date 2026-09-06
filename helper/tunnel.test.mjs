@@ -23,12 +23,46 @@ function spawnCapturing(record) {
 
 test('spawns cloudflared with an argument array, never a shell string', () => {
   const record = { child: fakeChild() };
-  startTunnel({ port: 8787, onUrl() {}, spawnImpl: spawnCapturing(record), log: SILENT });
+  // The command is passed in rather than defaulted, because the default is now
+  // resolved against the real machine and would differ between developers.
+  startTunnel({
+    port: 8787,
+    onUrl() {},
+    command: 'cloudflared',
+    spawnImpl: spawnCapturing(record),
+    log: SILENT,
+  });
 
   assert.equal(record.command, 'cloudflared');
   assert.deepEqual(record.args, ['tunnel', '--url', 'http://127.0.0.1:8787']);
   assert.equal(record.options.shell, undefined);
   for (const arg of record.args) assert.ok(!/[;&|]/.test(arg), arg);
+});
+
+test('a located cloudflared is spawned verbatim, spaces and all', () => {
+  // The resolved path routinely contains "Program Files". Passing it through a
+  // shell would split it on the space and try to run "C:\Program"; the argument
+  // array is what makes an install location with spaces in it safe.
+  const record = { child: fakeChild() };
+  const located = 'C:\\Program Files (x86)\\cloudflared\\cloudflared.exe';
+  startTunnel({
+    port: 8787,
+    onUrl() {},
+    command: located,
+    spawnImpl: spawnCapturing(record),
+    log: SILENT,
+  });
+
+  assert.equal(record.command, located);
+  assert.equal(record.options.shell, undefined);
+});
+
+test('the default command is whatever resolveTool located', async () => {
+  const { resolveTool } = await import('./tools.mjs');
+  const record = { child: fakeChild() };
+  startTunnel({ port: 8787, onUrl() {}, spawnImpl: spawnCapturing(record), log: SILENT });
+
+  assert.equal(record.command, resolveTool('cloudflared'));
 });
 
 test('reports the quick tunnel hostname printed on stderr', () => {

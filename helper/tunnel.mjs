@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { resolveTool } from './tools.mjs';
 
 /**
  * Runs cloudflared and reports the address it was given.
@@ -19,7 +20,10 @@ const QUICK_TUNNEL_URL = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 export function startTunnel({
   port,
   onUrl,
-  command = process.env.CLOUDFLARED_PATH ?? 'cloudflared',
+  // Located rather than looked up on PATH, because a shell started before
+  // cloudflared was installed carries a PATH that predates it -- and that shell
+  // is usually a child of an Explorer just as old. See tools.mjs.
+  command = resolveTool('cloudflared'),
   spawnImpl = spawn,
   log = console,
 } = {}) {

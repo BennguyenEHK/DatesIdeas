@@ -8,6 +8,6 @@
   },
   "scripts": {
     "start": "node index.mjs",
-    "test": "node --test extract.test.mjs token.test.mjs tunnel.test.mjs"
+    "test": "node --test extract.test.mjs token.test.mjs tunnel.test.mjs tools.test.mjs"
   }
 }
