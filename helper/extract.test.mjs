@@ -133,3 +133,21 @@ test('the default list keeps fallbacks behind the working client', () => {
   assert.ok(clients.length > 1, 'a single client is a single point of failure');
   assert.equal(clients[0], 'web_embedded');
 });
+
+test('THE BUG: a video that only the mobile client can see is still reachable', () => {
+  // Measured against https://www.youtube.com/watch?v=lDoMJ8JqQc4, a karaoke
+  // track that plays fine in a browser. Of the five clients, exactly one could
+  // fetch it:
+  //   web_embedded -> Video unavailable
+  //   tv           -> The page needs to be reloaded
+  //   web          -> Requested format is not available
+  //   ios          -> Requested format is not available
+  //   mweb         -> works, format 18, 4.2MB
+  // Without mweb in the list the helper reports "Video unavailable" for a video
+  // that is available, which sends whoever pasted it looking for a bad link.
+  const clients = DEFAULT_PLAYER_CLIENTS.split(',');
+  assert.ok(
+    clients.includes('mweb'),
+    'mweb is the only client that can reach some videos; without it they read as unavailable',
+  );
+});

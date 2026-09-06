@@ -38,8 +38,15 @@ export const DEFAULT_TIMEOUT_MS = 120_000;
  * More than one is listed because yt-dlp collects the formats every named
  * client offers and picks from the union, so a client going the way of `web`
  * costs a fallback rather than an evening.
+ *
+ * `mweb` earns its place by being the only one that could see a perfectly
+ * ordinary karaoke video: web_embedded called it unavailable, tv asked for a
+ * reload, and web and ios both said no format was available. A client that
+ * cannot see a video reports it exactly as a deleted one, so leaving mweb out
+ * turned "we cannot reach this" into "this does not exist" -- and sent whoever
+ * pasted the link hunting for a fault in it.
  */
-export const DEFAULT_PLAYER_CLIENTS = 'web_embedded,tv,web';
+export const DEFAULT_PLAYER_CLIENTS = 'web_embedded,mweb,tv,web';
 
 /**
  * The client list to use, overridable because YouTube breaks these on its own
