@@ -5,6 +5,7 @@ import type { PlayerHandle } from "./player";
 import {
   needsCorrection,
   rampPlan,
+  glidePlan,
   toleranceFor,
   NUDGE_LIMIT_SEC,
   stateAt,
@@ -105,6 +106,12 @@ export function useSyncedPlayback(
   // Compiler rejects refs that are first modified below a closure over them.
   const rampTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ramping = useRef(false);
+
+  // The last offset value that was applied by the setpoint path. Declared here
+  // with the other refs because applyState modifies it and several closures
+  // capture it. Initialized to the current offset so spurious corrections are
+  // not triggered on the first call before the user has changed the offset.
+  const lastAppliedOffset = useRef(offsetSec);
 
   const clockRef = useRef(clock);
   const sendRef = useRef(send);
@@ -248,6 +255,32 @@ export function useSyncedPlayback(
       cancelRamp();
       p.pause();
     }
+
+    // A setpoint change (offset) is known exactly and must always be applied,
+    // unlike drift which is noisy and unknown. If the offset has changed,
+    // correct using glidePlan, which bypasses the deadband entirely.
+    const currentOffset = offsetRef.current;
+    if (lastAppliedOffset.current !== currentOffset) {
+      lastAppliedOffset.current = currentOffset;
+      // A ramp already in flight has to be retired before another begins.
+      // startRamp overwrites the timer handle without clearing the old timeout,
+      // so a second correction started on top of a first would leave the
+      // earlier timer pending -- and it fires first, setting the rate back to 1
+      // partway through the new correction and stranding the player short of
+      // where it was heading.
+      cancelRamp();
+      const error = p.currentTime() - want;
+      const plan = glidePlan(error);
+      if (plan && cur.playing && p.setRate(plan.rate)) {
+        startRamp(plan.forSec);
+      } else if (Math.abs(error) <= NUDGE_LIMIT_SEC) {
+        p.nudge(want);
+      } else {
+        p.seek(want);
+      }
+      return;
+    }
+
     // How far apart the two copies may sit before it is worth interrupting
     // anyone. A film's answer is four times a song's, and using the song's
     // figure for both is what made movie nights stutter.

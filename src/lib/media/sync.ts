@@ -129,6 +129,48 @@ export function rampPlan(
 }
 
 /**
+ * The gentlest rate that still closes `errorSec` in about GLIDE_SECONDS.
+ *
+ * A setpoint change (offset) is known exactly and must always be applied,
+ * unlike drift which is noisy and unknown. RAMP_RATE's fixed 3% is 51 cents
+ * of detune, half a semitone, which a singer matching pitch will hear. 1% is
+ * about 17 cents and 0.5% about 9 cents, both under the ear's threshold for
+ * pitch change, so we use MAX_GLIDE_RATE to make the correction imperceptible.
+ */
+export const MAX_GLIDE_RATE = 0.01;
+export const GLIDE_SECONDS = 10;
+
+/**
+ * The longest a glide may run before jumping is the kinder option.
+ *
+ * This is NOT the deadband coming back in another form. A deadband threw small
+ * corrections away and left the two copies apart; this one still applies every
+ * correction, and only decides that a large one arrives as a move rather than
+ * as a tempo change. Without it the rate cap turns a big error into a very long
+ * ramp -- a two second error would hold the player off its mark for over three
+ * minutes, and `ramping` blocks all drift correction for the whole of it.
+ */
+export const MAX_GLIDE_SEC = 20;
+
+export function glidePlan(errorSec: number): { rate: number; forSec: number } | null {
+  if (!Number.isFinite(errorSec) || errorSec === 0) return null;
+
+  const deviation = Math.min(Math.abs(errorSec) / GLIDE_SECONDS, MAX_GLIDE_RATE);
+  // An error too small to express as a rate change at all. Returning a plan
+  // here would ask the player for a rate of 1 and then wait out a timer for a
+  // correction that was never applied.
+  if (deviation < 1e-6) return null;
+
+  const forSec = Math.abs(errorSec) / deviation;
+  if (forSec > MAX_GLIDE_SEC) return null;
+
+  return {
+    rate: errorSec > 0 ? 1 - deviation : 1 + deviation,
+    forSec,
+  };
+}
+
+/**
  * How far two local copies may differ in length and still be the same film.
  *
  * Encoders disagree about trailing silence and containers round differently,

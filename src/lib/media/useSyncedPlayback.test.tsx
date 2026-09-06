@@ -523,3 +523,177 @@ describe("a turn changing hands on a player that cannot ramp", () => {
     expect(p.calls.some((c) => c.startsWith("seek:"))).toBe(true);
   });
 });
+
+describe("offset changes via the setpoint path", () => {
+  it("leaves drift smaller than the deadband alone when no offset changed", () => {
+    // The other half of the split, and the one the setpoint path must not
+    // swallow. Small drift is noise: correcting every wobble is what stutters
+    // a film, which is the whole reason the deadband exists.
+    const p = fakePlayer(true, true);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    // Held paused so the only thing separating player and target is the drift
+    // being introduced here, rather than the shared clock running on.
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 30));
+    act(() => void vi.advanceTimersByTime(2100));
+    p.calls.length = 0;
+    p.setTime(30.055);
+    act(() => void vi.advanceTimersByTime(2100));
+
+    expect(p.calls.some((c) => c.startsWith("rate:"))).toBe(false);
+    expect(p.calls.some((c) => c.startsWith("nudge:"))).toBe(false);
+    expect(p.calls.some((c) => c.startsWith("seek:"))).toBe(false);
+  });
+
+  it("retires a ramp already running before starting another", () => {
+    // startRamp overwrites the timer handle without clearing the old timeout.
+    // Two offset changes in quick succession would leave the first timer
+    // pending, and it fires first -- setting the rate back to 1 partway
+    // through the second correction and stranding the player short.
+    const p = fakePlayer(true, true);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 30));
+    act(() => view.result.current.playPause());
+
+    act(() => view.rerender({ offset: 0.055 }));
+    p.calls.length = 0;
+    act(() => view.rerender({ offset: 0.11 }));
+
+    // The old ramp is cancelled back to 1 before the new rate is commanded, so
+    // the LAST rate seen is the new correction and not a stale reset.
+    const rates = p.calls.filter((c) => c.startsWith("rate:"));
+    expect(rates.length).toBeGreaterThan(0);
+    expect(rates.at(-1)).not.toBe("rate:1");
+  });
+
+  it("moves rather than glides when a glide would run for minutes", () => {
+    // glidePlan caps the rate, so a large error becomes a very long ramp --
+    // and `ramping` blocks all drift correction while it runs. Past the
+    // ceiling the correction still happens, it just arrives as a move.
+    const p = fakePlayer(true, true);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 30));
+    act(() => view.result.current.playPause());
+    p.calls.length = 0;
+
+    // Far beyond MAX_GLIDE_SEC at the capped rate.
+    act(() => view.rerender({ offset: 0.9 }));
+
+    expect(p.calls.some((c) => c.startsWith("rate:"))).toBe(false);
+    expect(p.calls.some((c) => c.startsWith("nudge:") || c.startsWith("seek:"))).toBe(true);
+  });
+
+  it("makes a 55ms offset change reach the player without consulting the deadband", () => {
+    // THIS TEST MUST FAIL before the fix, confirming the regression.
+    const p = fakePlayer(true, true);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 30));
+    act(() => view.result.current.playPause()); // Start playing
+    p.calls.length = 0;
+
+    // The offset changes by 55ms (well under the 120ms deadband for drift)
+    act(() => view.rerender({ offset: 0.055 }));
+
+    // Before the fix, no rate correction appears because 55ms < 120ms tolerance.
+    // After the fix, the rate should be applied.
+    expect(p.calls.some((c) => c.startsWith("rate:"))).toBe(true);
+  });
+
+  it("uses a rate within 0.006 of 1 for a 55ms offset change", () => {
+    // No audible pitch bend: < 10 cents
+    const p = fakePlayer(true, true);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 30));
+    act(() => view.result.current.playPause());
+    p.calls.length = 0;
+
+    act(() => view.rerender({ offset: 0.055 }));
+
+    const rateCalls = p.calls.filter((c) => c.startsWith("rate:"));
+    expect(rateCalls.length).toBeGreaterThan(0);
+    const rate = parseFloat(rateCalls[0]!.slice(5));
+    expect(Math.abs(1 - rate)).toBeLessThan(0.006);
+  });
+
+  it("does not double-correct when offset does not change on second call", () => {
+    // After an offset change triggers the setpoint path, a second applyState
+    // call with the same offset should not trigger the setpoint path again.
+    const p = fakePlayer(true, true);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 30));
+    act(() => view.result.current.playPause());
+    p.calls.length = 0;
+
+    // Change offset to trigger setpoint path
+    act(() => view.rerender({ offset: 0.055 }));
+    const afterFirstOffset = p.calls.filter((c) => c.startsWith("rate:")).length;
+    expect(afterFirstOffset).toBeGreaterThan(0);
+
+    // Reset calls and rerender with same offset
+    p.calls.length = 0;
+    act(() => view.rerender({ offset: 0.055 }));
+
+    // Should not trigger setpoint path again since offset hasn't changed
+    expect(p.calls.some((c) => c.startsWith("rate:"))).toBe(false);
+  });
+
+  it("behaves as today when drift of 300ms with no offset change", () => {
+    // Large drift without offset change should still seek
+    const p = fakePlayer(true, true);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 10));
+    act(() => view.result.current.playPause());
+    p.calls.length = 0;
+
+    // The player drifts 300ms ahead
+    p.setTime(10.3);
+    act(() => void vi.advanceTimersByTime(2100));
+
+    // Should seek (or nudge if small enough)
+    expect(p.calls.some((c) => c.startsWith("seek:") || c.startsWith("nudge:"))).toBe(true);
+  });
+
+  it("does not call setRate on a paused player when offset changes", () => {
+    const p = fakePlayer(true, true);
+    const view = renderHook(
+      ({ offset }) => useSyncedPlayback(p.handle, null, () => {}, offset),
+      { initialProps: { offset: 0 } },
+    );
+
+    act(() => view.result.current.load(film("dQw4w9WgXcQ"), 30));
+    // Leave it paused
+    p.calls.length = 0;
+
+    act(() => view.rerender({ offset: 0.055 }));
+
+    // Should nudge, not setRate
+    expect(p.calls.some((c) => c.startsWith("rate:"))).toBe(false);
+  });
+});

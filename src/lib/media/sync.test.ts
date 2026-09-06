@@ -8,9 +8,13 @@ import {
   toleranceFor,
   RAMP_RATE,
   MAX_RAMP_SEC,
+  MAX_GLIDE_SEC,
   rampPlan,
   DURATION_MATCH_SEC,
   filmsMatch,
+  MAX_GLIDE_RATE,
+  GLIDE_SECONDS,
+  glidePlan,
   type PlaybackState,
 } from "./sync";
 import { youTubeId, youTubeStart } from "./youtube";
@@ -315,5 +319,112 @@ describe("rampPlan with an explicit tolerance", () => {
 
   it("keeps the singing tolerance when none is given", () => {
     expect(rampPlan(0.3)).toEqual(rampPlan(0.3, SINGING_TOLERANCE_SEC));
+  });
+});
+
+describe("glidePlan", () => {
+  it("returns null for zero error", () => {
+    expect(glidePlan(0)).toBeNull();
+  });
+
+  it("returns null for non-finite errors", () => {
+    expect(glidePlan(Infinity)).toBeNull();
+    expect(glidePlan(-Infinity)).toBeNull();
+    expect(glidePlan(NaN)).toBeNull();
+  });
+
+  it("returns null when deviation rounds to zero", () => {
+    // An error so small that the rate rounds below the 1e-6 floor
+    const tinyError = 1e-8;
+    expect(glidePlan(tinyError)).toBeNull();
+  });
+
+  it("slows an ahead player with a gentle rate", () => {
+    const plan = glidePlan(0.055);
+    expect(plan).not.toBeNull();
+    if (plan) {
+      // Positive error means player is ahead, so rate < 1
+      expect(plan.rate).toBeLessThan(1);
+      // Rate should be within ~10 cents of 1 (deviation under ~0.006)
+      expect(1 - plan.rate).toBeLessThan(0.006);
+    }
+  });
+
+  it("speeds a behind player with a gentle rate", () => {
+    const plan = glidePlan(-0.055);
+    expect(plan).not.toBeNull();
+    if (plan) {
+      // Negative error means player is behind, so rate > 1
+      expect(plan.rate).toBeGreaterThan(1);
+      // Rate should be within ~10 cents of 1 (deviation under ~0.006)
+      expect(plan.rate - 1).toBeLessThan(0.006);
+    }
+  });
+
+  it("closes the error in about GLIDE_SECONDS when not rate-limited", () => {
+    // An error that doesn't hit MAX_GLIDE_RATE cap
+    const errorSec = 0.05;
+    const plan = glidePlan(errorSec);
+    expect(plan).not.toBeNull();
+    if (plan) {
+      // forSec should be close to GLIDE_SECONDS
+      expect(Math.abs(plan.forSec - GLIDE_SECONDS)).toBeLessThan(GLIDE_SECONDS * 0.01);
+    }
+  });
+
+  it("respects MAX_GLIDE_RATE for large errors", () => {
+    // Error so large that uncapped deviation would exceed MAX_GLIDE_RATE
+    const hugeError = GLIDE_SECONDS * MAX_GLIDE_RATE * 2;
+    const plan = glidePlan(hugeError);
+    expect(plan).not.toBeNull();
+    if (plan) {
+      // Rate should be at the MAX_GLIDE_RATE boundary
+      expect(Math.abs(1 - plan.rate)).toBeCloseTo(MAX_GLIDE_RATE, 5);
+      // And forSec should be correspondingly large
+      expect(plan.forSec).toBeGreaterThan(GLIDE_SECONDS);
+    }
+  });
+
+  it("applies the rate symmetrically for positive and negative errors", () => {
+    const error = 0.055;
+    const positivePlan = glidePlan(error);
+    const negativePlan = glidePlan(-error);
+    expect(positivePlan).not.toBeNull();
+    expect(negativePlan).not.toBeNull();
+    if (positivePlan && negativePlan) {
+      expect(positivePlan.rate).toBeCloseTo(2 - negativePlan.rate, 10);
+      expect(positivePlan.forSec).toBeCloseTo(negativePlan.forSec, 10);
+    }
+  });
+
+  it("never consults a tolerance parameter", () => {
+    // Unlike rampPlan, glidePlan has no tolerance and returns a plan
+    // for any non-zero, finite error
+    expect(glidePlan(SINGING_TOLERANCE_SEC - 0.01)).not.toBeNull();
+    expect(glidePlan(0.001)).not.toBeNull();
+  });
+
+  it("glides everything a singing turn asks for", () => {
+    // The band a real connection produces: one-way delay plus jitter buffer,
+    // roughly 45-105ms, and the clamp never lets it past 200ms here.
+    for (const errorSec of [0.001, 0.045, 0.055, 0.105, 0.2]) {
+      expect(glidePlan(errorSec)).not.toBeNull();
+    }
+  });
+
+  it("declines a correction too large to glide, rather than running for minutes", () => {
+    // Not the deadband returning: the correction still happens, it just
+    // arrives as a move. Returning a plan here would hold the player off its
+    // mark for minutes and block drift correction for the whole of it.
+    expect(glidePlan(0.5)).toBeNull();
+    expect(glidePlan(2.4)).toBeNull();
+  });
+
+  it("never commands a glide longer than MAX_GLIDE_SEC", () => {
+    for (const errorSec of [0.001, 0.01, 0.055, 0.1, 0.2]) {
+      const plan = glidePlan(errorSec);
+      expect(plan).not.toBeNull();
+      expect(plan!.forSec).toBeLessThanOrEqual(MAX_GLIDE_SEC + 1e-9);
+    }
   });
 });
