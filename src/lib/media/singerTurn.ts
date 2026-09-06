@@ -20,6 +20,9 @@
 /** Which of you the delay is currently accommodating. */
 export type SingingTurn = "you" | "them" | "nobody";
 
+/** Which part someone is playing when both are singing at once. */
+export type DuetRole = "anchor" | "follower" | "none";
+
 /** The furthest the music can be pulled back, in milliseconds. */
 export const MAX_OFFSET_MS = 1000;
 
@@ -42,6 +45,51 @@ export function singingTurn(mine: boolean, theirs: boolean): SingingTurn {
   if (theirs && !mine) return "them";
   if (mine && !theirs) return "you";
   return "nobody";
+}
+
+/**
+ * Resolves the asymmetric roles a duet needs.
+ *
+ * When both sides sing, the sum of their perceived misalignments is always 2d
+ * (where d is the network latency), no matter what offsets either side chooses.
+ * This makes a symmetric solution impossible — there is no way for both sides to
+ * perceive perfect alignment at the same time. The only escape is asymmetry: the
+ * anchor locks its music at zero and never chases, while the follower absorbs
+ * the entire latency. This arrangement gives the follower a perfect metronome
+ * while the anchor must endure the full lag — which is why the anchor is told
+ * not to follow rather than merely left unshifted.
+ *
+ * Musicians reach the same arrangement without being asked: between roughly 25
+ * and 60 milliseconds, players stop trying to match each other and settle into
+ * a starter and a joiner. Which of the two is which is a choice, not something
+ * the connection decides; on a two-person link the delay is the same in both
+ * directions, so there is no better or worse end to anchor from.
+ */
+export function duetRole(
+  mine: boolean,
+  theirs: boolean,
+  iAmAnchor: boolean,
+): DuetRole {
+  if (!mine || !theirs) return "none";
+  return iAmAnchor ? "anchor" : "follower";
+}
+
+/**
+ * The offset for a duet, which unlike a turn is decided by role, not by who
+ * sings.
+ *
+ * The anchor never shifts: it is the metronome and must not chase the follower
+ * or they will chase it in return, creating a feedback loop. The follower
+ * absorbs all the latency. A null latency or non-finite value falls back to
+ * zero, as does the "none" role.
+ */
+export function offsetForDuet(
+  role: DuetRole,
+  latencyMs: number | null,
+): number {
+  if (role === "anchor" || role === "none") return 0;
+  if (latencyMs === null) return 0;
+  return clampOffset(latencyMs);
 }
 
 /**
