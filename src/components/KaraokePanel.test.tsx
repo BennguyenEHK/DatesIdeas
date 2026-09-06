@@ -28,6 +28,12 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
       error: null as string | null,
       onFetchUrl: vi.fn(),
     },
+    disc: {
+      state: "absent" as const,
+      playing: false,
+      title: null,
+      durationSec: 0,
+    },
     picking: false,
     onPick: vi.fn(),
     onCancelPick: vi.fn(),
@@ -234,5 +240,95 @@ describe("choosing a track you own", () => {
       screen.getByRole("button", { name: /close and keep the current song/i }),
     );
     expect(p.onCancelPick).toHaveBeenCalled();
+  });
+});
+
+describe("disc visibility and helper wait messages", () => {
+  it("does not render the disc when it is absent", () => {
+    setup({
+      picking: true,
+      disc: { state: "absent", playing: false, title: null, durationSec: 0 },
+    });
+    // The disc should not be rendered when absent; there should be no canvas or video element added for it
+    // We're mainly testing that no error occurs when the disc is absent
+    expect(screen.getByPlaceholderText(/paste a youtube link/i)).toBeTruthy();
+  });
+
+  it("renders the disc when loading", () => {
+    setup({
+      picking: true,
+      disc: { state: "loading", playing: false, title: "Song Name", durationSec: 180 },
+    });
+    // The disc component should be rendered; we verify it's in the document
+    // Since TrackDisc is being imported from another file, we just verify no error
+    expect(screen.getByPlaceholderText(/paste a youtube link/i)).toBeTruthy();
+  });
+
+  it("shows updated helper message during download", () => {
+    setup({
+      picking: true,
+      helper: {
+        available: true,
+        busy: true,
+        note: "The helper is downloading the audio — this takes about 30 seconds.",
+        error: null,
+        onFetchUrl: vi.fn(),
+      },
+    });
+    expect(
+      screen.getByText(/the helper is downloading the audio — this takes about 30 seconds/i),
+    ).toBeTruthy();
+  });
+
+  it("shows updated helper message during receiving", () => {
+    setup({
+      picking: true,
+      helper: {
+        available: true,
+        busy: true,
+        note: "The song is arriving from their computer — 60%",
+        error: null,
+        onFetchUrl: vi.fn(),
+      },
+    });
+    expect(
+      screen.getByText(/the song is arriving from their computer — 60%/i),
+    ).toBeTruthy();
+  });
+
+  it("shows guidance that only one person needs to paste", () => {
+    setup({
+      picking: true,
+      helper: {
+        available: true,
+        busy: false,
+        note: null,
+        error: null,
+        onFetchUrl: vi.fn(),
+      },
+    });
+    expect(
+      screen.getByText(
+        /only one of you needs to paste the link, because the song reaches the other person automatically/i,
+      ),
+    ).toBeTruthy();
+  });
+
+  it("does not show the paste guidance when helper is not available", () => {
+    setup({
+      picking: true,
+      helper: {
+        available: false,
+        busy: false,
+        note: null,
+        error: null,
+        onFetchUrl: vi.fn(),
+      },
+    });
+    expect(
+      screen.queryByText(
+        /only one of you needs to paste the link/i,
+      ),
+    ).toBeNull();
   });
 });

@@ -5,6 +5,8 @@ import { motion, useReducedMotion } from "motion/react";
 import { youTubeId } from "@/lib/media/youtube";
 import type { AudioMode } from "@/lib/media/micProfile";
 import { MAX_OFFSET_MS, type SingingTurn } from "@/lib/media/singerTurn";
+import { TrackDisc } from "./TrackDisc";
+import type { TrackDiscProps } from "./TrackDisc";
 
 export { MAX_OFFSET_MS };
 
@@ -63,6 +65,13 @@ export function KaraokePanel(props: {
   track: TrackChoice;
   /** Fetching a pasted link through the helper, when there is one. */
   helper: HelperFetch;
+  /**
+   * The record: present when a track is held in memory, turning when it plays.
+   *
+   * Not a loading indicator, though it has a state for the wait. Rotation is
+   * bound to playback alone, so a disc that turns always means audio is moving.
+   */
+  disc: TrackDiscProps;
   picking: boolean;
   onPick: () => void;
   onCancelPick: () => void;
@@ -88,6 +97,7 @@ export function KaraokePanel(props: {
     onLoad,
     track,
     helper,
+    disc,
     picking,
     onPick,
     onCancelPick,
@@ -112,6 +122,7 @@ export function KaraokePanel(props: {
           onCancel={onCancelPick}
           track={track}
           helper={helper}
+          disc={disc}
         />
       ) : (
         <Transport
@@ -133,6 +144,7 @@ export function KaraokePanel(props: {
           onPlayPause={onPlayPause}
           onResync={onResync}
           onPick={onPick}
+          disc={disc}
         />
       )}
     </section>
@@ -301,6 +313,7 @@ function SongPicker({
   onCancel,
   track,
   helper,
+  disc,
 }: {
   onLoad: (videoId: string) => void;
   videoError: number | null;
@@ -309,6 +322,7 @@ function SongPicker({
   onCancel: () => void;
   track: TrackChoice;
   helper: HelperFetch;
+  disc: TrackDiscProps;
 }) {
   const [value, setValue] = useState("");
   const [error, setError] = useState(false);
@@ -411,6 +425,11 @@ function SongPicker({
         />
       </div>
 
+      {/* Full size here, where there is room for the title: this is the panel
+          someone is looking at through the half minute a fetch takes. It
+          renders nothing of its own accord when there is no track. */}
+      <TrackDisc {...disc} />
+
       <button
         type="submit"
         disabled={helper.busy}
@@ -455,11 +474,18 @@ function SongPicker({
             {videoErrorMessage(videoError)}
           </p>
         ) : (
-          <p className="text-[var(--mist)]">
-            {helper.available === true
-              ? "A karaoke or lyrics video works best. The audio and the words are fetched for both of you — it takes a moment."
-              : "A karaoke or lyrics video works best."}
-          </p>
+          <>
+            <p className="text-[var(--mist)]">
+              {helper.available === true
+                ? "A karaoke or lyrics video works best. The audio and the words are fetched for both of you — it takes a moment."
+                : "A karaoke or lyrics video works best."}
+            </p>
+            {helper.available === true && (
+              <p className="text-[0.65rem] text-[var(--mist)]">
+                Only one of you needs to paste the link, because the song reaches the other person automatically.
+              </p>
+            )}
+          </>
         )}
       </div>
         </>
@@ -597,6 +623,7 @@ function Transport({
   onPlayPause,
   onResync,
   onPick,
+  disc,
 }: {
   videoId: string | null;
   videoError: number | null;
@@ -616,15 +643,23 @@ function Transport({
   onPlayPause: () => void;
   onResync: () => void;
   onPick: () => void;
+  disc: TrackDiscProps;
 }) {
   const reduceMotion = useReducedMotion();
 
   return (
     <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 text-xs">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-        <span aria-hidden className="shrink-0 text-base">
-          🎤
-        </span>
+        {/* The record takes the microphone's place once there is one, because
+            here -- beside the play button -- is where its turning actually
+            means something. With nothing held, the microphone keeps the spot. */}
+        {disc.state === "absent" ? (
+          <span aria-hidden className="shrink-0 text-base">
+            🎤
+          </span>
+        ) : (
+          <TrackDisc {...disc} size="sm" />
+        )}
 
         <button
           type="button"

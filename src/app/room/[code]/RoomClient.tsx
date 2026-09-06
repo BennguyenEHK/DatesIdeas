@@ -30,6 +30,7 @@ import { LyricsRoll } from "@/components/LyricsRoll";
 import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
 import { useKaraokeHelper } from "@/lib/karaoke/useKaraokeHelper";
 import { useTrackTransfer, type ReceivedTrack } from "@/lib/karaoke/useTrackTransfer";
+import type { TrackDiscProps } from "@/components/TrackDisc";
 import { MoviePanel } from "@/components/MoviePanel";
 import { LocalFilePlayer } from "@/components/LocalFilePlayer";
 import { PhotoBoothStage } from "@/components/PhotoBoothStage";
@@ -461,6 +462,34 @@ export function RoomClient({ code }: { code: string }) {
     },
     [fetchAndShare],
   );
+  /**
+   * What the record on the panel is showing.
+   *
+   * Two separate facts, deliberately not collapsed into one. The disc being
+   * THERE says a decoded track is held in this browser's memory; the disc
+   * TURNING says it is playing. A song can sit in memory while a YouTube video
+   * plays over the top of it, and in that case the record is present and still
+   * -- which is the truth, and what a real turntable would show.
+   *
+   * `playing` is gated on ownTrack rather than on media.playing alone, because
+   * media.playing is true for a YouTube video too, and a record spinning to
+   * someone else's audio would be a lie.
+   */
+  const disc: TrackDiscProps = {
+    state:
+      helper.stage === "fetching" || transfer.incoming !== null || track.loading
+        ? "loading"
+        : track.ready
+          ? "held"
+          : "absent",
+    playing: ownTrack && media.playing,
+    // For a track the helper fetched, the shared state carries its title where
+    // a YouTube film would carry an id; asking for it on the YouTube path would
+    // put an eleven-character video id on screen as though it were a song name.
+    title: media.film.source === "local" ? media.videoId : null,
+    durationSec: track.durationSec,
+  };
+
   const movie = current === "movie";
   const photobooth = current === "photobooth";
 
@@ -837,61 +866,62 @@ export function RoomClient({ code }: { code: string }) {
 
           {karaoke && (
             <KaraokePanel
-              videoId={media.videoId}
-              playing={media.playing}
-              audioMode={audio.mode}
-              audioAuto={audio.auto}
-              onChooseAudio={audio.choose}
-              noisy={noisy}
-              onNoisy={setNoisy}
-              videoError={videoError}
-              musicVolume={musicVolume}
-              onMusicVolume={setMusicVolume}
-              turn={turn}
-              offsetMs={offsetMs}
-              manual={manualOffset}
-              onManual={setManualOffset}
-              onOffsetMs={setOffsetMs}
-              track={{
-                ready: track.ready,
-                loading: track.loading,
-                hasLyrics: track.lyrics.length > 0,
-                error: track.error,
-                onAudioFile: onTrackAudio,
-                onLyricsFile: onTrackLyrics,
-              }}
-              helper={{
-                available: helper.available,
-                busy: helper.stage === "fetching" || transfer.incoming !== null,
-                note:
-                  transfer.incoming !== null
-                    ? `Receiving the song — ${Math.round(
-                        (transfer.incoming.receivedBytes /
-                          Math.max(1, transfer.incoming.expectedBytes)) *
-                          100,
-                      )}%`
-                    : helper.stage === "fetching"
-                      ? "Fetching the song and its words…"
-                      : null,
-                error: helper.error ?? transfer.error,
-                onFetchUrl,
-              }}
-              picking={picking}
-              onPick={() => setPicking(true)}
-              onCancelPick={() => setPicking(false)}
-              onLoad={(id) => {
-                // Going back to a video gives up the speed control a file
-                // bought, so the two modes cannot both be current.
-                setTrackMode(false);
-                // A new attempt starts clean; the last refusal was about the
-                // last video, not this one.
-                setVideoError(null);
-                setPicking(false);
-                media.load({ videoId: id, source: "youtube", durationSec: null });
-              }}
-              onPlayPause={media.playPause}
-              onResync={media.resync}
-            />
+                    videoId={media.videoId}
+                    playing={media.playing}
+                    audioMode={audio.mode}
+                    audioAuto={audio.auto}
+                    onChooseAudio={audio.choose}
+                    noisy={noisy}
+                    onNoisy={setNoisy}
+                    videoError={videoError}
+                    musicVolume={musicVolume}
+                    onMusicVolume={setMusicVolume}
+                    turn={turn}
+                    offsetMs={offsetMs}
+                    manual={manualOffset}
+                    onManual={setManualOffset}
+                    onOffsetMs={setOffsetMs}
+                    track={{
+                      ready: track.ready,
+                      loading: track.loading,
+                      hasLyrics: track.lyrics.length > 0,
+                      error: track.error,
+                      onAudioFile: onTrackAudio,
+                      onLyricsFile: onTrackLyrics,
+                    }}
+                    helper={{
+                      available: helper.available,
+                      busy: helper.stage === "fetching" || transfer.incoming !== null,
+                      note:
+                        transfer.incoming !== null
+                          ? `The song is arriving from their computer — ${Math.round(
+                              (transfer.incoming.receivedBytes /
+                                Math.max(1, transfer.incoming.expectedBytes)) *
+                                100,
+                            )}%`
+                          : helper.stage === "fetching"
+                            ? "The helper is downloading the audio — this takes about 30 seconds."
+                            : null,
+                      error: helper.error ?? transfer.error,
+                      onFetchUrl,
+                    }}
+                    disc={disc}
+                    picking={picking}
+                    onPick={() => setPicking(true)}
+                    onCancelPick={() => setPicking(false)}
+                    onLoad={(id) => {
+                      // Going back to a video gives up the speed control a file
+                      // bought, so the two modes cannot both be current.
+                      setTrackMode(false);
+                      // A new attempt starts clean; the last refusal was about the
+                      // last video, not this one.
+                      setVideoError(null);
+                      setPicking(false);
+                      media.load({ videoId: id, source: "youtube", durationSec: null });
+                    }}
+                    onPlayPause={media.playPause}
+                    onResync={media.resync}
+                  />
           )}
 
           {current === "cards" && (
