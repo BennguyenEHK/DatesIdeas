@@ -49,11 +49,28 @@ describe("trafficRates", () => {
 });
 
 describe("formatReport", () => {
-  const empty: ReportInput = { topology: null, rates: null, sample: null, netRttMs: null, pingRttMs: null, audioJitterMs: null, videoJitterMs: null, audioCodec: null, activity: null, connectedForMs: null };
+  const empty: ReportInput = { topology: null, rates: null, sample: null, netRttMs: null, pingRttMs: null, audioJitterMs: null, videoJitterMs: null, audioCodec: null, activity: null, connectedForMs: null, syncChannel: null, fileChannel: null };
   it("never throws when every field is null", () => expect(() => formatReport(empty)).not.toThrow());
   it("prints unknown rather than null for absent data", () => expect(formatReport(empty)).toContain("ICE RTT: unknown"));
   it("explains that no selected route has no verdict yet", () => expect(formatReport(empty)).toContain("VERDICT: no route selected yet."));
   it("reports a slow relay verdict", () => expect(formatReport({ ...empty, topology: { relayed: true, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: true, hasRelay: true }, pairStates: {} }, netRttMs: 151 })).toContain("VERDICT: relayed and slow - the relay may be far away."));
   it("reports a close relay verdict", () => expect(formatReport({ ...empty, topology: { relayed: true, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: true, hasRelay: true }, pairStates: {} }, netRttMs: 150 })).toContain("VERDICT: relayed but close - the relay is not the problem."));
   it("adds the no-reflexive note", () => expect(formatReport({ ...empty, topology: { relayed: false, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: false, hasRelay: false }, pairStates: {} } })).toContain("NOTE: no reflexive candidate"));
+  it("shows both channel states, since a song and a button do not travel together", () => {
+    const r = formatReport({ ...empty, syncChannel: "open", fileChannel: "connecting" });
+    expect(r).toContain("Sync channel: open");
+    expect(r).toContain("File channel: connecting");
+  });
+  it("THE DIAGNOSIS: names the case where their buttons work and the song never arrives", () => {
+    // Exactly what was reported from a real call: K could pause and play M's
+    // video, and never saw or heard the song. Control messages cross on `sync`
+    // and the song crosses on `files`, so one being open says nothing about the
+    // other -- and nothing on either screen used to say so.
+    const r = formatReport({ ...empty, syncChannel: "open", fileChannel: "closed" });
+    expect(r).toContain("control messages can cross but files cannot");
+  });
+  it("stays quiet when both channels are open", () => {
+    const r = formatReport({ ...empty, syncChannel: "open", fileChannel: "open" });
+    expect(r).not.toContain("control messages can cross but files cannot");
+  });
 });

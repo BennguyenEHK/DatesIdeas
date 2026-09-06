@@ -66,6 +66,17 @@ export interface ReportInput {
   activity: string | null;
   /** How long the call has been connected, ms. */
   connectedForMs: number | null;
+  /**
+   * readyState of each data channel, or null when it was never created.
+   *
+   * Here because a karaoke song crosses on `files` while every control message
+   * crosses on `sync`, so the two can fail independently -- and when they do,
+   * the symptom is that the other person's buttons work perfectly and their
+   * screen stays empty. Without these two lines that state is invisible from
+   * both sides at once.
+   */
+  syncChannel: string | null;
+  fileChannel: string | null;
 }
 
 const num = (v: unknown): number | null =>
@@ -276,6 +287,9 @@ export function formatReport(input: ReportInput): string {
     `Audio codec: ${text(input.audioCodec)}`,
     `Activity: ${text(input.activity)}`,
     `Connected for: ${duration(input.connectedForMs)}`,
+    "CHANNELS",
+    `Sync channel: ${text(input.syncChannel)}`,
+    `File channel: ${text(input.fileChannel)}`,
   ];
 
   if (topology === null) lines.push("VERDICT: no route selected yet.");
@@ -286,6 +300,13 @@ export function formatReport(input: ReportInput): string {
 
   if (topology !== null && !topology.gathering.hasReflexive) {
     lines.push("NOTE: no reflexive candidate - this network hid our public address, so a direct connection was never possible.");
+  }
+  // The exact shape of "their controls work but the song never arrives", called
+  // out by name so nobody has to know that songs and buttons travel separately.
+  if (input.syncChannel === "open" && input.fileChannel !== "open") {
+    lines.push(
+      `NOTE: control messages can cross but files cannot (file channel: ${text(input.fileChannel)}) - a song loaded here would never reach them.`,
+    );
   }
   return lines.join("\n");
 }

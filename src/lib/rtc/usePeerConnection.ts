@@ -520,6 +520,8 @@ export function usePeerConnection(
         activity,
         connectedForMs:
           connectedAt.current === null ? null : Date.now() - connectedAt.current,
+        syncChannel: dcRef.current?.readyState ?? null,
+        fileChannel: fileDcRef.current?.readyState ?? null,
       }),
     [path, rtt, audioJitter, jitterMs, audioFormat],
   );

@@ -54,12 +54,71 @@ afterEach(() => {
 describe("sendTrack", () => {
   it("sends the whole track when the other side is there", async () => {
     const t = setup();
+    let outcome;
     await act(async () => {
-      await t.view.result.current.sendTrack(track());
+      outcome = await t.view.result.current.sendTrack(track());
     });
+    expect(outcome).toBe("sent");
     expect(t.sent.length).toBeGreaterThan(0);
     expect(t.messages.at(0)?.t).toBe("track-meta");
     expect(t.messages.at(-1)?.t).toBe("track-done");
+  });
+
+  it("THE SILENCE: says a send failed instead of returning as if it worked", async () => {
+    // The whole reason this was hard to diagnose. A song that loaded here and
+    // never reached the other person looked, from this side, exactly like a
+    // song that had been delivered -- so the only symptom was on their screen,
+    // and nothing on either side said which step had not happened.
+    vi.useFakeTimers();
+    const t = setup({ chunkAccepted: () => false, channelOpen: () => false });
+    let outcome;
+    await act(async () => {
+      const p = t.view.result.current.sendTrack(track());
+      await vi.advanceTimersByTimeAsync(120_000);
+      outcome = await p;
+    });
+    expect(outcome).toBe("no-peer");
+    expect(t.view.result.current.error).toMatch(/could not be sent|did not reach/i);
+  });
+
+  it("reports a peer that vanished separately from one that was never there", async () => {
+    vi.useFakeTimers();
+    let open = true;
+    const t = setup({
+      chunkAccepted: (n) => {
+        if (n > 1) open = false;
+        return n <= 1;
+      },
+      channelOpen: () => open,
+    });
+    let outcome;
+    await act(async () => {
+      const p = t.view.result.current.sendTrack(track(64 * 1024));
+      await vi.advanceTimersByTimeAsync(120_000);
+      outcome = await p;
+    });
+    expect(outcome).toBe("peer-left");
+  });
+
+  it("survives the channel throwing mid-send rather than dying unhandled", async () => {
+    // dc.send() throws when the channel closes under it. Uncaught, that became
+    // an unhandled rejection: no message, no state change, nothing on screen.
+    // The channel here still reports itself open, so the honest verdict is a
+    // stall rather than a departure -- what matters is that it ends, and says so.
+    vi.useFakeTimers();
+    const t = setup({
+      chunkAccepted: () => {
+        throw new Error("InvalidStateError: RTCDataChannel is closed");
+      },
+    });
+    let outcome;
+    await act(async () => {
+      const p = t.view.result.current.sendTrack(track());
+      await vi.advanceTimersByTimeAsync(30_000);
+      outcome = await p;
+    });
+    expect(outcome).toBe("stalled");
+    expect(t.view.result.current.error).toBeTruthy();
   });
 
   it("THE BUG: gives up instead of retrying forever when nobody is connected", async () => {

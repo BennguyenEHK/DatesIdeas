@@ -16,21 +16,39 @@ export interface ReceivedTrack {
   durationSec: number;
 }
 
+/**
+ * How a send ended.
+ *
+ * Reported rather than swallowed, because a song that loaded on this machine
+ * and never reached the other person looked identical from here to one that
+ * arrived. The only symptom was on their screen, which is the worst possible
+ * place for it: the person who could act on it could not see it.
+ */
+export type SendOutcome =
+  /** Every chunk was handed to the channel. */
+  | "sent"
+  /** No file channel ever opened. Nobody was there to send to. */
+  | "no-peer"
+  /** The channel was there and went away part way through. */
+  | "peer-left"
+  /** The channel stayed open and stopped accepting bytes. */
+  | "stalled";
+
 export interface TrackTransfer {
   /** Bytes so far of an inbound transfer, or null when none is running. */
   incoming: { receivedBytes: number; expectedBytes: number } | null;
-  /** A sentence about a transfer that failed, or null. */
+  /** A sentence about a transfer that failed, in either direction, or null. */
   error: string | null;
   /** Feed every peer message here; unrelated ones are ignored. */
   handleMessage: (message: PeerMessage) => void;
-  /** Push a fetched track to the other side. Resolves when the last chunk is queued. */
+  /** Push a fetched track to the other side, and say how it went. */
   sendTrack: (args: {
     requestId: string;
     media: ArrayBuffer;
     contentType: string;
     title: string;
     durationSec: number;
-  }) => Promise<void>;
+  }) => Promise<SendOutcome>;
 }
 
 /**
@@ -181,13 +199,18 @@ export function useTrackTransfer(args: {
       contentType: string;
       title: string;
       durationSec: number;
-    }) => {
+    }): Promise<SendOutcome> => {
       // Give the channel a chance to finish opening before concluding there is
-      // nobody on the other end. Not an error either way: the track is already
-      // loaded on this side, and someone trying a song out while the other
-      // person is offline is not owed a failure.
+      // nobody on the other end. The track is already loaded on this side, so
+      // this is never fatal here -- but it is always worth saying, because the
+      // consequence lands entirely on the other person's screen.
       for (let waited = 0; !fileChannelOpen(); waited += BACKPRESSURE_WAIT_MS) {
-        if (waited >= CHANNEL_OPEN_WAIT_MS) return;
+        if (waited >= CHANNEL_OPEN_WAIT_MS) {
+          setError(
+            "The song is playing here, but it could not be sent to them — no file connection opened.",
+          );
+          return "no-peer";
+        }
         await wait(BACKPRESSURE_WAIT_MS);
       }
 
@@ -204,22 +227,41 @@ export function useTrackTransfer(args: {
         // Retries rather than queues: the channel reports when its buffer is
         // full, and pushing past that is how a data channel gets dropped.
         let waited = 0;
-        while (!sendFileChunk(chunk)) {
+        for (;;) {
+          let accepted: boolean;
+          try {
+            accepted = sendFileChunk(chunk);
+          } catch {
+            // dc.send() throws when the channel closes under it. Uncaught this
+            // became an unhandled rejection, which is how a failed send managed
+            // to leave no trace anywhere at all.
+            accepted = false;
+          }
+          if (accepted) break;
+
           // One `false`, two opposite meanings. A full buffer drains if you
           // wait; a closed channel does not, and waiting on it is a loop with
           // no exit -- which is what this did, twenty times a second, for as
           // long as the page stayed open.
-          if (!fileChannelOpen()) return;
+          if (!fileChannelOpen()) {
+            setError("They dropped out part way through the song. Try loading it again.");
+            return "peer-left";
+          }
           // A backstop for the case the channel is open but permanently
           // unwilling. Far longer than real backpressure, which clears in
           // milliseconds, and still finite.
-          if (waited >= SEND_GIVE_UP_MS) return;
+          if (waited >= SEND_GIVE_UP_MS) {
+            setError("The song stopped going through to them. Try loading it again.");
+            return "stalled";
+          }
           await wait(BACKPRESSURE_WAIT_MS);
           waited += BACKPRESSURE_WAIT_MS;
         }
       }
 
       sendMessage({ t: "track-done", requestId: track.requestId });
+      setError(null);
+      return "sent";
     },
     [sendMessage, sendFileChunk, fileChannelOpen],
   );
