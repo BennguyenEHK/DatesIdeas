@@ -37,6 +37,26 @@ function applyCors(request, response) {
   return false;
 }
 
+/**
+ * An extraction failure in one line, ending at whatever yt-dlp actually said.
+ *
+ * The useful sentence is always the innermost one -- "HTTP Error 403" rather
+ * than "Could not download the audio" -- so the chain is followed to its end
+ * and yt-dlp's own last words are appended. Trimmed to the tail because its
+ * stderr can run to tens of kilobytes and the diagnosis is at the bottom.
+ */
+function describeFailure(error) {
+  const parts = [];
+  let current = error;
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    parts.push(current.message);
+    current = current.cause;
+  }
+  const stderr = typeof current?.stderr === 'string' ? current.stderr.trim() : '';
+  if (stderr !== '') parts.push(stderr.split(/\r?\n/).filter(Boolean).slice(-3).join(' | '));
+  return parts.join(': ');
+}
+
 function sendJson(response, status, body) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
@@ -96,6 +116,11 @@ const server = createServer(async (request, response) => {
   } catch (error) {
     const status = error instanceof ExtractError && error.kind === 'not-found' ? 404
       : error instanceof ExtractError && error.kind === 'too-large' ? 413 : 500;
+    // Said out loud, because the browser is only ever told "could not get that
+    // song". A refusal from YouTube and a missing yt-dlp reach the person
+    // pasting the link as the same sentence, and without this the only way to
+    // tell them apart is to run yt-dlp by hand.
+    console.error(`Extract failed: ${describeFailure(error)}`);
     return sendJson(response, status, { error: status === 404 ? 'not found/private' : status === 413 ? 'too large' : 'extract failed' });
   }
 });

@@ -25,6 +25,73 @@ export const DEFAULT_MAX_DURATION_SEC = 12 * 60;
 export const DEFAULT_MAX_BYTES = 30 * 1024 * 1024;
 export const DEFAULT_TIMEOUT_MS = 120_000;
 
+/**
+ * Which of YouTube's own front ends to impersonate when asking for the audio.
+ *
+ * YouTube's default `web` client now hands back format URLs that answer 403
+ * Forbidden without a proof-of-origin token, while still answering metadata
+ * questions perfectly -- so the failure arrives looking like a broken download
+ * rather than a refused one, and the title and duration that come back first
+ * make everything seem fine right up until nothing plays.
+ *
+ * More than one is listed because yt-dlp collects the formats every named
+ * client offers and picks from the union, so a client going the way of `web`
+ * costs a fallback rather than an evening.
+ */
+export const DEFAULT_PLAYER_CLIENTS = 'web_embedded,tv,web';
+
+/**
+ * The client list to use, overridable because YouTube breaks these on its own
+ * schedule and waiting for a release to sing is worse than an env var.
+ *
+ * A blank override falls back rather than being passed through: an empty
+ * `player_client=` is a malformed argument, not a request for the default, and
+ * it would take the whole download down with it.
+ */
+export function playerClients(env = process.env) {
+  const override = env.YTDLP_PLAYER_CLIENTS;
+  if (typeof override === 'string' && override.trim() !== '') return override.trim();
+  return DEFAULT_PLAYER_CLIENTS;
+}
+
+/**
+ * Everything read off a video, and nothing else.
+ *
+ * `duration` gates the length limit, `title` names the track, and the last
+ * three are what the lyrics search is built from -- `track`/`artist` when the
+ * uploader filled them in, `title`/`uploader` when they did not.
+ */
+export const METADATA_FIELDS = ['id', 'title', 'duration', 'track', 'artist', 'uploader'];
+
+/** The clients argument, shared so metadata and audio describe the same thing. */
+function extractorArgs() {
+  return ['--extractor-args', `youtube:player_client=${playerClients()}`];
+}
+
+/**
+ * Asking what the video is, without fetching any of it.
+ *
+ * Carries the same client list as the download on purpose. The duration read
+ * here decides whether a song is refused as too long, and metadata read
+ * through a different client than the audio is a chance for the two to
+ * disagree about what they are describing.
+ */
+export function buildMetadataArgs(url) {
+  return [
+    '--no-playlist',
+    '--no-warnings',
+    ...extractorArgs(),
+    '--skip-download',
+    // Five fields, not every format YouTube offers. The full dump for an
+    // ordinary song runs past six hundred kilobytes, almost all of it format
+    // descriptions nothing here reads; this returns about a hundred and fifty
+    // bytes. Absent fields are simply omitted, which the readers below expect.
+    '--print', `%(.{${METADATA_FIELDS.join(',')}})j`,
+    '--',
+    url,
+  ];
+}
+
 export class ExtractError extends Error {
   constructor(kind, message, cause) {
     super(message, { cause });
@@ -54,6 +121,7 @@ export function buildYtDlpArgs(url, tmpDir, limits = {}) {
   return [
     '--no-playlist',
     '--no-warnings',
+    ...extractorArgs(),
     '--format', 'bestaudio[ext=m4a]/bestaudio',
     '--match-filter', `duration <= ${maxDurationSec}`,
     '--max-filesize', String(maxBytes),
@@ -64,13 +132,26 @@ export function buildYtDlpArgs(url, tmpDir, limits = {}) {
   ];
 }
 
-function run(command, args, { timeoutMs, cwd }) {
+/**
+ * How much of each stream to keep, and why the two numbers differ.
+ *
+ * stderr is read by a human looking for what went wrong, and that sentence is
+ * always at the bottom, so keeping the tail of it is right. stdout is parsed
+ * as a whole, where keeping the tail is not a smaller answer but a corrupt
+ * one -- and a silent one, because a truncated document fails at the parser
+ * with no hint that anything was dropped.
+ */
+export const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
+export const MAX_STDERR_BYTES = 64 * 1024;
+
+export function run(command, args, { timeoutMs, cwd, maxStdoutBytes = MAX_STDOUT_BYTES } = {}) {
   return new Promise((resolve, reject) => {
     // A crafted URL must not be able to become a command on the user's machine.
     const child = spawn(command, args, { cwd, shell: false, windowsHide: true });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let overflowed = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
@@ -78,15 +159,27 @@ function run(command, args, { timeoutMs, cwd }) {
 
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => { stdout = (stdout + chunk).slice(-64 * 1024); });
-    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-64 * 1024); });
+    child.stdout.on('data', (chunk) => {
+      if (overflowed) return;
+      stdout += chunk;
+      // Bounded, because a runaway child must not be able to exhaust memory.
+      // Said out loud rather than trimmed away: dropping part of a document
+      // and returning the rest is how this failed silently for so long.
+      if (stdout.length > maxStdoutBytes) {
+        overflowed = true;
+        child.kill();
+      }
+    });
+    child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-MAX_STDERR_BYTES); });
     child.on('error', (error) => {
       clearTimeout(timer);
       reject(error);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (timedOut) {
+      if (overflowed) {
+        reject(new ExtractError('failed', `yt-dlp produced too much output (over ${maxStdoutBytes} bytes)`));
+      } else if (timedOut) {
         reject(new ExtractError('failed', 'yt-dlp timed out'));
       } else if (code === 0) {
         resolve({ stdout, stderr });
@@ -105,7 +198,7 @@ function classifyYtDlpError(error) {
 }
 
 async function readMetadata(url, tmpDir, timeoutMs) {
-  const { stdout } = await run(ytDlp(), ['--no-playlist', '--no-warnings', '--dump-single-json', '--skip-download', '--', url], {
+  const { stdout } = await run(ytDlp(), buildMetadataArgs(url), {
     timeoutMs,
     cwd: tmpDir,
   });
