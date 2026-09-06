@@ -52,7 +52,12 @@ next-env.d.ts
 
 # Screenshots dropped in the project root while reporting a bug. They are
 # photographs of two people's faces and this repository is public.
-/Screenshot*.png
+#
+# Deliberately every root-level PNG rather than a list of names. The names are
+# whatever the person reporting the bug happened to save the file as -- the last
+# one was called karaoke.png -- and a rule that only catches the names already
+# thought of is not protecting anything.
+/*.png
 
 # The photobooth capture, for the same reason as the screenshots above. It has
 # been kept unstaged by hand until now; a rule is safer than a habit, because a

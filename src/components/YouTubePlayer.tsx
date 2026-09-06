@@ -154,12 +154,32 @@ export const YouTubePlayer = forwardRef<
     let cancelled = false;
     let player: YTPlayerInstance | null = null;
 
+    /**
+     * A node built by hand, deliberately, so that React has never heard of it.
+     *
+     * YouTube's API replaces the element it is given with an iframe. Handing it
+     * the div React rendered leaves React's record of the tree pointing at a
+     * node that is no longer in the document, and the next time React tries to
+     * remove that node -- which happens the instant a fetched karaoke track
+     * becomes ready and the panel swaps this player for the local video one --
+     * it fails with "The node to be removed is not a child of this node" and
+     * takes the whole room down with it.
+     *
+     * So the sacrifice is this child instead. React owns the container and
+     * nothing inside it, which leaves YouTube free to replace, rebuild or
+     * remove its own node as often as it likes.
+     */
+    const mountPoint = document.createElement("div");
+    mountPoint.style.height = "100%";
+    mountPoint.style.width = "100%";
+    container.appendChild(mountPoint);
+
     loadYouTubeIframeApi().then((YT) => {
       // Unmounted while the (possibly shared, possibly already-resolved)
       // API promise was pending -- don't construct a player nobody wants.
       if (cancelled) return;
 
-      player = new YT.Player(container, {
+      player = new YT.Player(mountPoint, {
         height: "100%",
         width: "100%",
         playerVars: {
@@ -204,6 +224,11 @@ export const YouTubePlayer = forwardRef<
       readyRef.current = false;
       playerRef.current = null;
       player?.destroy();
+      // Whatever YouTube left behind goes too. destroy() removes its iframe,
+      // but the player may never have been built -- the API promise can still
+      // be pending here -- and in that case the bare mount point is still
+      // sitting in a container React is about to reuse.
+      container.replaceChildren();
     };
   }, []);
 
@@ -256,13 +281,19 @@ export const YouTubePlayer = forwardRef<
   );
 
   // Fills whatever sized box the parent gives it; no aspect ratio or max
-  // width of its own. The child-selector rules pin the iframe YT.Player
-  // injects to the same box, since its own width/height options are only
-  // honoured as iframe attributes, not guaranteed layout.
+  // width of its own. The descendant rules pin the iframe YT.Player injects to
+  // the same box, since its own width/height options are only honoured as
+  // iframe attributes, not guaranteed layout.
+  //
+  // Deliberately empty, and it must stay that way: everything inside is put
+  // there by the effect above and owned by YouTube, so a child rendered here
+  // would be a node React expects to find and YouTube is free to remove.
+  // Descendant rather than child selectors, because whether the iframe ends up
+  // beside the mount point or inside it is YouTube's business, not ours.
   return (
     <div
       ref={containerRef}
-      className="relative h-full w-full [&>iframe]:absolute [&>iframe]:inset-0 [&>iframe]:h-full [&>iframe]:w-full"
+      className="relative h-full w-full [&_iframe]:absolute [&_iframe]:inset-0 [&_iframe]:h-full [&_iframe]:w-full"
     />
   );
 });
