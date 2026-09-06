@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { corsHeaders } from './cors.mjs';
 import { extractTrack, ExtractError, isAllowedYouTubeUrl } from './extract.mjs';
 import { startRegistration } from './register.mjs';
 import { verifyHelperToken } from './token.mjs';
@@ -25,16 +26,15 @@ function hasValidBearerToken(request) {
 }
 
 function applyCors(request, response) {
-  const allowedOrigin = process.env.ALLOWED_ORIGIN;
-  if (allowedOrigin && request.headers.origin === allowedOrigin) {
-    // Restrict browser access so an arbitrary website cannot drive this public tunnel from a visitor's browser.
-    response.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-    response.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
-    response.setHeader('Vary', 'Origin');
-    return true;
+  // Restrict browser access so an arbitrary website cannot drive this public
+  // tunnel from a visitor's browser. The rules themselves live in cors.mjs,
+  // where they can be tested without opening a socket.
+  const headers = corsHeaders(request.headers.origin, process.env.ALLOWED_ORIGIN);
+  if (headers === null) return false;
+  for (const [name, value] of Object.entries(headers)) {
+    response.setHeader(name, value);
   }
-  return false;
+  return true;
 }
 
 /**
