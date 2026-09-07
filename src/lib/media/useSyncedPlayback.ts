@@ -43,6 +43,27 @@ const CORRECT_INTERVAL_MS = 2000;
  */
 const HEARTBEAT_MS = 5000;
 
+/**
+ * The shortest stretch of playback worth drawing a conclusion from.
+ *
+ * Under this there is simply not enough evidence: a player that has been
+ * running for a fifth of a second has not had time to prove anything, and
+ * treating it as stuck would suppress the correction that belongs at the very
+ * start of a song, where the error is the player's own start-up delay.
+ */
+const STALL_WINDOW_MS = 1000;
+
+/**
+ * How much of the elapsed time a player must actually have played to count as
+ * running.
+ *
+ * A player waiting on the network does not move at all, and one rebuffering
+ * every few seconds crawls. Either way, the position it reports is not drift
+ * that can be corrected -- it is a connection that cannot deliver the film, and
+ * a quarter of real speed is far below anything a working player produces.
+ */
+const STALL_PROGRESS_RATIO = 0.25;
+
 export interface SyncedPlayback {
   videoId: string | null;
   /** What is playing, so a panel can tell a local film from a YouTube one and
@@ -240,6 +261,25 @@ export function useSyncedPlayback(
   /** Which video the player is actually showing, as opposed to asked to show. */
   const loadedId = useRef<string | null>(null);
 
+  /**
+   * The last position this player was seen at while playing, and when.
+   *
+   * The one thing that distinguishes a player which has drifted from a player
+   * which is waiting on the network, and they need opposite treatment. A film
+   * that has drifted should be moved. A film that is buffering must be left
+   * alone, because seeking is exactly what empties the buffer -- so correcting
+   * it puts it further behind, which earns it another correction two seconds
+   * later, which puts it further behind again. On a connection too slow to
+   * refill there is no exit from that, which is why one person's film lagged
+   * for the whole evening while the other's came right after twenty seconds.
+   *
+   * Set to the position a correction ASKED for rather than the one that was
+   * read back, because the playhead reports wherever it was sent whether or not
+   * the film ever arrived there -- and reading that back as progress would let
+   * the loop start over on the very next look.
+   */
+  const lastLook = useRef<{ position: number; at: number } | null>(null);
+
 
   const applyState = useCallback(() => {
     const p = player.current;
@@ -249,6 +289,7 @@ export function useSyncedPlayback(
     if (cur.videoId === null) {
       cancelRamp();
       loadedId.current = null;
+      lastLook.current = null;
       p.pause();
       return;
     }
@@ -259,6 +300,8 @@ export function useSyncedPlayback(
     if (loadedId.current !== filmKey) {
       cancelRamp();
       loadedId.current = filmKey;
+      // Nothing observed of the last film says anything about this one.
+      lastLook.current = null;
       p.load(cur.videoId, want);
       // A song that changes while the room is playing -- which is exactly what
       // one arriving from the other side looks like -- must not sit silent
@@ -276,6 +319,11 @@ export function useSyncedPlayback(
     if (cur.playing) p.play();
     else {
       cancelRamp();
+      // A paused player is not advancing for a perfectly good reason, and
+      // holding that against it would block the corrections a paused resync
+      // depends on. Cleared rather than kept, so the next run of playback is
+      // judged on its own evidence instead of on a reading from before it.
+      lastLook.current = null;
       p.pause();
     }
 
@@ -311,9 +359,32 @@ export function useSyncedPlayback(
 
     // The ramp creates intentional drift. Correcting it again on the safety
     // timer would turn the smooth repair back into the seek it replaces.
-    if (ramping.current || !needsCorrection(p.currentTime(), want, tolerance)) return;
+    if (ramping.current) return;
 
-    const error = p.currentTime() - want;
+    const at = p.currentTime();
+    const seenAt = Date.now();
+    const previous = lastLook.current;
+    lastLook.current = { position: at, at: seenAt };
+
+    if (!needsCorrection(at, want, tolerance)) return;
+
+    // Whether this player is drifting or simply waiting on the network. Asked
+    // only of a player that is supposed to be running, and only over a stretch
+    // long enough to answer: below that there is no evidence either way, and
+    // the benefit of the doubt belongs to correcting.
+    //
+    // A film that is not keeping up cannot be corrected into keeping up. Every
+    // seek sent to it costs it the buffer it was filling, so the correction is
+    // what creates the gap it is correcting.
+    if (cur.playing && previous !== null) {
+      const windowMs = seenAt - previous.at;
+      const played = at - previous.position;
+      if (windowMs >= STALL_WINDOW_MS && played < (windowMs / 1000) * STALL_PROGRESS_RATIO) {
+        return;
+      }
+    }
+
+    const error = at - want;
     const plan = rampPlan(error, tolerance);
     if (plan && cur.playing && p.setRate(plan.rate)) {
       startRamp(plan.forSec);
@@ -324,8 +395,10 @@ export function useSyncedPlayback(
       // milliseconds, too big to ramp inside the limit -- back to the seek
       // that was stalling the picture in the first place.
       p.nudge(want);
+      lastLook.current = { position: want, at: seenAt };
     } else {
       p.seek(want);
+      lastLook.current = { position: want, at: seenAt };
     }
   }, [cancelRamp, now, startRamp]);
 

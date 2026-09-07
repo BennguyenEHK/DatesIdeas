@@ -12,8 +12,15 @@ const film = (videoId: string): Film => ({
   durationSec: null,
 });
 
-/** Records what the sync layer asks of a player, and in what order. */
-function fakePlayer(ready = true, acceptsRate = true) {
+/**
+ * Records what the sync layer asks of a player, and in what order.
+ *
+ * `honoursSeek` is the whole point of the buffering tests. A player waiting on
+ * the network does not arrive where it is sent -- it is told to go to a
+ * position it has no data for and stays exactly where it was -- and a fake
+ * that always lands on its target cannot express that failure at all.
+ */
+function fakePlayer(ready = true, acceptsRate = true, honoursSeek = true) {
   const calls: string[] = [];
   let time = 0;
   const handle: PlayerHandle = {
@@ -26,11 +33,11 @@ function fakePlayer(ready = true, acceptsRate = true) {
     pause: () => calls.push("pause"),
     seek: (s) => {
       calls.push(`seek:${s}`);
-      time = s;
+      if (honoursSeek) time = s;
     },
     nudge: (s) => {
       calls.push(`nudge:${s}`);
-      time = s;
+      if (honoursSeek) time = s;
     },
     setRate: (rate) => {
       calls.push(`rate:${rate}`);
@@ -672,8 +679,12 @@ describe("offset changes via the setpoint path", () => {
     act(() => view.result.current.playPause());
     p.calls.length = 0;
 
-    // The player drifts 300ms ahead
-    p.setTime(10.3);
+    // The player plays its two seconds and ends up 300ms ahead of where shared
+    // time says it should be. It has to be moved on as well as drifted: a
+    // player still sitting near where it started after two seconds of wall
+    // clock is not a player that has drifted, it is one that is not playing,
+    // and the two now get opposite treatment.
+    p.setTime(12.3);
     act(() => void vi.advanceTimersByTime(2100));
 
     // Should seek (or nudge if small enough)
@@ -808,5 +819,112 @@ describe("the error a song opens with", () => {
 
     expect(p.calls.some((c) => c.startsWith("load:Sweet Caroline"))).toBe(true);
     expect(p.calls).not.toContain("play");
+  });
+});
+
+describe("a film on a connection that cannot keep up", () => {
+  const ytFilm = (videoId: string): Film => ({
+    videoId,
+    source: "youtube",
+    durationSec: null,
+  });
+
+  /** Every command that moves the playhead, whatever it was called. */
+  const moves = (calls: string[]) =>
+    calls.filter((c) => c.startsWith("seek:") || c.startsWith("nudge:")).length;
+
+  /** A YouTube player: it cannot change rate, so every correction is a seek. */
+  function watching(honoursSeek = true) {
+    const p = fakePlayer(true, false, honoursSeek);
+    const view = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}, 0, "watching"),
+    );
+    act(() => view.result.current.load(ytFilm("dQw4w9WgXcQ"), 0));
+    act(() => void vi.advanceTimersByTime(2100));
+    act(() => view.result.current.playPause());
+    p.calls.length = 0;
+    return { p, view };
+  }
+
+  it("THE BUG: stops seeking a film that is stalled, instead of seeking it again", () => {
+    // Reported from a real call between Ho Chi Minh City and Surabaya, relayed
+    // over TCP with about 229 kbps to spare. Her film lagged continuously; his
+    // did the same for twenty seconds and then settled -- the difference being
+    // that his buffer eventually filled.
+    //
+    // A buffering player's position does not move while shared time does, so
+    // every two seconds it looks further behind and is sent forward again. And
+    // seeking is what empties the buffer. The correction causes the condition
+    // it is correcting, and on a connection too slow to refill there is no way
+    // out of the loop.
+    const { p } = watching(false);
+
+    // Ten seconds of a player that is going nowhere.
+    act(() => void vi.advanceTimersByTime(10_000));
+
+    expect(moves(p.calls)).toBe(0);
+  });
+
+  it("does not mistake its own correction for the film catching up", () => {
+    // The playhead reads back as wherever it was sent, so a seek looks like
+    // movement the film never made. Believing that would let the loop start
+    // again one tick later.
+    const { p } = watching(false);
+
+    // One tick where the film really is advancing, which earns a correction.
+    p.setTime(1);
+    act(() => void vi.advanceTimersByTime(2000));
+    expect(moves(p.calls)).toBe(1);
+
+    // It never arrives, and never moves again.
+    act(() => void vi.advanceTimersByTime(8000));
+    expect(moves(p.calls)).toBe(1);
+  });
+
+  it("corrects again as soon as the film is genuinely running", () => {
+    // The guard is about evidence, not about giving up. A player that starts
+    // moving again is a player worth correcting.
+    const { p } = watching(false);
+
+    act(() => void vi.advanceTimersByTime(4000));
+    expect(moves(p.calls)).toBe(0);
+
+    // The buffer filled, it is playing properly, and it is badly behind.
+    p.setTime(3.5);
+    act(() => void vi.advanceTimersByTime(2000));
+
+    expect(moves(p.calls)).toBe(1);
+  });
+
+  it("still corrects a film that is playing and has merely drifted", () => {
+    // The case corrections exist for, and the one a stall guard must not
+    // swallow. Guards the fix rather than driving it.
+    const { p } = watching();
+
+    p.setTime(1);
+    act(() => void vi.advanceTimersByTime(2000));
+
+    expect(moves(p.calls)).toBe(1);
+  });
+
+  it("leaves singing exactly as tight as it was", () => {
+    // Karaoke shares this hook and was confirmed working on a real call, so a
+    // change made for films must not loosen it. A player that is running and
+    // four tenths of a second out is still corrected at once.
+    const p = fakePlayer(true, false);
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, () => {}, 0, "singing"),
+    );
+    act(() =>
+      result.current.load({ videoId: "song", source: "local", durationSec: null }, 0),
+    );
+    act(() => void vi.advanceTimersByTime(2100));
+    act(() => result.current.playPause());
+    p.calls.length = 0;
+
+    p.setTime(1.5);
+    act(() => void vi.advanceTimersByTime(2000));
+
+    expect(moves(p.calls)).toBe(1);
   });
 });
