@@ -697,3 +697,116 @@ describe("offset changes via the setpoint path", () => {
     expect(p.calls.some((c) => c.startsWith("rate:"))).toBe(false);
   });
 });
+
+describe("the error a song opens with", () => {
+  /** A film held as a local file, which is what karaoke plays. */
+  const localFilm = (videoId: string): Film => ({
+    videoId,
+    source: "local",
+    durationSec: null,
+  });
+
+  it("THE BUG: corrects the moment playback really starts, not two seconds later", () => {
+    // The position is stamped when play() is CALLED. A video element does not
+    // begin at that instant -- it decodes and spins up, by a different amount
+    // on each machine -- so whoever starts slower is behind by their own
+    // start-up time. Checked immediately after play() the player still reads
+    // its pre-play position, so there is no error to find yet, and nothing
+    // looks again until the drift timer. Both people sing, out of step, until
+    // it fires.
+    const p = fakePlayer();
+    const { result } = renderHook(() => useSyncedPlayback(p.handle, null, () => {}));
+
+    act(() => result.current.load(localFilm("Sweet Caroline"), 0));
+    act(() => void vi.advanceTimersByTime(2100));
+    act(() => result.current.playPause());
+    p.calls.length = 0;
+
+    // Four hundred milliseconds of shared time pass while this player is still
+    // spinning up, and its position does not move. Well short of the two
+    // seconds the drift timer needs.
+    act(() => void vi.advanceTimersByTime(400));
+    p.setTime(0);
+    expect(p.calls.some((c) => c.startsWith("nudge") || c.startsWith("seek"))).toBe(false);
+
+    // Playback genuinely begins. NOW the error exists and can be measured.
+    act(() => result.current.correct());
+
+    expect(p.calls.some((c) => c.startsWith("nudge:0.4") || c.startsWith("seek:0.4"))).toBe(
+      true,
+    );
+  });
+
+  it("corrects this side only, without telling the peer it moved", () => {
+    // The other person is not wrong; this side is merely late. Broadcasting
+    // would make them adopt this player's stumble as the new shared truth.
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
+    );
+
+    act(() => result.current.load(localFilm("Sweet Caroline"), 0));
+    act(() => void vi.advanceTimersByTime(2100));
+    act(() => result.current.playPause());
+    act(() => void vi.advanceTimersByTime(400));
+    sent.length = 0;
+    p.setTime(0);
+
+    act(() => result.current.correct());
+
+    expect(sent).toEqual([]);
+  });
+
+  it("THE SILENCE: starts a song that arrives while the room is already playing", () => {
+    // A song received from the other side becomes a new film id under a state
+    // that already says playing. The load path returned right there, so the
+    // player was cued and left silent until the drift timer came round.
+    const p = fakePlayer();
+    const { result } = renderHook(() => useSyncedPlayback(p.handle, null, () => {}));
+
+    act(() => result.current.load(localFilm("Take Me Home"), 0));
+    act(() => void vi.advanceTimersByTime(2100));
+    act(() => result.current.playPause());
+    p.calls.length = 0;
+
+    act(() =>
+      result.current.accept({
+        t: "media",
+        videoId: "Sweet Caroline",
+        source: "local",
+        durationSec: null,
+        positionSec: 0,
+        playing: true,
+        atSharedTime: Date.now(),
+      }),
+    );
+
+    expect(p.calls.some((c) => c.startsWith("load:Sweet Caroline"))).toBe(true);
+    expect(p.calls).toContain("play");
+  });
+
+  it("still cues a song that arrives while the room is paused", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() => useSyncedPlayback(p.handle, null, () => {}));
+
+    act(() => result.current.load(localFilm("Take Me Home"), 0));
+    act(() => void vi.advanceTimersByTime(2100));
+    p.calls.length = 0;
+
+    act(() =>
+      result.current.accept({
+        t: "media",
+        videoId: "Sweet Caroline",
+        source: "local",
+        durationSec: null,
+        positionSec: 0,
+        playing: false,
+        atSharedTime: Date.now(),
+      }),
+    );
+
+    expect(p.calls.some((c) => c.startsWith("load:Sweet Caroline"))).toBe(true);
+    expect(p.calls).not.toContain("play");
+  });
+});

@@ -14,6 +14,8 @@ export interface ReceivedTrack {
   media: Blob;
   title: string;
   durationSec: number;
+  /** Carried through from the announcement so the sender can be told it landed. */
+  requestId: string;
 }
 
 /**
@@ -128,7 +130,11 @@ export function useTrackTransfer(args: {
   // Every ref above the closures that write to them: the React Compiler
   // refuses a ref first modified inside a closure declared below it.
   const assemblerRef = useRef<Assembler | null>(null);
-  const pendingRef = useRef<{ title: string; durationSec: number } | null>(null);
+  const pendingRef = useRef<{
+    title: string;
+    durationSec: number;
+    requestId: string;
+  } | null>(null);
   const doneRef = useRef(false);
   const quietTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onReceivedRef = useRef(onReceived);
@@ -208,6 +214,7 @@ export function useTrackTransfer(args: {
         media: new Blob([state.bytes], { type: "video/mp4" }),
         title: pending.title,
         durationSec: pending.durationSec,
+        requestId: pending.requestId,
       });
     });
   }, [onFileChunk, stopWaiting, waitForTheRest]);
@@ -219,6 +226,7 @@ export function useTrackTransfer(args: {
       pendingRef.current = {
         title: message.title,
         durationSec: message.durationSec,
+        requestId: message.requestId,
       };
       setError(null);
       setIncoming({ receivedBytes: 0, expectedBytes: message.bytes });

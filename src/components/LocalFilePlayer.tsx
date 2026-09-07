@@ -7,20 +7,46 @@ interface LocalFilePlayerProps {
   file: File | null;
   onDuration: (seconds: number | null) => void;
   onError: (message: string) => void;
+  /**
+   * Called when the picture genuinely starts moving, which is not when play()
+   * was called.
+   *
+   * An element asked to play has to decode and spin up first, by a different
+   * amount on each machine, and until it does its position does not move. The
+   * sync layer stamps the shared position at the moment it ASKS -- so whoever
+   * starts slower opens the song behind, and a check made straight after the
+   * request cannot see it, because the error does not exist yet. This is the
+   * first instant at which it does.
+   */
+  onStarted?: () => void;
 }
 
+/**
+ * How long after reporting a start to ignore another one.
+ *
+ * A correction moves the position, and a browser is free to answer that with
+ * another `playing` event -- which would ask for another correction, which
+ * moves the position again. The two settle in practice, because a corrected
+ * player has nothing left to correct, but "in practice" is not a guarantee and
+ * the failure would be a locked-up video. A real start-up happens once.
+ */
+const START_REPORT_GAP_MS = 500;
+
 export const LocalFilePlayer = forwardRef<PlayerHandle, LocalFilePlayerProps>(
-  function LocalFilePlayer({ file, onDuration, onError }, ref) {
+  function LocalFilePlayer({ file, onDuration, onError, onStarted }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const volumeRef = useRef(100);
     const onDurationRef = useRef(onDuration);
     const onErrorRef = useRef(onError);
+    const onStartedRef = useRef(onStarted);
+    const lastStartReport = useRef(0);
 
     // Keep event handlers current without making the object URL effect recreate
     // a gigabyte-sized source just because a parent supplied a new callback.
     useEffect(() => {
       onDurationRef.current = onDuration;
       onErrorRef.current = onError;
+      onStartedRef.current = onStarted;
     });
 
     useEffect(() => {
@@ -67,7 +93,12 @@ export const LocalFilePlayer = forwardRef<PlayerHandle, LocalFilePlayerProps>(
           if (!video) return;
           // Browsers may reject play() until the viewer has interacted; that
           // local policy must not break synchronization for the other side.
-          void video.play().catch(() => {});
+          //
+          // Optional-chained because play() is only specified to return a
+          // promise in engines that implement the modern signature; older ones
+          // return nothing, and calling .catch on that throws out of a handle
+          // the sync layer expects never to throw.
+          void video.play()?.catch(() => {});
         },
         pause: () => {
           videoRef.current?.pause();
@@ -113,6 +144,12 @@ export const LocalFilePlayer = forwardRef<PlayerHandle, LocalFilePlayerProps>(
         className="h-full w-full object-contain"
         onLoadedMetadata={(event) => {
           onDurationRef.current(event.currentTarget.duration);
+        }}
+        onPlaying={() => {
+          const at = Date.now();
+          if (at - lastStartReport.current < START_REPORT_GAP_MS) return;
+          lastStartReport.current = at;
+          onStartedRef.current?.();
         }}
         onError={() => {
           onErrorRef.current(

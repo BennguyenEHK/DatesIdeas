@@ -7,6 +7,7 @@ function setup(file: File | null = new File(["film"], "film.mp4")) {
   let handle: PlayerHandle | null = null;
   const onDuration = vi.fn();
   const onError = vi.fn();
+  const onStarted = vi.fn();
   const view = render(
     <LocalFilePlayer
       ref={(value) => {
@@ -15,9 +16,10 @@ function setup(file: File | null = new File(["film"], "film.mp4")) {
       file={file}
       onDuration={onDuration}
       onError={onError}
+      onStarted={onStarted}
     />,
   );
-  return { ...view, getHandle: () => handle, onDuration, onError };
+  return { ...view, getHandle: () => handle, onDuration, onError, onStarted };
 }
 
 function setReady(video: HTMLVideoElement, readyState: number) {
@@ -129,5 +131,61 @@ describe("LocalFilePlayer", () => {
       />,
     ));
     expect(view.onDuration).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe("reporting when playback really starts", () => {
+  const createObjectURL = vi.fn((file: File) => `blob:${file.name}`);
+  const revokeObjectURL = vi.fn();
+
+  beforeEach(() => {
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("THE BUG: says when the picture actually moves, not when play was asked for", () => {
+    // The sync layer stamps the shared position at the moment it CALLS play,
+    // and an element does not begin then -- it decodes and spins up first, by a
+    // different amount on each machine. Nothing else can tell the sync layer
+    // that this side opened the song late, so nobody corrected it until the
+    // drift timer came round up to two seconds later.
+    const view = setup();
+    const video = view.container.querySelector("video")!;
+
+    act(() => {
+      view.getHandle()!.play();
+    });
+    expect(view.onStarted).not.toHaveBeenCalled();
+
+    fireEvent.playing(video);
+    expect(view.onStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a second start straight after the first", () => {
+    // Correcting moves the position, and a browser may answer that with
+    // another playing event -- which would ask for another correction. A real
+    // start-up happens once.
+    const view = setup();
+    const video = view.container.querySelector("video")!;
+
+    fireEvent.playing(video);
+    fireEvent.playing(video);
+    fireEvent.playing(video);
+
+    expect(view.onStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a genuine restart later in the evening", () => {
+    vi.useFakeTimers();
+    try {
+      const view = setup();
+      const video = view.container.querySelector("video")!;
+      fireEvent.playing(video);
+      vi.advanceTimersByTime(600);
+      fireEvent.playing(video);
+      expect(view.onStarted).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

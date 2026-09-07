@@ -284,3 +284,22 @@ describe("karaoke track messages", () => {
     expect(decode('{"t":"track-meta"')).toBeNull();
   });
 });
+
+describe("track-ready", () => {
+  it("round-trips the acknowledgement a receiver sends back", () => {
+    expect(decode(encode({ t: "track-ready", requestId: "req-1" }))).toEqual({
+      t: "track-ready",
+      requestId: "req-1",
+    });
+  });
+
+  it("rejects one with no request to identify", () => {
+    expect(decode(JSON.stringify({ t: "track-ready" }))).toBeNull();
+  });
+
+  it("is ignored, not fatal, on a peer that predates it", () => {
+    // The older build has no case for this and answers null, which every
+    // caller already treats as "not for me" rather than as an error.
+    expect(decode(JSON.stringify({ t: "track-nonsense", requestId: "x" }))).toBeNull();
+  });
+});

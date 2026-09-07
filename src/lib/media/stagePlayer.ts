@@ -52,3 +52,24 @@ export function stagePlayer({ activity, filmSource, hasFile }: StageInput): Stag
 
   return "none";
 }
+
+/**
+ * Whether the song this browser is holding is the song the room is playing.
+ *
+ * `ready` alone answers a different question -- "is there a file here at all" --
+ * and it stays true from the previous song forever. So when the other person
+ * loaded a new one, their choice crossed the control channel immediately while
+ * their bytes were still in flight, and this side went on showing, and playing,
+ * the song before it. One shared play button then started two different songs.
+ *
+ * The id is the same string the room already agreed on as the film's id, so
+ * there is nothing new to keep in step: either this side holds that song or it
+ * is still waiting for it.
+ */
+export function holdsCurrentSong(
+  held: { ready: boolean; id: string | null },
+  filmId: string | null,
+): boolean {
+  if (!held.ready || held.id === null || filmId === null) return false;
+  return held.id === filmId;
+}

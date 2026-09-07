@@ -25,7 +25,7 @@ import { activity, activityKey, type ActivityId } from "@/lib/activities/registr
 import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
-import { KaraokePanel } from "@/components/KaraokePanel";
+import { KaraokePanel, type SongLanding } from "@/components/KaraokePanel";
 import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
 import { useKaraokeHelper } from "@/lib/karaoke/useKaraokeHelper";
 import { useTrackTransfer, type ReceivedTrack } from "@/lib/karaoke/useTrackTransfer";
@@ -49,7 +49,7 @@ import {
 } from "@/lib/media/singerTurn";
 import type { PlayerHandle } from "@/lib/media/player";
 import type { SyncPrecision } from "@/lib/media/sync";
-import { stagePlayer } from "@/lib/media/stagePlayer";
+import { stagePlayer, holdsCurrentSong } from "@/lib/media/stagePlayer";
 import { useVolumeDuck } from "@/lib/media/useVolumeDuck";
 import { worthDucking } from "@/lib/media/duck";
 import { uploadKeepsake, type KeepsakeKind } from "@/lib/photo/keepsake";
@@ -61,6 +61,17 @@ import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
  * lives in the letterbox bars above and below the stage, so decoration can
  * never creep onto the video itself.
  */
+/**
+ * How long to keep the transport locked after every byte has been handed over,
+ * waiting for the other side to say the song arrived.
+ *
+ * Generous, because on a relayed connection the bytes go on draining long after
+ * the sending loop has finished with them. Finite, because a peer on an older
+ * build cannot answer at all, and a lock with no way out is worse than a song
+ * that might start half a beat apart.
+ */
+const ACK_WAIT_MS = 120_000;
+
 export function RoomClient({ code }: { code: string }) {
   // One queue per tile: yours lands on your face, theirs on theirs.
   const mine = useMemeQueue();
@@ -82,6 +93,7 @@ export function RoomClient({ code }: { code: string }) {
   // so it cannot exist until after the handler that feeds it is written.
   const acceptTrack = useRef<((m: PeerMessage) => void) | null>(null);
   const serveTrack = useRef<((url: string, requestId: string) => void) | null>(null);
+  const acceptTrackReady = useRef<((requestId: string) => void) | null>(null);
   const [videoError, setVideoError] = useState<number | null>(null);
   // Local to this side, never sent. Starts below full because the reported
   // problem was the backing track burying the other person's voice.
@@ -192,6 +204,12 @@ export function RoomClient({ code }: { code: string }) {
         acceptTrack.current?.(msg);
         return;
       }
+      if (msg.t === "track-ready") {
+        // Their browser has the song. This is the only way this side can know:
+        // handing bytes to an open channel says nothing about when they land.
+        acceptTrackReady.current?.(msg.requestId);
+        return;
+      }
       if (msg.t === "track-request") {
         // Only the side with a helper can answer this, and it answers by
         // fetching and then pushing the result back. The asking side never
@@ -267,6 +285,19 @@ export function RoomClient({ code }: { code: string }) {
 
   const track = useKaraokeTrack();
   /**
+   * The song this side has sent that the other side has not confirmed holding.
+   *
+   * Null once they acknowledge it, or once waiting stops being honest. Only the
+   * sender needs this: the receiver already knows perfectly well that its own
+   * song has not arrived.
+   */
+  const [sendingTo, setSendingTo] = useState<string | null>(null);
+  const ackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Read by the acknowledgement handler, which must not clear the timer
+  // belonging to a DIFFERENT song just because a late ack for the previous one
+  // turned up -- that would leave this locked with nothing left to unlock it.
+  const sendingToRef = useRef<string | null>(null);
+  /**
    * Whether the song being sung is a file this browser holds, rather than a
    * YouTube embed.
    *
@@ -290,7 +321,14 @@ export function RoomClient({ code }: { code: string }) {
   const stage = stagePlayer({
     activity: current,
     filmSource: media.film.source,
-    hasFile: current === "karaoke" ? track.ready : movieFile !== null,
+    // Karaoke asks WHICH song is held, not whether one is. `track.ready` stays
+    // true from the previous song forever, so the side that had not yet
+    // received a newly chosen one went on showing -- and playing -- the song
+    // before it, while the sender watched the new one.
+    hasFile:
+      current === "karaoke"
+        ? holdsCurrentSong({ ready: track.ready, id: track.id }, media.film.videoId)
+        : movieFile !== null,
   });
   useEffect(() => {
     acceptMedia.current = media.accept;
@@ -346,7 +384,9 @@ export function RoomClient({ code }: { code: string }) {
 
   const onTrackMedia = useCallback(
     (file: File) => {
-      void track.chooseMedia(file).then((seconds) => {
+      // The same string that goes out as the film's id, so the two sides can
+      // tell whether they are holding the same song rather than merely a song.
+      void track.chooseMedia(file, null, file.name).then((seconds) => {
         if (seconds === null) return;
         // The last refusal was about the last song, not this one.
         setVideoError(null);
@@ -376,7 +416,7 @@ export function RoomClient({ code }: { code: string }) {
    */
   const adoptTrack = useCallback(
     (arrived: ReceivedTrack) => {
-      void track.chooseMedia(arrived.media, arrived.durationSec).then((seconds) => {
+      void track.chooseMedia(arrived.media, arrived.durationSec, arrived.title).then((seconds) => {
         if (seconds === null) return;
         setVideoError(null);
         setPicking(false);
@@ -396,11 +436,34 @@ export function RoomClient({ code }: { code: string }) {
     sendFileChunk: peer.sendFileChunk,
     fileChannelOpen: peer.fileChannelOpen,
     onFileChunk: peer.onFileChunk,
-    onReceived: adoptTrack,
+    onReceived: (arrived) => {
+      adoptTrack(arrived);
+      // Their play button is locked until this reaches them. Sent before the
+      // file has been decoded rather than after: the bytes are what the other
+      // side is waiting on, and this browser is now holding all of them.
+      peer.send({ t: "track-ready", requestId: arrived.requestId });
+    },
   });
   useEffect(() => {
     acceptTrack.current = transfer.handleMessage;
   });
+  useEffect(() => {
+    sendingToRef.current = sendingTo;
+    acceptTrackReady.current = (requestId) => {
+      if (sendingToRef.current !== requestId) return;
+      if (ackTimer.current !== null) {
+        clearTimeout(ackTimer.current);
+        ackTimer.current = null;
+      }
+      setSendingTo(null);
+    };
+  });
+  useEffect(
+    () => () => {
+      if (ackTimer.current !== null) clearTimeout(ackTimer.current);
+    },
+    [],
+  );
 
   /**
    * Fetches a pasted link and gives the result to both sides.
@@ -430,8 +493,25 @@ export function RoomClient({ code }: { code: string }) {
         media: new Blob([got.media], { type: got.contentType }),
         title: got.title,
         durationSec: got.durationSec,
+        requestId,
       });
-      await transfer.sendTrack({ requestId, ...got });
+      // Locked from here until they say they have it. Playing a song only one
+      // of you is holding is what started two different songs at once.
+      setSendingTo(requestId);
+      const outcome = await transfer.sendTrack({ requestId, ...got });
+      if (outcome !== "sent") {
+        setSendingTo(null);
+        return;
+      }
+      // Handing every byte to the channel is not the same as their browser
+      // having them, so the wait continues -- but not forever. A peer running
+      // an older build has no way to answer, and a transport that quietly drops
+      // the last of it would leave this locked for the evening.
+      if (ackTimer.current !== null) clearTimeout(ackTimer.current);
+      ackTimer.current = setTimeout(() => {
+        ackTimer.current = null;
+        setSendingTo(null);
+      }, ACK_WAIT_MS);
     },
     [helper, peer, adoptTrack, transfer],
   );
@@ -465,6 +545,22 @@ export function RoomClient({ code }: { code: string }) {
           (transfer.incoming.receivedBytes / transfer.incoming.expectedBytes) * 100,
         )
       : null;
+
+  /**
+   * Which side, if either, is still waiting for the song's bytes.
+   *
+   * `stage === "waiting"` already means this browser does not hold the song the
+   * room agreed on, which is the receiver's half. The sender's half cannot be
+   * observed at all and has to be told: `sendingTo` holds until their browser
+   * says it has the file.
+   */
+  const landing: SongLanding = !karaoke
+    ? null
+    : stage === "waiting"
+      ? "here"
+      : sendingTo !== null
+        ? "there"
+        : null;
 
   const movie = current === "movie";
   const photobooth = current === "photobooth";
@@ -733,6 +829,12 @@ export function RoomClient({ code }: { code: string }) {
                     onDuration={(seconds) => {
                       if (seconds !== null) media.reportDuration(seconds);
                     }}
+                    // The position is stamped when play() is CALLED, and this
+                    // element does not begin then -- it decodes and spins up,
+                    // by a different amount on each machine. This is the first
+                    // instant the resulting error exists to be measured, and
+                    // without it nothing looked again for up to two seconds.
+                    onStarted={media.correct}
                     onError={setFileError}
                   />
                 ) : stage === "waiting" ? (
@@ -740,9 +842,14 @@ export function RoomClient({ code }: { code: string }) {
                   // here is what showed the other person "Video unavailable":
                   // the sync layer would hand it the shared id, which for a
                   // fetched track is the song's title rather than a video.
-                  <div className="flex h-full w-full items-center justify-center px-8 text-center">
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-8 text-center">
                     <p className="text-sm text-[var(--mist)]">
-                      The song is coming over from their computer.
+                      Loading song…
+                    </p>
+                    <p className="text-xs text-[var(--mist)]/70">
+                      {fetchPercent === null
+                        ? "Coming over from their computer."
+                        : `Coming over from their computer — ${fetchPercent}%`}
                     </p>
                   </div>
                 ) : stage === "youtube" ? (
@@ -896,6 +1003,11 @@ export function RoomClient({ code }: { code: string }) {
                       error: helper.error ?? transfer.error,
                       onFetchUrl,
                     }}
+                    landing={landing}
+                    // Only the receiving side can measure this. The sender is
+                    // told when the song lands and nothing before it, so its
+                    // bar sweeps rather than inventing a number.
+                    landingPercent={landing === "here" ? fetchPercent : null}
                     picking={picking}
                     onPick={() => setPicking(true)}
                     onCancelPick={() => setPicking(false)}

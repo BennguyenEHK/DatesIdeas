@@ -88,6 +88,12 @@ export type PeerMessage =
       chunks: number;
     }
   | { t: "track-done"; requestId: string }
+  // Sent back by whoever RECEIVES a song, once it has actually arrived and been
+  // adopted. The sender cannot work this out for itself: handing bytes to an
+  // open channel says nothing about when they land, and on a relayed link that
+  // gap is minutes. Without this the sender's play button is live over a song
+  // the other person does not have yet.
+  | { t: "track-ready"; requestId: string }
   | { t: "track-error"; requestId: string; message: string };
 
 export function encode(m: PeerMessage): string {
@@ -196,6 +202,8 @@ export function decode(raw: string): PeerMessage | null {
         : null;
     case "track-done":
       return isStr(m.requestId) ? { t: "track-done", requestId: m.requestId } : null;
+    case "track-ready":
+      return isStr(m.requestId) ? { t: "track-ready", requestId: m.requestId } : null;
     case "track-error":
       return isStr(m.requestId) && isStr(m.message)
         ? { t: "track-error", requestId: m.requestId, message: m.message }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { stagePlayer } from "./stagePlayer";
+import { stagePlayer, holdsCurrentSong } from "./stagePlayer";
 
 describe("stagePlayer", () => {
   it("THE BUG: a local song that has not arrived yet never reaches a YouTube player", () => {
@@ -85,5 +85,39 @@ describe("before an activity is chosen", () => {
     // read as karaoke by falling through a truthiness check.
     expect(stagePlayer({ activity: null, filmSource: null, hasFile: false })).toBe("none");
     expect(stagePlayer({ activity: null, filmSource: "local", hasFile: true })).toBe("none");
+  });
+});
+
+describe("holdsCurrentSong", () => {
+  it("THE BUG: a file left over from the last song does not count as this one", () => {
+    // Reported from a real call. She loaded a new song; it appeared on her side
+    // and the old one stayed on his, because his browser still held a file and
+    // that was the only question being asked. Pressing play then started two
+    // different songs at once, one on each side.
+    expect(
+      holdsCurrentSong({ ready: true, id: "Take Me Home" }, "Sweet Caroline"),
+    ).toBe(false);
+  });
+
+  it("counts the song once the right one has arrived", () => {
+    expect(
+      holdsCurrentSong({ ready: true, id: "Sweet Caroline" }, "Sweet Caroline"),
+    ).toBe(true);
+  });
+
+  it("does not count a file that is still being read", () => {
+    expect(holdsCurrentSong({ ready: false, id: "Sweet Caroline" }, "Sweet Caroline")).toBe(
+      false,
+    );
+  });
+
+  it("does not count anything before the room has agreed on a song", () => {
+    expect(holdsCurrentSong({ ready: true, id: "Sweet Caroline" }, null)).toBe(false);
+  });
+
+  it("never lets two nulls look like a match", () => {
+    // Both sides idle is not both sides holding the same song, and treating it
+    // as one would put an empty player on the stage.
+    expect(holdsCurrentSong({ ready: true, id: null }, null)).toBe(false);
   });
 });

@@ -36,6 +36,17 @@ export interface TrackChoice {
  * video, which cannot change speed. Guessing wrong in either direction sends
  * someone down the wrong path silently.
  */
+/**
+ * Whose browser is still waiting for the song's bytes, if either.
+ *
+ * A song only counts as loaded once BOTH sides hold it. One person's choice
+ * crosses the control channel the instant they make it; the file itself takes
+ * as long as the connection takes, which over a relay is minutes. In between,
+ * a live play button starts a song on one side and either nothing or the
+ * PREVIOUS song on the other -- which is precisely what happened.
+ */
+export type SongLanding = "here" | "there" | null;
+
 export interface HelperFetch {
   available: boolean | null;
   /** True while fetching or transferring, so the form should not be resubmitted. */
@@ -74,6 +85,10 @@ export function KaraokePanel(props: {
   track: TrackChoice;
   /** Fetching a pasted link through the helper, when there is one. */
   helper: HelperFetch;
+  /** Which side, if either, is still waiting for the song to arrive. */
+  landing: SongLanding;
+  /** How far the arriving song has got, 0-100, or null when unknown. */
+  landingPercent: number | null;
   picking: boolean;
   onPick: () => void;
   onCancelPick: () => void;
@@ -99,6 +114,8 @@ export function KaraokePanel(props: {
     onLoad,
     track,
     helper,
+    landing,
+    landingPercent,
     picking,
     onPick,
     onCancelPick,
@@ -145,6 +162,8 @@ export function KaraokePanel(props: {
           onResync={onResync}
           onPick={onPick}
           helper={helper}
+          landing={landing}
+          landingPercent={landingPercent}
         />
       )}
     </section>
@@ -649,6 +668,8 @@ function Transport({
   onResync,
   onPick,
   helper,
+  landing,
+  landingPercent,
 }: {
   videoId: string | null;
   videoError: number | null;
@@ -669,8 +690,15 @@ function Transport({
   onResync: () => void;
   onPick: () => void;
   helper: HelperFetch;
+  landing: SongLanding;
+  landingPercent: number | null;
 }) {
   const reduceMotion = useReducedMotion();
+
+  // Nobody may drive a song that only one of you is holding. Pressing play here
+  // started this side's song and left the other side either silent or, if they
+  // still had the last one loaded, singing something else entirely.
+  const waiting = landing !== null;
 
   return (
     <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2 text-xs">
@@ -681,15 +709,17 @@ function Transport({
 
         <button
           type="button"
-          disabled={videoId === null}
+          disabled={videoId === null || waiting}
           onClick={onPlayPause}
-          aria-label={playing ? "Pause the song" : "Play the song"}
+          aria-label={
+            waiting ? "Waiting for the song to arrive" : playing ? "Pause the song" : "Play the song"
+          }
           className="relative inline-flex shrink-0 items-center rounded-[2px] border border-[var(--lamp)]/45 px-4 py-1.5 tracking-wide text-[var(--lamp)] transition-colors hover:bg-[var(--lamp)]/10 disabled:cursor-not-allowed disabled:bg-[var(--mist)]/25 disabled:text-[var(--mist)]"
         >
           {/* The one moment this panel is built around: the room is
               mid-song. Reuses ActivityBar's lit-bulb glow rather than
               inventing a second motif for the same idea. */}
-          {playing ? (
+          {playing && !waiting ? (
             <motion.span
               aria-hidden
               className="pointer-events-none absolute inset-[-6px] rounded-[4px]"
@@ -707,14 +737,14 @@ function Transport({
             />
           ) : null}
           <span className="relative z-10 inline-flex items-center gap-2">
-            {playing ? <PauseIcon /> : <PlayIcon />}
-            {playing ? "Pause" : "Play"}
+            {waiting ? <SpinnerIcon /> : playing ? <PauseIcon /> : <PlayIcon />}
+            {waiting ? "Loading song…" : playing ? "Pause" : "Play"}
           </span>
         </button>
 
         <button
           type="button"
-          disabled={videoId === null}
+          disabled={videoId === null || waiting}
           onClick={onResync}
           className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1.5 text-[var(--mist)] transition-colors hover:text-[var(--cream)] disabled:cursor-not-allowed disabled:text-[var(--mist)]/40"
         >
@@ -751,7 +781,20 @@ function Transport({
           visible from here too. Without this the panel someone is actually
           looking at goes quiet for half a minute, which is the exact thing that
           made this feature look broken before. */}
-      {helper.busy && (
+      {waiting && (
+        <div className="flex w-full items-center gap-3">
+          <p className="shrink-0 text-[10px] uppercase tracking-[0.2em] text-[var(--mist)]">
+            {landing === "here"
+              ? "Loading song…"
+              : "Loading song on their computer…"}
+          </p>
+          <div className="min-w-0 flex-1">
+            <FetchProgress percent={landingPercent} />
+          </div>
+        </div>
+      )}
+
+      {helper.busy && !waiting && (
         <div className="w-full basis-full">
           {helper.note !== null && (
             <p aria-live="polite" className="text-[0.65rem] text-[var(--lamp)]">
@@ -822,6 +865,23 @@ function HeadphoneIcon({ className }: { className: string }) {
       <path d="M2.5 9.5v-2a5.5 5.5 0 0 1 11 0v2" strokeLinecap="round" />
       <rect x="1.5" y="9" width="3" height="4.5" rx="1" />
       <rect x="11.5" y="9" width="3" height="4.5" rx="1" />
+    </svg>
+  );
+}
+
+/** A turning ring, for the wait that has a definite end but no useful number. */
+function SpinnerIcon() {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+    >
+      <circle cx="8" cy="8" r="6" opacity="0.25" />
+      <path d="M8 2a6 6 0 0 1 6 6" strokeLinecap="round" />
     </svg>
   );
 }

@@ -24,6 +24,14 @@ import type { PeerMessage } from "@/lib/rtc/protocol";
  * Only a safety net. State CHANGES are applied the moment they arrive: waiting
  * for this timer put up to two seconds between one person pressing play and
  * the other hearing it, which on a song is not a delay but a different verse.
+ *
+ * It could not, however, catch the error a song opens with. The position is
+ * stamped when play() is CALLED, and a video element does not begin at that
+ * instant -- it decodes and spins up, by a different amount on each machine.
+ * Checked immediately afterwards the player still reads its pre-play position,
+ * so the error does not exist yet; by the time it does, the next look is up to
+ * two seconds away. That is what `correct` is for: it is called the moment
+ * playback genuinely starts, when the error is real and measurable.
  */
 const CORRECT_INTERVAL_MS = 2000;
 /**
@@ -46,6 +54,15 @@ export interface SyncedPlayback {
   reportDuration: (seconds: number) => void;
   playPause: () => void;
   resync: () => void;
+  /**
+   * Re-check this player against shared time and fix it, telling the peer
+   * nothing.
+   *
+   * Distinct from `resync`, which BROADCASTS this player's position as the new
+   * truth. The one moment this exists for is the moment playback actually
+   * begins, where this side is simply late and the other side is not wrong.
+   */
+  correct: () => void;
   clear: () => void;
   /** Feed inbound media messages here. */
   accept: (msg: PeerMessage) => void;
@@ -243,6 +260,12 @@ export function useSyncedPlayback(
       cancelRamp();
       loadedId.current = filmKey;
       p.load(cur.videoId, want);
+      // A song that changes while the room is playing -- which is exactly what
+      // one arriving from the other side looks like -- must not sit silent
+      // until the drift timer next comes round, up to two seconds later.
+      // Nothing further down this pass applies to a player that has only just
+      // been handed a new source.
+      if (cur.playing) p.play();
       return;
     }
 
@@ -368,6 +391,7 @@ export function useSyncedPlayback(
     reportDuration,
     playPause,
     resync,
+    correct: applyState,
     clear,
     accept,
   };

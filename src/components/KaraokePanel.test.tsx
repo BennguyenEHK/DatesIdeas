@@ -39,6 +39,8 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
     onOffsetMs: vi.fn(),
     onPlayPause: vi.fn(),
     onResync: vi.fn(),
+    landing: null as "here" | "there" | null,
+    landingPercent: null as number | null,
     ...overrides,
   };
   render(<KaraokePanel {...props} />);
@@ -326,5 +328,46 @@ describe("the wait, and how honestly it is drawn", () => {
         /only one of you needs to paste the link/i,
       ),
     ).toBeNull();
+  });
+});
+
+describe("a song only one of you is holding", () => {
+  it("THE BUG: will not let anyone drive a song the other side has not got", () => {
+    // Reported from a real call. She loaded a new song; it played on her side
+    // while his browser was still receiving the bytes and still showing the
+    // PREVIOUS song. One shared play button then started two different songs.
+    setup({ landing: "there", playing: false });
+    expect(screen.getByRole("button", { name: /waiting for the song/i })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(screen.getByRole("button", { name: /resync/i })).toHaveProperty("disabled", true);
+  });
+
+  it("is equally locked on the side that is still receiving", () => {
+    setup({ landing: "here", playing: false });
+    expect(screen.getByRole("button", { name: /waiting for the song/i })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
+  it("says which computer is being waited on, since only one of them can act", () => {
+    setup({ landing: "there" });
+    expect(screen.getByText(/loading song on their computer/i)).toBeTruthy();
+  });
+
+  it("shows how far the song has got when that is known", () => {
+    setup({ landing: "here", landingPercent: 42 });
+    const bar = screen.getByRole("progressbar");
+    expect(bar.getAttribute("aria-valuenow")).toBe("42");
+  });
+
+  it("frees the transport again once both sides hold it", () => {
+    setup({ landing: null, playing: false });
+    expect(screen.getByRole("button", { name: /play the song/i })).toHaveProperty(
+      "disabled",
+      false,
+    );
   });
 });
