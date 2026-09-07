@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { stagePlayer, holdsCurrentSong } from "./stagePlayer";
+import { stagePlayer, holdsCurrentSong, songLanding } from "./stagePlayer";
 
 describe("stagePlayer", () => {
   it("THE BUG: a local song that has not arrived yet never reaches a YouTube player", () => {
@@ -119,5 +119,106 @@ describe("holdsCurrentSong", () => {
     // Both sides idle is not both sides holding the same song, and treating it
     // as one would put an empty player on the stage.
     expect(holdsCurrentSong({ ready: true, id: null }, null)).toBe(false);
+  });
+});
+
+describe("a song that has been asked for but has not arrived", () => {
+  it("THE BUG: takes the previous song off the stage the moment a new one is asked for", () => {
+    // Reported from a real call. She pasted a link; her helper spent half a
+    // minute downloading it, and in all that time nothing at all had been sent
+    // to him -- so his side went on showing, and offering to play, the song
+    // before it. The first thing that could have told him was the film id, and
+    // that is not broadcast until the download has already finished.
+    expect(
+      stagePlayer({
+        activity: "karaoke",
+        filmSource: "local",
+        hasFile: true,
+        songLoading: true,
+      }),
+    ).toBe("waiting");
+  });
+
+  it("leaves the stage alone once the song being loaded has landed", () => {
+    expect(
+      stagePlayer({
+        activity: "karaoke",
+        filmSource: "local",
+        hasFile: true,
+        songLoading: false,
+      }),
+    ).toBe("local");
+  });
+
+  it("never disturbs a film, which is not fetched for anyone", () => {
+    expect(
+      stagePlayer({
+        activity: "movie",
+        filmSource: "local",
+        hasFile: true,
+        songLoading: true,
+      }),
+    ).toBe("local");
+  });
+});
+
+describe("songLanding", () => {
+  const base = {
+    karaoke: true,
+    stage: "local" as const,
+    sendingTo: null as string | null,
+    receiving: false,
+    loading: null as "here" | "there" | null,
+  };
+
+  it("THE BUG: locks the listener from the moment the other side asks for a song", () => {
+    // The listener's play button stayed live through the whole download, over a
+    // song that was about to be replaced.
+    expect(songLanding({ ...base, loading: "there" })).toBe("there");
+  });
+
+  it("locks the side that asked, too, so neither can start it", () => {
+    expect(songLanding({ ...base, stage: "waiting", loading: "here" })).toBe("here");
+  });
+
+  it("says the bytes are going out once the song is in hand here", () => {
+    expect(songLanding({ ...base, sendingTo: "req-1" })).toBe("there");
+  });
+
+  it("prefers the outgoing send over a stale announcement", () => {
+    // Both can be set for an instant while the fetch finishes and the push
+    // begins. The push is the later truth.
+    expect(songLanding({ ...base, sendingTo: "req-1", loading: "here" })).toBe("there");
+  });
+
+  it("says this side is waiting when it does not hold the current song", () => {
+    expect(songLanding({ ...base, stage: "waiting" })).toBe("here");
+  });
+
+  it("THE FLICKER: bytes arriving here outrank the announcement that sent them", () => {
+    // The announcement stays set until the song is actually in hand, so during
+    // the transfer both are true. Reading the announcement first would tell the
+    // person receiving the song that it was loading on the other computer, and
+    // would hide the progress bar they can watch filling -- only the side the
+    // bytes are arriving at can measure them.
+    expect(
+      songLanding({ ...base, stage: "waiting", receiving: true, loading: "there" }),
+    ).toBe("here");
+  });
+
+  it("still says outgoing when this side is the one pushing", () => {
+    expect(
+      songLanding({ ...base, sendingTo: "req-1", receiving: false, loading: "here" }),
+    ).toBe("there");
+  });
+
+  it("frees the transport when nothing is in flight", () => {
+    expect(songLanding(base)).toBeNull();
+  });
+
+  it("never locks anything outside karaoke", () => {
+    expect(
+      songLanding({ ...base, karaoke: false, stage: "waiting", loading: "there" }),
+    ).toBeNull();
   });
 });

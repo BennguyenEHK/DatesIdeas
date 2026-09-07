@@ -30,10 +30,27 @@ export interface StageInput {
   filmSource: "youtube" | "local" | null;
   /** Whether THIS side holds the media file. */
   hasFile: boolean;
+  /**
+   * Whether a song has been asked for and has not arrived yet, on either side.
+   *
+   * Karaoke only, and separate from `hasFile` because it is true at a moment
+   * when this side does hold a perfectly good file -- the PREVIOUS song. Left
+   * on screen it is not merely stale: the transport is shared, so pressing play
+   * over it starts one song here and a different one there.
+   */
+  songLoading?: boolean;
 }
 
-export function stagePlayer({ activity, filmSource, hasFile }: StageInput): StagePlayer {
+export function stagePlayer({
+  activity,
+  filmSource,
+  hasFile,
+  songLoading = false,
+}: StageInput): StagePlayer {
   if (activity === "karaoke") {
+    // Checked before `hasFile`, which at this moment is still answering for the
+    // song being replaced.
+    if (songLoading) return "waiting";
     if (hasFile) return "local";
     // The decisive line. A local song this side has not received yet must not
     // be handed to YouTube, which is what produced "Video unavailable" on the
@@ -72,4 +89,46 @@ export function holdsCurrentSong(
 ): boolean {
   if (!held.ready || held.id === null || filmId === null) return false;
   return held.id === filmId;
+}
+
+/**
+ * Which side, if either, is still waiting on a song, and therefore why nobody
+ * may touch the transport.
+ *
+ * Four separate things can mean "not yet", and they know different amounts, so
+ * the order they are consulted in is the whole of this function.
+ *
+ * `sendingTo` is this side pushing bytes nobody has acknowledged. `receiving`
+ * is bytes arriving here. `loading` is a fetch someone announced, and it is the
+ * only one that remembers WHOSE machine is doing the work. `stage` knows merely
+ * that this browser is not holding the song the room agreed on.
+ *
+ * The two that describe bytes actually moving come first, because they are the
+ * later truth and they are the ones that can be measured -- the announcement
+ * remains set underneath them until the song is in hand, and reading it first
+ * would tell someone their own transfer was happening on the other computer and
+ * hide the progress they can see filling.
+ *
+ * `loading` is still consulted before `stage`, because by the time the stage
+ * has been forced to "waiting" the origin has been lost.
+ */
+export function songLanding({
+  karaoke,
+  stage,
+  sendingTo,
+  receiving,
+  loading,
+}: {
+  karaoke: boolean;
+  stage: StagePlayer;
+  sendingTo: string | null;
+  receiving: boolean;
+  loading: "here" | "there" | null;
+}): "here" | "there" | null {
+  if (!karaoke) return null;
+  if (sendingTo !== null) return "there";
+  if (receiving) return "here";
+  if (loading !== null) return loading;
+  if (stage === "waiting") return "here";
+  return null;
 }

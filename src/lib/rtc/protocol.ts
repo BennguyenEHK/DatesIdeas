@@ -87,6 +87,12 @@ export type PeerMessage =
       bytes: number;
       chunks: number;
     }
+  // Sent the instant someone asks for a song, BEFORE any fetching starts. The
+  // helper takes twenty or thirty seconds to download a video, and until this
+  // existed nothing at all crossed the connection in that time -- so the other
+  // person's browser had no idea a song had been asked for, and went on
+  // offering to play the one it was about to replace.
+  | { t: "track-loading"; requestId: string }
   | { t: "track-done"; requestId: string }
   // Sent back by whoever RECEIVES a song, once it has actually arrived and been
   // adopted. The sender cannot work this out for itself: handing bytes to an
@@ -200,6 +206,8 @@ export function decode(raw: string): PeerMessage | null {
             chunks: m.chunks,
           }
         : null;
+    case "track-loading":
+      return isStr(m.requestId) ? { t: "track-loading", requestId: m.requestId } : null;
     case "track-done":
       return isStr(m.requestId) ? { t: "track-done", requestId: m.requestId } : null;
     case "track-ready":

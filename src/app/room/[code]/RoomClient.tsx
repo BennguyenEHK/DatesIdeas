@@ -49,7 +49,7 @@ import {
 } from "@/lib/media/singerTurn";
 import type { PlayerHandle } from "@/lib/media/player";
 import type { SyncPrecision } from "@/lib/media/sync";
-import { stagePlayer, holdsCurrentSong } from "@/lib/media/stagePlayer";
+import { stagePlayer, holdsCurrentSong, songLanding } from "@/lib/media/stagePlayer";
 import { useVolumeDuck } from "@/lib/media/useVolumeDuck";
 import { worthDucking } from "@/lib/media/duck";
 import { uploadKeepsake, type KeepsakeKind } from "@/lib/photo/keepsake";
@@ -71,6 +71,20 @@ import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
  * that might start half a beat apart.
  */
 const ACK_WAIT_MS = 120_000;
+
+/**
+ * How long a room stays locked for a song that was asked for and never came.
+ *
+ * This covers only the announcement, not the song: once the bytes start moving
+ * the transfer announces its own size and takes over the waiting. What is being
+ * bounded here is the helper's download, plus the round trip if the request has
+ * to be handed to the other computer -- half a minute in the ordinary case.
+ *
+ * Bounded at all because a fetch can end in ways that send nothing back: the
+ * other person closes the tab, their helper stops answering. Without this the
+ * room would be locked out of its own transport for the rest of the evening.
+ */
+const LOAD_WAIT_MS = 120_000;
 
 export function RoomClient({ code }: { code: string }) {
   // One queue per tile: yours lands on your face, theirs on theirs.
@@ -94,6 +108,10 @@ export function RoomClient({ code }: { code: string }) {
   const acceptTrack = useRef<((m: PeerMessage) => void) | null>(null);
   const serveTrack = useRef<((url: string, requestId: string) => void) | null>(null);
   const acceptTrackReady = useRef<((requestId: string) => void) | null>(null);
+  // Reaching backwards like the handlers above it: the message arrives long
+  // before the state it sets has been declared.
+  const acceptTrackLoading = useRef<((requestId: string) => void) | null>(null);
+  const clearTrackLoading = useRef<((requestId: string) => void) | null>(null);
   const [videoError, setVideoError] = useState<number | null>(null);
   // Local to this side, never sent. Starts below full because the reported
   // problem was the backing track burying the other person's voice.
@@ -201,7 +219,22 @@ export function RoomClient({ code }: { code: string }) {
         msg.t === "track-done" ||
         msg.t === "track-error"
       ) {
+        // Only a failure ends the announcement early. It deliberately does
+        // NOT end on track-meta: the film id is broadcast from inside an async
+        // callback and the announcement of the bytes is not, so the bytes can
+        // be announced first -- and clearing here would put the previous song
+        // back on the stage, with a live play button, for the moment in
+        // between. The transfer outranks the announcement instead.
+        if (msg.t === "track-error") clearTrackLoading.current?.(msg.requestId);
         acceptTrack.current?.(msg);
+        return;
+      }
+      if (msg.t === "track-loading") {
+        // They have asked for a song. Nothing has been fetched yet, let alone
+        // sent -- but the song on this screen is already the wrong one, and the
+        // transport is shared, so it must stop being touchable now rather than
+        // half a minute from now when the first byte finally shows up.
+        acceptTrackLoading.current?.(msg.requestId);
         return;
       }
       if (msg.t === "track-ready") {
@@ -293,6 +326,55 @@ export function RoomClient({ code }: { code: string }) {
    */
   const [sendingTo, setSendingTo] = useState<string | null>(null);
   const ackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * A song that has been asked for and has not arrived, and whose machine is
+   * fetching it.
+   *
+   * The helper spends twenty or thirty seconds downloading a video, and until
+   * this existed not one byte crossed the connection in all that time. The
+   * other person's browser therefore had no idea anything had been asked for:
+   * it kept the previous song on the stage and a live play button over it, and
+   * pressing that started one song here and a different one there.
+   *
+   * Whose machine is doing the work cannot be recovered later -- by the time
+   * the stage has been forced to "waiting" it looks the same from both sides --
+   * so it is recorded here, where it is still known.
+   */
+  const [loadingSong, setLoadingSong] = useState<{
+    requestId: string;
+    mine: boolean;
+  } | null>(null);
+  const loadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const beginLoading = useCallback((requestId: string, mine: boolean) => {
+    if (loadTimer.current !== null) clearTimeout(loadTimer.current);
+    setLoadingSong({ requestId, mine });
+    loadTimer.current = setTimeout(() => {
+      loadTimer.current = null;
+      setLoadingSong(null);
+    }, LOAD_WAIT_MS);
+  }, []);
+
+  /**
+   * Ends the wait for one particular song.
+   *
+   * Matched on the request rather than clearing whatever is there, because a
+   * failure belonging to an abandoned song would otherwise unlock the room in
+   * the middle of the one that replaced it -- and the same id travels the whole
+   * way round, including when the fetch is handed to the other computer.
+   */
+  const endLoading = useCallback((requestId: string) => {
+    setLoadingSong((cur) => (cur === null || cur.requestId === requestId ? null : cur));
+  }, []);
+
+  // Cleared separately from the state above: a stale timer left running would
+  // wipe the announcement of a song that arrived after it.
+  useEffect(() => {
+    if (loadingSong === null && loadTimer.current !== null) {
+      clearTimeout(loadTimer.current);
+      loadTimer.current = null;
+    }
+  }, [loadingSong]);
   // Read by the acknowledgement handler, which must not clear the timer
   // belonging to a DIFFERENT song just because a late ack for the previous one
   // turned up -- that would leave this locked with nothing left to unlock it.
@@ -329,6 +411,10 @@ export function RoomClient({ code }: { code: string }) {
       current === "karaoke"
         ? holdsCurrentSong({ ready: track.ready, id: track.id }, media.film.videoId)
         : movieFile !== null,
+    // True while a song neither side is holding yet has been asked for. It
+    // outranks the file above, which at that moment is still answering for the
+    // song being replaced.
+    songLoading: loadingSong !== null,
   });
   useEffect(() => {
     acceptMedia.current = media.accept;
@@ -418,6 +504,8 @@ export function RoomClient({ code }: { code: string }) {
     (arrived: ReceivedTrack) => {
       void track.chooseMedia(arrived.media, arrived.durationSec, arrived.title).then((seconds) => {
         if (seconds === null) return;
+        // Whatever was announced has now happened, on whichever machine did it.
+        endLoading(arrived.requestId);
         setVideoError(null);
         setPicking(false);
         media.load({
@@ -428,7 +516,7 @@ export function RoomClient({ code }: { code: string }) {
         media.reportDuration(seconds);
       });
     },
-    [track, media],
+    [track, media, endLoading],
   );
 
   const transfer = useTrackTransfer({
@@ -447,6 +535,16 @@ export function RoomClient({ code }: { code: string }) {
   useEffect(() => {
     acceptTrack.current = transfer.handleMessage;
   });
+  useEffect(() => {
+    acceptTrackLoading.current = (requestId) => beginLoading(requestId, false);
+    clearTrackLoading.current = endLoading;
+  });
+  useEffect(
+    () => () => {
+      if (loadTimer.current !== null) clearTimeout(loadTimer.current);
+    },
+    [],
+  );
   useEffect(() => {
     sendingToRef.current = sendingTo;
     acceptTrackReady.current = (requestId) => {
@@ -485,6 +583,9 @@ export function RoomClient({ code }: { code: string }) {
             requestId,
             message: "That song could not be fetched on either computer.",
           });
+          // The error tells them; nothing tells this side, which announced
+          // nothing and merely answered.
+          endLoading(requestId);
         }
         return;
       }
@@ -513,7 +614,7 @@ export function RoomClient({ code }: { code: string }) {
         setSendingTo(null);
       }, ACK_WAIT_MS);
     },
-    [helper, peer, adoptTrack, transfer],
+    [helper, peer, adoptTrack, transfer, endLoading],
   );
 
   useEffect(() => {
@@ -526,9 +627,14 @@ export function RoomClient({ code }: { code: string }) {
     (url: string) => {
       // Loose enough to tell two requests apart, which is all the id is for.
       const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      // Announced before anything is fetched, which is the whole point. The
+      // download is the long part of loading a song, and it used to happen in
+      // complete silence as far as the other person was concerned.
+      peer.send({ t: "track-loading", requestId });
+      beginLoading(requestId, true);
       void fetchAndShare(url, requestId, true);
     },
-    [fetchAndShare],
+    [fetchAndShare, peer, beginLoading],
   );
   /**
    * How far along the wait is, or null when the share is genuinely unknown.
@@ -554,13 +660,13 @@ export function RoomClient({ code }: { code: string }) {
    * observed at all and has to be told: `sendingTo` holds until their browser
    * says it has the file.
    */
-  const landing: SongLanding = !karaoke
-    ? null
-    : stage === "waiting"
-      ? "here"
-      : sendingTo !== null
-        ? "there"
-        : null;
+  const landing: SongLanding = songLanding({
+    karaoke,
+    stage,
+    sendingTo,
+    receiving: transfer.incoming !== null,
+    loading: loadingSong === null ? null : loadingSong.mine ? "here" : "there",
+  });
 
   const movie = current === "movie";
   const photobooth = current === "photobooth";
@@ -847,9 +953,15 @@ export function RoomClient({ code }: { code: string }) {
                       Loading song…
                     </p>
                     <p className="text-xs text-[var(--mist)]/70">
-                      {fetchPercent === null
-                        ? "Coming over from their computer."
-                        : `Coming over from their computer — ${fetchPercent}%`}
+                      {transfer.incoming !== null
+                        ? fetchPercent === null
+                          ? "Coming over from their computer."
+                          : `Coming over from their computer — ${fetchPercent}%`
+                        : loadingSong !== null
+                          ? loadingSong.mine
+                            ? "Downloading it on this computer."
+                            : "They are downloading it on theirs."
+                          : "Coming over from their computer."}
                     </p>
                   </div>
                 ) : stage === "youtube" ? (
