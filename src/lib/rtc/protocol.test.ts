@@ -303,3 +303,16 @@ describe("track-ready", () => {
     expect(decode(JSON.stringify({ t: "track-nonsense", requestId: "x" }))).toBeNull();
   });
 });
+
+describe("track-loading", () => {
+  it("round-trips the announcement that a fetch has begun", () => {
+    expect(decode(encode({ t: "track-loading", requestId: "req-1" }))).toEqual({
+      t: "track-loading",
+      requestId: "req-1",
+    });
+  });
+
+  it("rejects one with no request to identify", () => {
+    expect(decode(JSON.stringify({ t: "track-loading" }))).toBeNull();
+  });
+});
