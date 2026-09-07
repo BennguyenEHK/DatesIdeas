@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useTrackTransfer } from "./useTrackTransfer";
+import { useTrackTransfer, type ReceivedTrack } from "./useTrackTransfer";
 import type { PeerMessage } from "@/lib/rtc/protocol";
+import { CHUNK_BYTES } from "@/lib/rtc/fileChannel";
 
 /**
  * Sending a track to someone who may not be there.
@@ -15,6 +16,8 @@ function setup(options: {
 } = {}) {
   const sent: ArrayBuffer[] = [];
   const messages: PeerMessage[] = [];
+  const received: ReceivedTrack[] = [];
+  let deliver: (chunk: ArrayBuffer) => void = () => {};
   let attempt = 0;
 
   const sendFileChunk = vi.fn((chunk: ArrayBuffer) => {
@@ -29,12 +32,25 @@ function setup(options: {
       sendMessage: (m) => messages.push(m),
       sendFileChunk,
       fileChannelOpen: options.channelOpen ?? (() => true),
-      onFileChunk: () => () => {},
-      onReceived: () => {},
+      onFileChunk: (handler) => {
+        deliver = handler;
+        return () => {
+          deliver = () => {};
+        };
+      },
+      onReceived: (t) => received.push(t),
     }),
   );
 
-  return { view, sent, messages, sendFileChunk, attempts: () => attempt };
+  return {
+    view,
+    sent,
+    messages,
+    received,
+    sendFileChunk,
+    attempts: () => attempt,
+    deliver: (chunk: ArrayBuffer) => deliver(chunk),
+  };
 }
 
 function track(bytes = 4096) {
@@ -218,5 +234,109 @@ describe("sendTrack", () => {
     // It announced the track before the peer left, so track-meta is expected --
     // but it must not claim the transfer finished.
     expect(t.messages.some((m) => m.t === "track-done")).toBe(false);
+  });
+});
+
+describe("receiving a track", () => {
+  /** The announcement the sender puts on the control channel before any bytes. */
+  function announce(t: ReturnType<typeof setup>, bytes: number) {
+    act(() => {
+      t.view.result.current.handleMessage({
+        t: "track-meta",
+        requestId: "req-1",
+        title: "Country Roads",
+        durationSec: 197,
+        bytes,
+        chunks: Math.ceil(bytes / CHUNK_BYTES),
+      });
+    });
+  }
+
+  it("THE RACE: keeps taking bytes that are still arriving after track-done", async () => {
+    // track-done travels on the control channel and the bytes on the file
+    // channel, and those are two independent SCTP streams with no ordering
+    // between them. One short message on an idle stream overtakes megabytes
+    // still draining out of a busy one -- on a relayed connection, by minutes.
+    //
+    // Treating the marker as proof that the rest was lost throws away the
+    // assembler, and every chunk that then arrives has nowhere to go. The song
+    // can never land, however long the other person waits.
+    vi.useFakeTimers();
+    const total = CHUNK_BYTES * 3;
+    const t = setup();
+    announce(t, total);
+
+    act(() => {
+      t.deliver(new ArrayBuffer(CHUNK_BYTES));
+    });
+
+    // The overtaking marker.
+    act(() => {
+      t.view.result.current.handleMessage({ t: "track-done", requestId: "req-1" });
+    });
+
+    // The rest of the bytes, still on their way out of the sender's queue.
+    act(() => {
+      t.deliver(new ArrayBuffer(CHUNK_BYTES));
+      t.deliver(new ArrayBuffer(CHUNK_BYTES));
+    });
+
+    expect(t.received).toHaveLength(1);
+    expect(t.received[0]?.title).toBe("Country Roads");
+    expect(t.view.result.current.error).toBeNull();
+    expect(t.view.result.current.incoming).toBeNull();
+  });
+
+  it("still reports a transfer that goes quiet after track-done", async () => {
+    // Bytes on one stream arrive in order, so once they stop for long enough
+    // with the sender finished, they have stopped for good. That silence -- not
+    // the marker -- is what says the song was lost.
+    vi.useFakeTimers();
+    const t = setup();
+    announce(t, CHUNK_BYTES * 3);
+    act(() => {
+      t.deliver(new ArrayBuffer(CHUNK_BYTES));
+      t.view.result.current.handleMessage({ t: "track-done", requestId: "req-1" });
+    });
+
+    expect(t.view.result.current.error).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(t.view.result.current.error).toMatch(/did not arrive intact/i);
+    expect(t.view.result.current.incoming).toBeNull();
+  });
+
+  it("does not fail a transfer that is merely slow, before track-done", async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    announce(t, CHUNK_BYTES * 2);
+    act(() => {
+      t.deliver(new ArrayBuffer(CHUNK_BYTES));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(t.view.result.current.error).toBeNull();
+    expect(t.view.result.current.incoming?.receivedBytes).toBe(CHUNK_BYTES);
+  });
+
+  it("a new announcement cancels the previous transfer's countdown", async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    announce(t, CHUNK_BYTES * 3);
+    act(() => {
+      t.deliver(new ArrayBuffer(CHUNK_BYTES));
+      t.view.result.current.handleMessage({ t: "track-done", requestId: "req-1" });
+    });
+    announce(t, CHUNK_BYTES);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    // The countdown belonged to the abandoned transfer; firing it here would
+    // condemn the new one before a single byte of it had a chance to arrive.
+    expect(t.view.result.current.error).toBeNull();
   });
 });

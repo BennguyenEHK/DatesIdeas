@@ -80,6 +80,22 @@ const SEND_GIVE_UP_MS = 15_000;
  */
 const CHANNEL_OPEN_WAIT_MS = 10_000;
 
+/**
+ * How long a transfer may go quiet, once the sender says it is finished, before
+ * it is declared lost.
+ *
+ * The finished marker travels on the control channel and the bytes on the file
+ * channel, and those are two independent SCTP streams with no ordering between
+ * them. A one-line message on an idle stream overtakes megabytes still draining
+ * out of a busy one -- over a relay at a couple of hundred kbps, by minutes. So
+ * the marker arriving is not evidence that the rest is not still on its way,
+ * and acting on it as though it were is what threw the song away.
+ *
+ * Silence is the evidence. Bytes on a single stream arrive in order, so once
+ * they stop for this long with nothing more coming, they have stopped for good.
+ */
+const AFTER_DONE_QUIET_MS = 20_000;
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -113,10 +129,43 @@ export function useTrackTransfer(args: {
   // refuses a ref first modified inside a closure declared below it.
   const assemblerRef = useRef<Assembler | null>(null);
   const pendingRef = useRef<{ title: string; durationSec: number } | null>(null);
+  const doneRef = useRef(false);
+  const quietTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onReceivedRef = useRef(onReceived);
   useEffect(() => {
     onReceivedRef.current = onReceived;
   });
+
+  /** Forgets a transfer without judging it: a new one, or one already settled. */
+  const stopWaiting = useCallback(() => {
+    if (quietTimerRef.current !== null) {
+      clearTimeout(quietTimerRef.current);
+      quietTimerRef.current = null;
+    }
+    doneRef.current = false;
+  }, []);
+
+  /**
+   * Restarts the countdown that ends a finished-but-incomplete transfer.
+   *
+   * Restarted by every chunk, so a transfer that is merely slow is never cut
+   * off -- only one that has actually stopped.
+   */
+  const waitForTheRest = useCallback(() => {
+    if (quietTimerRef.current !== null) clearTimeout(quietTimerRef.current);
+    quietTimerRef.current = setTimeout(() => {
+      quietTimerRef.current = null;
+      doneRef.current = false;
+      if (assemblerRef.current === null) return;
+      assemblerRef.current = null;
+      pendingRef.current = null;
+      setIncoming(null);
+      setError("The song did not arrive intact. Ask them to send it again.");
+    }, AFTER_DONE_QUIET_MS);
+  }, []);
+
+  // A page that closes mid-song should not leave a timer holding the tab awake.
+  useEffect(() => stopWaiting, [stopWaiting]);
 
   useEffect(() => {
     return onFileChunk((chunk) => {
@@ -130,6 +179,9 @@ export function useTrackTransfer(args: {
 
       const state = assembler.push(chunk);
       if (state.status === "receiving") {
+        // Arriving bytes outrank anything the control channel has claimed: the
+        // sender may have announced it was finished several megabytes ago.
+        if (doneRef.current) waitForTheRest();
         setIncoming({
           receivedBytes: state.receivedBytes,
           expectedBytes: state.expectedBytes,
@@ -137,6 +189,7 @@ export function useTrackTransfer(args: {
         return;
       }
 
+      stopWaiting();
       assemblerRef.current = null;
       pendingRef.current = null;
       setIncoming(null);
@@ -157,10 +210,11 @@ export function useTrackTransfer(args: {
         durationSec: pending.durationSec,
       });
     });
-  }, [onFileChunk]);
+  }, [onFileChunk, stopWaiting, waitForTheRest]);
 
   const handleMessage = useCallback((message: PeerMessage) => {
     if (message.t === "track-meta") {
+      stopWaiting();
       assemblerRef.current = createAssembler(message.chunks, message.bytes);
       pendingRef.current = {
         title: message.title,
@@ -172,6 +226,7 @@ export function useTrackTransfer(args: {
     }
 
     if (message.t === "track-error") {
+      stopWaiting();
       assemblerRef.current = null;
       pendingRef.current = null;
       setIncoming(null);
@@ -180,17 +235,21 @@ export function useTrackTransfer(args: {
     }
 
     if (message.t === "track-done") {
-      // Arrives after the last chunk, so a live assembler here means chunks
-      // went missing on the way. Without this the transfer would simply hang
-      // with a progress bar that never fills.
+      // Says only that the sender has no more bytes to hand over -- not that
+      // the ones already handed over have arrived. This message takes the
+      // control channel while the song takes the file channel, and nothing
+      // orders one against the other, so on a slow link it lands minutes ahead
+      // of the bytes it is describing.
+      //
+      // Treating it as a verdict is what cost the other person the song: the
+      // assembler was thrown away and every chunk that followed had nowhere to
+      // go. All it does now is start the clock.
       if (assemblerRef.current !== null) {
-        assemblerRef.current = null;
-        pendingRef.current = null;
-        setIncoming(null);
-        setError("The song did not arrive intact. Ask them to send it again.");
+        doneRef.current = true;
+        waitForTheRest();
       }
     }
-  }, []);
+  }, [stopWaiting, waitForTheRest]);
 
   const sendTrack = useCallback(
     async (track: {
