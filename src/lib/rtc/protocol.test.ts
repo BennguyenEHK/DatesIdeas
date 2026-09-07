@@ -316,3 +316,39 @@ describe("track-loading", () => {
     expect(decode(JSON.stringify({ t: "track-loading" }))).toBeNull();
   });
 });
+
+describe("presence", () => {
+  it("round-trips both switches", () => {
+    expect(decode(encode({ t: "presence", mic: false, cam: true }))).toEqual({
+      t: "presence",
+      mic: false,
+      cam: true,
+    });
+  });
+
+  it("rejects a half-stated one rather than guessing the missing half", () => {
+    expect(decode(JSON.stringify({ t: "presence", mic: false }))).toBeNull();
+  });
+});
+
+describe("ending", () => {
+  it("round-trips the moment the evening ends", () => {
+    expect(decode(encode({ t: "ending", endsAt: 1770000000000 }))).toEqual({
+      t: "ending",
+      endsAt: 1770000000000,
+    });
+  });
+
+  it("keeps null as a value, because that is how it is called off", () => {
+    // An absent field and a cancellation are different things, and reading one
+    // as the other would either strand a countdown or end an evening early.
+    expect(decode(encode({ t: "ending", endsAt: null }))).toEqual({
+      t: "ending",
+      endsAt: null,
+    });
+  });
+
+  it("rejects a missing field, which is neither", () => {
+    expect(decode(JSON.stringify({ t: "ending" }))).toBeNull();
+  });
+});

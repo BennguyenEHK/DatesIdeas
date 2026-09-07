@@ -1,6 +1,6 @@
 "use client";
 
-import { VideoTile } from "./VideoTile";
+import { VideoTile, type TileSwitches } from "./VideoTile";
 import { SCREEN_FR, FACES_FR, takeoverAspect } from "@/lib/ui/stage";
 import type { ActiveMeme } from "@/lib/ui/useMemeQueue";
 
@@ -21,6 +21,7 @@ export function TakeoverStage({
   localMemes,
   remoteMemes,
   mediaError,
+  switches,
   children,
 }: {
   local: MediaStream | null;
@@ -28,6 +29,7 @@ export function TakeoverStage({
   localMemes: ActiveMeme[];
   remoteMemes: ActiveMeme[];
   mediaError: string | null;
+  switches: TileSwitches;
   children: React.ReactNode;
 }) {
   return (
@@ -95,6 +97,8 @@ export function TakeoverStage({
           muted
           label="You"
           memes={localMemes}
+          cameraOff={switches.you.camOff ? "Your camera is off." : null}
+          micOff={switches.you.micOff}
           placeholder={
             mediaError === "denied"
               ? "Your camera is blocked. You can still see and hear them — allow camera access in your browser to send video."
@@ -110,6 +114,8 @@ export function TakeoverStage({
           muted={false}
           label="Them"
           memes={remoteMemes}
+          cameraOff={switches.them.camOff ? "Their camera is off." : null}
+          micOff={switches.them.micOff}
           placeholder="Waiting for them to arrive. Send them the code and this seat fills itself."
         />
       </div>
