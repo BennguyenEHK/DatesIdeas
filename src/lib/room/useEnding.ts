@@ -38,7 +38,7 @@ export interface Ending {
  * `now` is the SHARED clock rather than this machine's. Two computers disagree
  * about the time by however far their clocks have drifted, and a countdown
  * measured locally would run out at two different moments -- which for the last
- * five minutes of an evening is precisely the thing it must not do.
+ * last seconds of an evening is precisely the thing it must not do.
  */
 export function useEnding({
   now,

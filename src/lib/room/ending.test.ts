@@ -72,7 +72,7 @@ describe("countdownLeft", () => {
     expect(countdownLeft(null, 5_000)).toBe(0);
   });
 
-  it("gives the full five minutes at the moment it is called", () => {
+  it("gives the full notice at the moment it is called", () => {
     const now = 1_700_000_000_000;
     expect(countdownLeft(now + NOTICE_MS, now)).toBe(NOTICE_MS);
   });

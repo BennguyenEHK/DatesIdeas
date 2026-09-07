@@ -39,7 +39,7 @@ describe("useEnding", () => {
     expect(t.view.result.current.endsInMs).toBeNull();
   });
 
-  it("gives five more minutes, and tells the other side when they run out", () => {
+  it("gives a few more seconds, and tells the other side when they run out", () => {
     // Shared rather than private: one screen going dark on its own would leave
     // the other person alone in a room with no explanation.
     const t = setup(1_700_000_000_000);
@@ -55,8 +55,10 @@ describe("useEnding", () => {
   it("counts down against the shared clock", async () => {
     const t = setup();
     act(() => t.view.result.current.end());
-    await t.pass(60_000);
-    expect(t.view.result.current.endsInMs).toBe(NOTICE_MS - 60_000);
+    // Comfortably inside the notice, so this measures the countdown rather
+    // than the floor it stops at.
+    await t.pass(2_000);
+    expect(t.view.result.current.endsInMs).toBe(NOTICE_MS - 2_000);
   });
 
   it("can be called off, and says so", () => {

@@ -4,8 +4,9 @@
  * Deliberately not a confirmation dialog. A dialog would black out the film to
  * ask a question, which is the one thing this room never does -- every control
  * lives in the letterbox bars precisely so nothing covers the picture. Instead
- * the ending is announced and then waited out: five more minutes of the evening
- * you were already having, with the way back sitting next to the countdown.
+ * the ending is announced and then waited out: a few more seconds of the
+ * evening you were already having, with the way back sitting next to the
+ * countdown.
  *
  * The phases are pure and live here rather than inside the hook so that both
  * sides run identical rules, and so the one transition that must not be
@@ -15,10 +16,13 @@
 /**
  * How long the evening keeps going after somebody calls it.
  *
- * Long enough to say goodbye properly, which is the whole reason there is a
- * delay at all rather than an immediate exit.
+ * Five seconds, chosen deliberately over the five minutes this started as. The
+ * delay is not there to give anyone time to say goodbye -- by the time someone
+ * reaches for this, the goodbyes have happened. It is there so that ending the
+ * evening is not one misplaced click, and so the other person sees it coming
+ * rather than having the room vanish around them.
  */
-export const NOTICE_MS = 5 * 60 * 1000;
+export const NOTICE_MS = 5 * 1000;
 
 /**
  * The picture collapsing: a full frame down to a bright horizontal line, then
@@ -73,7 +77,7 @@ export function reduceEnding(phase: EndingPhase, event: EndingEvent): EndingPhas
  * Both arguments are shared-clock times rather than local ones. Two machines
  * disagree about what time it is by however far apart their clocks have
  * drifted, and a countdown measured locally would run out at two different
- * moments -- which for the last shared minutes of an evening is the one thing
+ * moments -- which for the last shared seconds of an evening is the one thing
  * it must not do.
  */
 export function countdownLeft(endsAt: number | null, sharedNow: number): number {
