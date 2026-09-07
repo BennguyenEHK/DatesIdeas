@@ -74,6 +74,23 @@ export type PeerMessage =
   // accommodating at once. This message is what decides whose turn it is:
   // whoever is singing stays on the beat, and the one listening moves.
   | { t: "singing"; on: boolean }
+  // Whether this side's microphone and camera are switched on.
+  //
+  // Turning a track off transmits silence and black frames rather than
+  // stopping, so the other person receives something indistinguishable from a
+  // broken feed: a black rectangle, or a voice that simply never says anything.
+  // Nothing in the picture can tell them which. This is the only way they learn
+  // it was a decision.
+  | { t: "presence"; mic: boolean; cam: boolean }
+  // The moment the evening is set to end, on the shared clock, or null to call
+  // it off.
+  //
+  // Shared rather than private because the ending is: one screen going dark on
+  // its own would leave the other person sitting in a room alone with nothing
+  // to explain where everybody went. Either of you may start it and either of
+  // you may cancel it, which is the same authority you both already have over
+  // the activity and the song.
+  | { t: "ending"; endsAt: number | null }
   | { t: "track-request"; url: string; requestId: string }
   // No lyrics field. The helper now fetches the video rather than its sound, and
   // the karaoke videos people paste already have the words burned into the
@@ -179,6 +196,16 @@ export function decode(raw: string): PeerMessage | null {
         : null;
     case "singing":
       return typeof m.on === "boolean" ? { t: "singing", on: m.on } : null;
+    case "presence":
+      return typeof m.mic === "boolean" && typeof m.cam === "boolean"
+        ? { t: "presence", mic: m.mic, cam: m.cam }
+        : null;
+    case "ending":
+      // Null is a real value here -- it is how the countdown is called off --
+      // so an absent field and a cancellation must not be confused.
+      return m.endsAt === null || isNum(m.endsAt)
+        ? { t: "ending", endsAt: m.endsAt === null ? null : (m.endsAt as number) }
+        : null;
     case "track-request":
       return isStr(m.url) && isStr(m.requestId)
         ? { t: "track-request", url: m.url, requestId: m.requestId }

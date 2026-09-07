@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { usePeerConnection } from "@/lib/rtc/usePeerConnection";
 import { useGestureDetection } from "@/lib/vision/useGestureDetection";
 import { useSession } from "@/lib/history/useSession";
@@ -26,6 +27,9 @@ import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel, type SongLanding } from "@/components/KaraokePanel";
+import { RoomControls } from "@/components/RoomControls";
+import { Blackout } from "@/components/Blackout";
+import { useEnding } from "@/lib/room/useEnding";
 import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
 import { useKaraokeHelper } from "@/lib/karaoke/useKaraokeHelper";
 import { useTrackTransfer, type ReceivedTrack } from "@/lib/karaoke/useTrackTransfer";
@@ -102,6 +106,11 @@ export function RoomClient({ code }: { code: string }) {
   // playing: in a noisy room the microphone processing that ruins singing is
   // the same processing keeping the singing audible at all.
   const [noisy, setNoisy] = useState(false);
+  // What the other person last said about their own microphone and camera.
+  // Assumed on until they say otherwise: a peer on a build that never sends
+  // this should look like somebody whose devices are working, not like
+  // somebody sitting in the dark.
+  const [theirSwitches, setTheirSwitches] = useState({ mic: true, cam: true });
   // Browsing for the next song. Local on purpose — opening the picker used to
   // clear the video through shared state, which cut the other person off
   // mid-verse just because you went looking for the next track.
@@ -129,6 +138,8 @@ export function RoomClient({ code }: { code: string }) {
   const remoteVideo = useRef<HTMLVideoElement | null>(null);
   const acceptPhoto = useRef<((m: PeerMessage) => void) | null>(null);
   const acceptSinging = useRef<((m: PeerMessage) => void) | null>(null);
+  const acceptEnding = useRef<((m: PeerMessage) => void) | null>(null);
+  const announceSwitches = useRef<(() => void) | null>(null);
   // State, not a ref: a state setter is a valid callback ref and keeps the
   // player handle a plain value everywhere else.
   const [player, setPlayer] = useState<PlayerHandle | null>(null);
@@ -196,6 +207,21 @@ export function RoomClient({ code }: { code: string }) {
         acceptSinging.current?.(msg);
         return;
       }
+      if (msg.t === "presence") {
+        setTheirSwitches({ mic: msg.mic, cam: msg.cam });
+        return;
+      }
+      if (msg.t === "ending") {
+        acceptEnding.current?.(msg);
+        return;
+      }
+      if (msg.t === "hello") {
+        // They have only just arrived, so they know nothing about the state of
+        // this side's devices. Said once, on their arrival, rather than
+        // repeated: nothing else here changes it without saying so.
+        announceSwitches.current?.();
+        return;
+      }
       if (
         msg.t === "track-meta" ||
         msg.t === "track-done" ||
@@ -254,6 +280,38 @@ export function RoomClient({ code }: { code: string }) {
   useEffect(() => {
     peerRef.current = peer;
   });
+
+  const router = useRouter();
+  /**
+   * The end of the evening, counted down on the shared clock.
+   *
+   * The shared clock rather than this machine's: two computers disagree about
+   * the time by however far they have drifted, and the two screens have to go
+   * dark together or one person watches the other vanish early.
+   */
+  const ending = useEnding({
+    now: () => peer.clock?.now() ?? Date.now(),
+    send: peer.send,
+    onFinished: () => router.push("/"),
+  });
+  useEffect(() => {
+    acceptEnding.current = ending.accept;
+  });
+
+  // Said on every change, and again whenever they arrive. Silence and black
+  // frames are what a disabled track transmits, and neither is distinguishable
+  // from a connection that has broken.
+  useEffect(() => {
+    announceSwitches.current = () =>
+      peer.send({ t: "presence", mic: peer.micOn, cam: peer.camOn });
+  });
+  // Depends on the two switches and nothing else. `peer` is a fresh object on
+  // every render, so listing it here would put a presence message on the data
+  // channel every time anything in this room changed -- which during a song is
+  // several a second.
+  useEffect(() => {
+    announceSwitches.current?.();
+  }, [peer.micOn, peer.camOn]);
 
   const session = useSession(code, peer.state === "connected");
 
@@ -760,6 +818,12 @@ export function RoomClient({ code }: { code: string }) {
     );
   }
 
+  /** The four devices in the room, as the two stages want them. */
+  const switches = {
+    you: { micOff: !peer.micOn, camOff: !peer.camOn },
+    them: { micOff: !theirSwitches.mic, camOff: !theirSwitches.cam },
+  };
+
   return (
     <>
       <Ambience />
@@ -768,7 +832,21 @@ export function RoomClient({ code }: { code: string }) {
         <header className="bar-top flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-[var(--letterbox)] px-5 py-3">
           <Wordmark size="compact" />
           <ActivityBar current={current} onSelect={onSelectActivity} />
-          <CopyLink code={code} closesIn={closesIn} />
+          {/* The room's own code and the room's own switches share the right
+              hand end of the bar, and wrap together rather than apart: they are
+              both about this room rather than about the evening in it. */}
+          <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+            <CopyLink code={code} closesIn={closesIn} />
+            <RoomControls
+              micOn={peer.micOn}
+              camOn={peer.camOn}
+              onMic={peer.setMicOn}
+              onCam={peer.setCamOn}
+              endsInMs={ending.endsInMs}
+              onEnd={ending.end}
+              onStay={ending.stay}
+            />
+          </div>
         </header>
 
         {/* The stage.
@@ -816,6 +894,7 @@ export function RoomClient({ code }: { code: string }) {
                 localMemes={mine.memes}
                 remoteMemes={theirs.memes}
                 mediaError={peer.mediaError}
+                switches={switches}
               >
                 {karaoke && stage === "local" ? (
                   // The karaoke video itself, in the same <video> element a
@@ -878,6 +957,7 @@ export function RoomClient({ code }: { code: string }) {
                 localMemes={mine.memes}
                 remoteMemes={theirs.memes}
                 mediaError={peer.mediaError}
+                switches={switches}
               />
             )}
           </div>
@@ -1036,6 +1116,12 @@ export function RoomClient({ code }: { code: string }) {
           )}
         </footer>
       </div>
+
+      {/* Last, and over everything: the set being switched off. It is laid on
+          top rather than wrapped around the room because the countdown driving
+          it lives in here -- unmounting the room to show black would take the
+          timer with it, and the step that actually leaves would never run. */}
+      <Blackout phase={ending.phase} />
     </>
   );
 }

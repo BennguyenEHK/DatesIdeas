@@ -98,6 +98,24 @@ export interface PeerApi {
   report: (activity: string | null) => string;
   /** Caps the outgoing camera, or lets it run free. */
   setVideoMode: (mode: VideoMode) => void;
+  /** Whether this side's microphone is currently sending anything. */
+  micOn: boolean;
+  /** Whether this side's camera is currently sending a picture. */
+  camOn: boolean;
+  /**
+   * Switches this side's microphone or camera, for real.
+   *
+   * Disables the track rather than stopping it. A stopped track is gone: the
+   * camera light goes out, but turning it back on means asking the browser for
+   * the device again and renegotiating, and on some machines the second request
+   * is refused. A disabled track stays in the call and transmits silence and
+   * black frames, which costs almost nothing and comes back instantly.
+   *
+   * The other side is told separately, because silence and black frames look
+   * exactly like a broken connection.
+   */
+  setMicOn: (on: boolean) => void;
+  setCamOn: (on: boolean) => void;
   retry: () => void;
 }
 
@@ -160,6 +178,16 @@ export function usePeerConnection(
   // call on a relay it would otherwise have escaped.
   const [iceSettled, setIceSettled] = useState(false);
   const [sending, setSending] = useState(false);
+  // The switches themselves. Held here rather than in the page because the
+  // stream they act on is acquired here, and because a stream that arrives
+  // after the switch was thrown still has to come up in the state it was left.
+  const [micOn, setMicOnState] = useState(true);
+  const [camOn, setCamOnState] = useState(true);
+  // Declared above the two switches below, which write through it: the React
+  // Compiler refuses a ref first modified inside a closure declared above it.
+  // A ref rather than the state value because a switch thrown while a stream is
+  // being re-acquired must still find the stream that eventually arrives.
+  const streamRef = useRef<MediaStream | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const jitterRef = useRef<JitterSample | null>(null);
@@ -536,6 +564,26 @@ export function usePeerConnection(
    * Every other activity keeps full quality, because only singing is ruined
    * by the delay this buys back.
    */
+  // Re-applies both switches to whatever stream is current. A retry throws the
+  // camera away and asks for a new one, and a fresh track always arrives
+  // enabled -- so without this, reconnecting silently turns a muted microphone
+  // back on, which is the one failure here nobody would forgive.
+  useEffect(() => {
+    streamRef.current = localStream;
+    for (const track of localStream?.getAudioTracks() ?? []) track.enabled = micOn;
+    for (const track of localStream?.getVideoTracks() ?? []) track.enabled = camOn;
+  }, [localStream, micOn, camOn]);
+
+  const setMicOn = useCallback((on: boolean) => {
+    setMicOnState(on);
+    for (const track of streamRef.current?.getAudioTracks() ?? []) track.enabled = on;
+  }, []);
+
+  const setCamOn = useCallback((on: boolean) => {
+    setCamOnState(on);
+    for (const track of streamRef.current?.getVideoTracks() ?? []) track.enabled = on;
+  }, []);
+
   const setVideoMode = useCallback((mode: VideoMode) => {
     const pc = pcRef.current;
     if (!pc) return;
@@ -629,6 +677,10 @@ export function usePeerConnection(
     onFileChunk,
     report,
     setVideoMode,
+    micOn,
+    camOn,
+    setMicOn,
+    setCamOn,
     retry,
   };
 }

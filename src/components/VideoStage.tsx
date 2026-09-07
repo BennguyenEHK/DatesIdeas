@@ -1,6 +1,6 @@
 "use client";
 
-import { VideoTile } from "./VideoTile";
+import { VideoTile, type TileSwitches } from "./VideoTile";
 import { sideBySideAspect } from "@/lib/ui/stage";
 import type { ActiveMeme } from "@/lib/ui/useMemeQueue";
 
@@ -21,12 +21,14 @@ export function VideoStage({
   localMemes,
   remoteMemes,
   mediaError,
+  switches,
 }: {
   local: MediaStream | null;
   remote: MediaStream | null;
   localMemes: ActiveMeme[];
   remoteMemes: ActiveMeme[];
   mediaError: string | null;
+  switches: TileSwitches;
 }) {
   return (
     <div
@@ -39,6 +41,8 @@ export function VideoStage({
         muted
         label="You"
         memes={localMemes}
+        cameraOff={switches.you.camOff ? "Your camera is off." : null}
+        micOff={switches.you.micOff}
         placeholder={
           mediaError === "denied"
             ? "Your camera is blocked. You can still see and hear them — allow camera access in your browser to send video."
@@ -53,6 +57,8 @@ export function VideoStage({
         muted={false}
         label="Them"
         memes={remoteMemes}
+        cameraOff={switches.them.camOff ? "Their camera is off." : null}
+        micOff={switches.them.micOff}
         placeholder="Waiting for them to arrive. Send them the code and this seat fills itself."
       />
     </div>
