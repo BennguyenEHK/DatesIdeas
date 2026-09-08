@@ -24,6 +24,20 @@ import {
   type MicSettings,
 } from "./micState";
 
+/**
+ * The processing the browser exposes, plus the one the operating system does.
+ *
+ * `voiceIsolation` is not in the DOM types yet, but Chrome reads it and Windows
+ * Studio Effects and its equivalents sit BELOW every other flag here. They are
+ * built to keep a talking voice and discard everything else, and a held sung
+ * note is exactly the kind of signal they are built to discard -- so asking for
+ * a clean singing microphone without switching this off leaves the last, and
+ * lowest, suppressor still running.
+ *
+ * A browser that has never heard of it ignores the extra property.
+ */
+type SingingConstraints = MediaTrackConstraints & { voiceIsolation?: boolean };
+
 /** How the song is reaching this person's ears, which decides what is safe. */
 export type AudioMode = "headphones" | "speakers";
 
@@ -38,10 +52,11 @@ export const SPEECH_AUDIO: MediaTrackConstraints = {
  * Singing in headphones. Nothing reaches the microphone but the voice, so
  * every process can come off and the voice arrives whole.
  */
-export const HEADPHONE_AUDIO: MediaTrackConstraints = {
+export const HEADPHONE_AUDIO: SingingConstraints = {
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl: false,
+  voiceIsolation: false,
 };
 
 /**
@@ -55,10 +70,11 @@ export const HEADPHONE_AUDIO: MediaTrackConstraints = {
  * always gets through. The gap it closes is between "a bit of bleed" and
  * "unlistenable", which is worth having.
  */
-export const SPEAKER_AUDIO: MediaTrackConstraints = {
+export const SPEAKER_AUDIO: SingingConstraints = {
   echoCancellation: true,
   noiseSuppression: false,
   autoGainControl: false,
+  voiceIsolation: false,
 };
 
 /**
@@ -66,10 +82,11 @@ export const SPEAKER_AUDIO: MediaTrackConstraints = {
  * because the song cannot reach the microphone, while noise suppression and
  * gain keep the voice above the room.
  */
-export const HEADPHONE_NOISY_AUDIO: MediaTrackConstraints = {
+export const HEADPHONE_NOISY_AUDIO: SingingConstraints = {
   echoCancellation: false,
   noiseSuppression: true,
   autoGainControl: true,
+  voiceIsolation: false,
 };
 
 /**
@@ -78,10 +95,11 @@ export const HEADPHONE_NOISY_AUDIO: MediaTrackConstraints = {
  * gain keeps the voice present over the room. Automatic gain pumps across a
  * held note, but a voice you can hear beats a purer one buried under a room.
  */
-export const SPEAKER_NOISY_AUDIO: MediaTrackConstraints = {
+export const SPEAKER_NOISY_AUDIO: SingingConstraints = {
   echoCancellation: true,
   noiseSuppression: true,
   autoGainControl: true,
+  voiceIsolation: false,
 };
 
 /** Selects the singing profile for the listening mode and room noise. */

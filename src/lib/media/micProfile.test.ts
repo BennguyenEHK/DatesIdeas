@@ -50,6 +50,7 @@ describe("audio profiles", () => {
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,
+      voiceIsolation: false,
     });
   });
 
@@ -59,6 +60,7 @@ describe("audio profiles", () => {
       echoCancellation: false,
       noiseSuppression: true,
       autoGainControl: true,
+      voiceIsolation: false,
     });
   });
 
@@ -68,6 +70,7 @@ describe("audio profiles", () => {
       echoCancellation: true,
       noiseSuppression: false,
       autoGainControl: false,
+      voiceIsolation: false,
     });
   });
 
@@ -77,6 +80,7 @@ describe("audio profiles", () => {
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
+      voiceIsolation: false,
     });
   });
 
