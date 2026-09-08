@@ -132,8 +132,6 @@ describe("applyLeash", () => {
         maxBitrate: 500_000,
         scaleResolutionDownBy: 2,
         maxFramerate: 24,
-        networkPriority: "low",
-        priority: "low",
       },
     ]);
     expect(params.degradationPreference).toBe("maintain-resolution");
@@ -147,8 +145,6 @@ describe("applyLeash", () => {
         maxBitrate: 2_500_000,
         scaleResolutionDownBy: 1,
         maxFramerate: 30,
-        networkPriority: "low",
-        priority: "low",
       },
     ]);
   });
@@ -166,16 +162,12 @@ describe("applyLeash", () => {
         maxBitrate: 500_000,
         scaleResolutionDownBy: 2,
         maxFramerate: 24,
-        networkPriority: "low",
-        priority: "low",
       },
       {
         rid: "high",
         maxBitrate: 500_000,
         scaleResolutionDownBy: 2,
         maxFramerate: 24,
-        networkPriority: "low",
-        priority: "low",
       },
     ]);
   });
@@ -216,7 +208,10 @@ describe("applyLeash", () => {
 
     await expect(applyLeash(sender, CONSTRAINED_FULL_VIDEO)).resolves.toBe(true);
     expect(encoding.maxBitrate).toBe(900_000);
-    expect(encoding.priority).toBe("low");
+    // The video encoding carries no priority of its own any more: "low" is an
+    // instruction to the bandwidth allocator, not a hint, and on a contended
+    // link it could squeeze the camera down to nothing.
+    expect(encoding.priority).toBeUndefined();
     expect(setParameters).toHaveBeenCalledWith(params);
   });
 });

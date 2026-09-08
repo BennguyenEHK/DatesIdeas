@@ -209,7 +209,12 @@ export function ConnectionStatus({
         </Item>
       )}
 
-      {state === "connected" && <CopyReport build={onReport} />}
+      {/* Available whenever there is a call to describe, not only when it is
+          going well. The report was gated on "connected", which meant the one
+          state anybody actually needs to diagnose -- stuck on "connecting",
+          with a black rectangle where a face should be -- was also the one
+          state that could not be reported. */}
+      {state !== "idle" && <CopyReport build={onReport} />}
 
       {(state === "failed" || state === "reconnecting") && (
         <button

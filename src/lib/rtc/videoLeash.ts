@@ -170,7 +170,19 @@ const applyEncodingPriority = (encoding: EncodingLike, priority: string): void =
   }
 };
 
-/** Applies one budget to every encoding on a video sender. */
+/**
+ * Applies one budget to every encoding on a video sender.
+ *
+ * Deliberately does NOT mark the video as low priority any more. It used to,
+ * on the reasoning that the voice should win the link -- but "low" is not a
+ * hint to the bandwidth allocator, it is an instruction, and combined with a
+ * hard bitrate cap and a demand to hold resolution it can squeeze a camera
+ * down to nothing at all. A black rectangle where somebody's face should be is
+ * a far worse outcome than a slightly contended one.
+ *
+ * Raising the voice is enough on its own: applyAudioPriority still asks for
+ * "high", so audio outranks video without video being told to give way.
+ */
 export async function applyLeash(
   sender: SenderLike,
   settings: LeashSettings,
@@ -180,15 +192,12 @@ export async function applyLeash(
   const params = sender.getParameters();
   const encodings = params.encodings;
   if (encodings === undefined || encodings.length === 0) {
-    const encoding = encodingFor(settings);
-    applyEncodingPriority(encoding, "low");
-    params.encodings = [encoding];
+    params.encodings = [encodingFor(settings)];
   } else {
     for (const encoding of encodings) {
       encoding.maxBitrate = settings.maxBitrateBps;
       encoding.scaleResolutionDownBy = settings.scaleResolutionDownBy;
       encoding.maxFramerate = settings.maxFramerate;
-      applyEncodingPriority(encoding, "low");
     }
   }
 

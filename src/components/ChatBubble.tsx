@@ -85,7 +85,7 @@ export function ChatBubble({
        calc(100vw - 2rem), and 100vw INCLUDES the vertical scrollbar -- so on a
        scrolling page the panel was wider than the room it actually had, which
        is the horizontal scrollbar that appeared the moment it opened. */
-    <div className="pointer-events-none absolute bottom-full left-0 right-0 z-30 mb-2 flex flex-col items-start gap-2">
+    <div className="pointer-events-none absolute bottom-full left-0 right-0 z-30 mb-4 flex flex-col items-end gap-2">
       <AnimatePresence>
         {open && (
           <motion.div
