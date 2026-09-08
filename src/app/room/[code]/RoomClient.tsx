@@ -956,6 +956,7 @@ export function RoomClient({ code }: { code: string }) {
     const level = singing.readLevel();
     return {
       description: describeMic(mic.settings),
+      device: mic.settings?.label ?? "unknown",
       unmet: mic.unmet,
       error: mic.error,
       level: describeLevel(level),

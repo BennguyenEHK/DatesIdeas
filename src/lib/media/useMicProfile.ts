@@ -11,7 +11,31 @@ import {
   type MicSource,
   type OpenedMic,
 } from "./micSwap";
-import { boostMic, type BoostedMic } from "./micGain";
+import {
+  boostMic,
+  ECHO_SAFE_MAKEUP_GAIN_DB,
+  MAKEUP_GAIN_DB,
+  type BoostedMic,
+} from "./micGain";
+
+/**
+ * How much makeup gain this profile can safely take.
+ *
+ * Echo cancellation is only ever asked for when the song is coming out of
+ * loudspeakers, so the flag doubles as the answer to "can this microphone hear
+ * a speaker?". When it can, the compressor is sitting in front of a
+ * cancellation residual containing the other person's voice, and lifting a
+ * quiet residual is exactly what a compressor does best.
+ *
+ * Keyed on the flag rather than on the mode name so the two cannot drift
+ * apart: any future profile that turns cancellation on gets the safe gain
+ * without anyone having to remember this rule.
+ */
+function makeupGainFor(profile: MediaTrackConstraints): number {
+  return profile.echoCancellation === true
+    ? ECHO_SAFE_MAKEUP_GAIN_DB
+    : MAKEUP_GAIN_DB;
+}
 
 /**
  * Releases a microphone this hook opened, and the processing stage on top of
@@ -259,7 +283,11 @@ export function useMicProfile(args: {
       // A browser that cannot build the graph returns null and the raw
       // microphone goes on the call unchanged, because quiet karaoke is a
       // disappointment and no microphone at all is a ruined evening.
-      const boost = boostMic(next.track);
+      //
+      // How much lift is safe depends on the profile: a microphone that also
+      // has to hear a loudspeaker gets much less, because the compressor would
+      // otherwise favour the echo over the voice.
+      const boost = boostMic(next.track, undefined, makeupGainFor(profile));
       const outgoing = boost === null ? next.track : boost.track;
 
       const swapped = await swapMicTrack(sender, outgoing);

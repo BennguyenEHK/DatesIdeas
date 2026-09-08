@@ -8,8 +8,12 @@ import {
 } from "./micState";
 import { HEADPHONE_AUDIO, SPEAKER_AUDIO, SPEECH_AUDIO } from "./micProfile";
 
-const track = (settings: Record<string, unknown>): SettingsTrackLike => ({
+const track = (
+  settings: Record<string, unknown>,
+  label?: string,
+): SettingsTrackLike => ({
   getSettings: () => settings as MediaTrackSettings,
+  ...(label === undefined ? {} : { label }),
 });
 
 const settings = (over: Partial<MicSettings> = {}): MicSettings => ({
@@ -17,6 +21,7 @@ const settings = (over: Partial<MicSettings> = {}): MicSettings => ({
   noiseSuppression: null,
   autoGainControl: null,
   voiceIsolation: null,
+  label: null,
   channelCount: null,
   sampleRate: null,
   ...over,
@@ -148,3 +153,20 @@ describe("describeMic", () => {
     expect(describeMic(null)).toBe("unknown");
   });
 });
+
+describe("the device behind the settings", () => {
+  it("names the microphone the browser actually opened", () => {
+    // Two microphones attached and the wrong one chosen looks identical to a
+    // correctly tuned right one, in every other field of the report.
+    expect(readMicSettings(track({}, "Headset (Yeti Nano)"))?.label).toBe(
+      "Headset (Yeti Nano)",
+    );
+  });
+
+  it("treats a nameless device as unknown rather than as a device called nothing", () => {
+    // The browser leaves the label empty until permission has been granted.
+    expect(readMicSettings(track({}, ""))?.label).toBeNull();
+    expect(readMicSettings(track({}))?.label).toBeNull();
+  });
+});
+

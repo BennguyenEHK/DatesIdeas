@@ -8,6 +8,7 @@ import {
   COMPRESSOR_RELEASE_S,
   COMPRESSOR_THRESHOLD_DB,
   dbToGain,
+  ECHO_SAFE_MAKEUP_GAIN_DB,
   MAKEUP_GAIN_DB,
   type AudioContextLike,
 } from "./micGain";
@@ -197,5 +198,27 @@ describe("boostMic", () => {
     boostMic(sourceTrack, () => ({ ...fake.context, state: "running", resume }));
 
     expect(resume).not.toHaveBeenCalled();
+  });
+
+  it("defaults to the full makeup gain when none is asked for", () => {
+    vi.stubGlobal("MediaStream", class {});
+    const fake = context([{} as MediaStreamTrack]);
+
+    boostMic(sourceTrack, () => fake.context);
+
+    expect(fake.gain.gain.value).toBeCloseTo(dbToGain(MAKEUP_GAIN_DB), 5);
+  });
+
+  it("applies the echo-safe gain when the caller asks for it", () => {
+    // A microphone that can hear a loudspeaker is sitting in front of a
+    // cancellation residual, and the compressor lifts a quiet residual harder
+    // than it lifts the loud voice this stage was built for.
+    vi.stubGlobal("MediaStream", class {});
+    const fake = context([{} as MediaStreamTrack]);
+
+    boostMic(sourceTrack, () => fake.context, ECHO_SAFE_MAKEUP_GAIN_DB);
+
+    expect(fake.gain.gain.value).toBeCloseTo(dbToGain(ECHO_SAFE_MAKEUP_GAIN_DB), 5);
+    expect(ECHO_SAFE_MAKEUP_GAIN_DB).toBeLessThan(MAKEUP_GAIN_DB);
   });
 });

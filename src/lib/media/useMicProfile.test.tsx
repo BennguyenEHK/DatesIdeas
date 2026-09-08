@@ -1,8 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useMicProfile } from "./useMicProfile";
 import type { AudioMode } from "./micProfile";
+import { dbToGain, ECHO_SAFE_MAKEUP_GAIN_DB, MAKEUP_GAIN_DB } from "./micGain";
 import type { AudioSenderLike, MicSource } from "./micSwap";
 
 function fakeTrack(settings: Record<string, unknown> = {}) {
@@ -46,6 +47,7 @@ function fakeSender() {
 function stubWebAudio(processed: MediaStreamTrack) {
   const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
   const close = vi.fn(() => Promise.resolve());
+  const gain = { ...node(), gain: { value: 0 } };
   vi.stubGlobal("MediaStream", class {});
   vi.stubGlobal(
     "AudioContext",
@@ -60,15 +62,21 @@ function stubWebAudio(processed: MediaStreamTrack) {
         attack: { value: 0 },
         release: { value: 0 },
       });
-      createGain = () => ({ ...node(), gain: { value: 0 } });
+      createGain = () => gain;
       createMediaStreamDestination = () => ({
         stream: { getAudioTracks: () => [processed] } as MediaStream,
       });
       close = close;
     },
   );
-  return { close };
+  return { close, gain };
 }
+
+// In afterEach rather than at the end of each test body: a failing assertion
+// throws before any trailing cleanup runs, and a stubbed AudioContext left
+// behind then changes the behaviour of every test after it -- which turns one
+// real failure into a page of unrelated ones.
+afterEach(() => vi.unstubAllGlobals());
 
 describe("useMicProfile", () => {
   it("does not open a microphone before there is an audio sender", () => {
@@ -210,7 +218,6 @@ describe("useMicProfile", () => {
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(processed));
     expect(result.current.track).toBe(processed);
     expect(captured.enabled).toBe(false);
-    vi.unstubAllGlobals();
   });
 
   it("closes the processing graph when the singing ends", async () => {
@@ -232,7 +239,47 @@ describe("useMicProfile", () => {
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(original));
     expect(close).toHaveBeenCalled();
     expect(captured.stop).toHaveBeenCalledOnce();
-    vi.unstubAllGlobals();
+  });
+
+  it("lifts a headphone microphone by the full makeup gain", async () => {
+    const { gain } = stubWebAudio(fakeTrack());
+    const source = fakeSource([fakeTrack()]);
+    const { sender, replaceTrack } = fakeSender();
+
+    renderHook(() =>
+      useMicProfile({ sender, mode: "headphones", noisy: false, source }),
+    );
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
+    expect(gain.gain.value).toBeCloseTo(dbToGain(MAKEUP_GAIN_DB), 5);
+  });
+
+  it("holds a speaker microphone down to the echo-safe gain", async () => {
+    // Speakers mean echo cancellation is on, which means the compressor is
+    // sitting in front of a residual carrying the other person's voice back.
+    const { gain } = stubWebAudio(fakeTrack());
+    const source = fakeSource([fakeTrack()]);
+    const { sender, replaceTrack } = fakeSender();
+
+    renderHook(() =>
+      useMicProfile({ sender, mode: "speakers", noisy: false, source }),
+    );
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
+    expect(gain.gain.value).toBeCloseTo(dbToGain(ECHO_SAFE_MAKEUP_GAIN_DB), 5);
+  });
+
+  it("holds a noisy speaker microphone down too, because cancellation is still on", async () => {
+    const { gain } = stubWebAudio(fakeTrack());
+    const source = fakeSource([fakeTrack()]);
+    const { sender, replaceTrack } = fakeSender();
+
+    renderHook(() =>
+      useMicProfile({ sender, mode: "speakers", noisy: true, source }),
+    );
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
+    expect(gain.gain.value).toBeCloseTo(dbToGain(ECHO_SAFE_MAKEUP_GAIN_DB), 5);
   });
 
   it("reopens when room noise resolves to a different profile", async () => {

@@ -122,6 +122,7 @@ describe("the microphone findings", () => {
     description: "aec on, ns off, agc off",
     unmet: [] as readonly string[],
     error: null,
+    device: "Headset Microphone (Yeti Nano)",
     level: "peak 0.30",
     dropouts: 0,
     voiceIsolation: null,
@@ -130,6 +131,13 @@ describe("the microphone findings", () => {
 
   it("says the microphone was never opened when karaoke never ran", () => {
     expect(formatReport(base)).toContain("Settled as: not opened");
+    expect(formatReport(base)).toContain("Device: not opened");
+  });
+
+  it("names the device, because the settings alone cannot say it picked the wrong one", () => {
+    expect(formatReport({ ...base, mic: mic() })).toContain(
+      "Device: Headset Microphone (Yeti Nano)",
+    );
   });
 
   it("stays quiet when the microphone did exactly as it was told", () => {

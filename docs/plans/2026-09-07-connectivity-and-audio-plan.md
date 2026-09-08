@@ -341,3 +341,76 @@ that change that fixed "filtered" in the first place.
 - `Settled as:` should say `48000Hz` again, now that only one device is open.
 - And the ear test that matters more than any of them: whether K still sounds
   submerged, and whether the song still feels late.
+
+
+## Status 2026-09-08 (late) -- the echo, and what caused it
+
+Ben corrected the previous entry: he CAN hear his own voice, and that is the
+fault. K sings on speakers, he wears headphones.
+
+The loop is acoustic and it is not a bug in any single line: he sings, K's
+browser plays him through her speakers, her microphone hears them, and it goes
+back. Echo cancellation on her side is the only thing standing in the way, and
+a canceller always leaves a residual.
+
+**What made that residual audible was B3.** `boostMic` was applied to every
+singing profile, speakers included, and look at what it does: everything below
+`COMPRESSOR_THRESHOLD_DB` passes uncompressed and takes the makeup gain in
+full, while everything above it is compressed and takes less. A quiet echo
+residual is therefore lifted HARDER than the loud voice the stage was built
+for. The compressor favoured the echo over the singer.
+
+Fixed by keying the makeup gain on `echoCancellation` rather than applying one
+number everywhere: `MAKEUP_GAIN_DB` (10) when cancellation is off, and
+`ECHO_SAFE_MAKEUP_GAIN_DB` (4) when it is on. Keyed on the flag rather than on
+the mode name so the two cannot drift apart -- any future profile that turns
+cancellation on gets the safe gain without anyone remembering this rule.
+
+**The second factor was the capture clock, and Ben spotted it.** The device
+settled at 44100Hz while Opus and the browser's render path both run at 48000.
+Cancellation compares what the speakers played against what the microphone
+heard, so that mismatch made it resample one clock into the other and chase the
+drift between them. All four singing profiles now ask for
+`sampleRate: { ideal: 48000 }` and `channelCount: { ideal: 1 }` -- `ideal`, never
+`exact`, because a device that cannot oblige must still open. Mono is right
+regardless now that the call sends mono Opus.
+
+**`duetMix.ts` is deleted.** It planned a stereo duet mix including "the local
+singer's own monitored voice" and had zero consumers -- it never ran, and it
+was not related to the echo. Removed as tidying, and recorded here so nobody
+concludes it was the fix.
+
+**The report now names the microphone.** Every other field described how a
+device was configured while nobody could say which device it was. Two
+microphones attached and the wrong one chosen is indistinguishable, in the old
+report, from a correctly tuned right one.
+
+### Confirmed already done, for the record
+
+The quiet/noisy question was asked again and the answer is yes, on both sides,
+each choosing their own with the "Quiet room / Noisy room" button:
+
+| | Quiet room | Noisy room |
+|---|---|---|
+| Headphones | aec off, ns off, agc off | aec off, **ns on, agc on** |
+| Speakers | **aec on**, ns off, agc off | **aec on, ns on, agc on** |
+
+Echo cancellation is the one thing that never comes off on speakers. That is
+not a policy choice; it is the only thing subtracting the song from the mic.
+
+### What software cannot do
+
+Reducing the echo is all any of this achieves. The loop only closes when the
+loudspeaker stops feeding the microphone, so **K in headphones removes it
+entirely** -- and she would get the full 10dB back at the same time.
+
+### And still open
+
+The song remains slightly late in both directions, by roughly 90ms.
+`measuredLatencyMs` is `rtt/2 + jitter` and counts only the two delays it can
+measure; capture buffering, Opus's 20ms framing, decode, the output device
+buffer and the compressor graph are all real, all unmeasured, and all have the
+same sign, which is why it is always late and never early. The karaoke bar
+already has "Set the delay myself" with a 0-1000ms slider: the number where the
+two of you actually line up is the measurement worth baking in, and it beats
+guessing at a constant.

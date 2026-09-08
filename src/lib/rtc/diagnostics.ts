@@ -68,6 +68,15 @@ export interface MicReport {
   unmet: readonly string[];
   /** Why the device refused the constraints, or null when it did not. */
   error: string | null;
+  /**
+   * Which physical microphone this is, or "unknown".
+   *
+   * Everything else in this block describes how a device was configured. None
+   * of it can tell you the browser opened the laptop's own microphone instead
+   * of the headset plugged into it, and that is a completely different problem
+   * from a profile being refused.
+   */
+  device: string;
   /** The running input-level picture. */
   level: string;
   /** How many times a clear voice collapsed straight into silence. */
@@ -332,6 +341,7 @@ export function formatReport(input: ReportInput): string {
     `Sync channel: ${text(input.syncChannel)}`,
     `File channel: ${text(input.fileChannel)}`,
     "MICROPHONE",
+    `Device: ${input.mic === null ? "not opened" : input.mic.device}`,
     `Settled as: ${input.mic === null ? "not opened" : input.mic.description}`,
     `Requested but refused: ${
       input.mic === null || input.mic.unmet.length === 0

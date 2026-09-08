@@ -47,6 +47,8 @@ describe("audio profiles", () => {
   it("selects the headphones quiet profile", () => {
     expect(singingProfile("headphones", false)).toBe(HEADPHONE_AUDIO);
     expect(HEADPHONE_AUDIO).toEqual({
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
       echoCancellation: false,
       noiseSuppression: false,
       autoGainControl: false,
@@ -57,6 +59,8 @@ describe("audio profiles", () => {
   it("selects the headphones noisy profile", () => {
     expect(singingProfile("headphones", true)).toBe(HEADPHONE_NOISY_AUDIO);
     expect(HEADPHONE_NOISY_AUDIO).toEqual({
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
       echoCancellation: false,
       noiseSuppression: true,
       autoGainControl: true,
@@ -67,6 +71,8 @@ describe("audio profiles", () => {
   it("selects the speakers quiet profile", () => {
     expect(singingProfile("speakers", false)).toBe(SPEAKER_AUDIO);
     expect(SPEAKER_AUDIO).toEqual({
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
       echoCancellation: true,
       noiseSuppression: false,
       autoGainControl: false,
@@ -77,11 +83,39 @@ describe("audio profiles", () => {
   it("selects the speakers noisy profile", () => {
     expect(singingProfile("speakers", true)).toBe(SPEAKER_NOISY_AUDIO);
     expect(SPEAKER_NOISY_AUDIO).toEqual({
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
       voiceIsolation: false,
     });
+  });
+
+  it("asks every singing profile for one channel at the rate everything else runs at", () => {
+    // Echo cancellation compares what the speakers played against what the
+    // microphone heard. Left unasked, the device offers its own preference --
+    // 44100 on the machine these reports come from -- and the canceller then
+    // has to resample one clock into the other and chase the drift between
+    // them. The person on speakers is the one who pays for that.
+    for (const profile of [
+      HEADPHONE_AUDIO,
+      HEADPHONE_NOISY_AUDIO,
+      SPEAKER_AUDIO,
+      SPEAKER_NOISY_AUDIO,
+    ]) {
+      expect(profile.channelCount).toEqual({ ideal: 1 });
+      expect(profile.sampleRate).toEqual({ ideal: 48000 });
+    }
+  });
+
+  it("asks for the capture shape as a preference, never as a requirement", () => {
+    // `exact` would let a device that cannot oblige refuse to open at all,
+    // trading a slightly worse microphone for no microphone.
+    for (const profile of [HEADPHONE_AUDIO, SPEAKER_AUDIO]) {
+      expect(profile.channelCount).not.toHaveProperty("exact");
+      expect(profile.sampleRate).not.toHaveProperty("exact");
+    }
   });
 
   it("leaves every process on for ordinary talking", () => {

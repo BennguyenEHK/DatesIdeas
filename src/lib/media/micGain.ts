@@ -69,8 +69,31 @@ export const COMPRESSOR_RELEASE_S = 0.35;
  * This 10dB makeup gain takes the observed 0.10 peak to roughly 0.32, safely
  * above the 0.06 singing threshold while remaining below both the old 0.50
  * automatic-gain peak and input level's 0.7 clipping warning.
+ *
+ * Correct only when nothing but the singer reaches the microphone. See
+ * ECHO_SAFE_MAKEUP_GAIN_DB for why that condition is not always true.
  */
 export const MAKEUP_GAIN_DB = 10;
+
+/**
+ * The makeup gain to use when the microphone is also hearing a loudspeaker.
+ *
+ * Singing on speakers means the song, and the other person's voice, come back
+ * into the microphone. Echo cancellation subtracts most of that and leaves a
+ * quiet residual, which is the best any canceller does.
+ *
+ * A compressor is an unusually bad thing to put in front of that residual.
+ * Everything below COMPRESSOR_THRESHOLD_DB passes uncompressed and receives
+ * the makeup gain in full, while everything above it is compressed and
+ * receives less -- so a quiet echo is lifted HARDER than the loud voice the
+ * stage was built for. Ten decibels of that is the difference between an echo
+ * nobody notices and one the other person cannot sing over.
+ *
+ * Four decibels still restores some of what switching automatic gain control
+ * off cost, without turning the residual into the loudest thing on the call.
+ * The real cure is headphones, which removes the loop instead of quieting it.
+ */
+export const ECHO_SAFE_MAKEUP_GAIN_DB = 4;
 
 /** Converts a decibel setting to the linear multiplier Web Audio gain parameters require. */
 export function dbToGain(db: number): number {
@@ -108,12 +131,19 @@ function closeContext(context: AudioContextLike): void {
 /**
  * Adds slow compression and fixed makeup gain to a karaoke microphone.
  *
+ * The gain is a parameter rather than a constant because how much is safe
+ * depends on what else the microphone can hear. A singer in headphones can
+ * take the full lift; a singer on speakers is also holding a live microphone
+ * in front of a loudspeaker playing the other person, and lifting that as hard
+ * sends them back their own voice. ECHO_SAFE_MAKEUP_GAIN_DB is that case.
+ *
  * A browser without this audio path keeps the raw microphone. That leaves a
  * quieter karaoke, but never replaces a working call with silence.
  */
 export function boostMic(
   track: MediaStreamTrack,
   makeContext?: (() => AudioContextLike) | null,
+  makeupDb: number = MAKEUP_GAIN_DB,
 ): BoostedMic | null {
   if (makeContext === null) return null;
 
@@ -145,7 +175,7 @@ export function boostMic(
     compressor.ratio.value = COMPRESSOR_RATIO;
     compressor.attack.value = COMPRESSOR_ATTACK_S;
     compressor.release.value = COMPRESSOR_RELEASE_S;
-    gain.gain.value = dbToGain(MAKEUP_GAIN_DB);
+    gain.gain.value = dbToGain(makeupDb);
 
     source.connect(compressor);
     compressor.connect(gain);

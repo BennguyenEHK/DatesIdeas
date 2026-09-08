@@ -38,6 +38,34 @@ import {
  */
 type SingingConstraints = MediaTrackConstraints & { voiceIsolation?: boolean };
 
+/**
+ * The shape every singing profile asks the device for, whatever else it wants
+ * switched on or off.
+ *
+ * One channel, because a microphone capsule has nothing to put in a second
+ * one. The call sends mono Opus regardless, so asking for two only made the
+ * browser upmix a signal it would immediately downmix again -- and echo
+ * cancellation, which is built around a mono capture, had to cope with the
+ * detour.
+ *
+ * 48000Hz, because that is the rate everything downstream already runs at:
+ * Opus is a 48kHz codec and the browser renders audio at 48kHz. Left
+ * unasked, a device offers its own preference -- 44100 on the machine these
+ * reports come from -- and echo cancellation then has to compare a 44.1kHz
+ * recording against a 48kHz playback, resampling one into the other and
+ * chasing the drift between two crystals that will never quite agree. That is
+ * a well-known way to make a canceller worse, and the person on speakers is
+ * the one who pays for it.
+ *
+ * Both are `ideal`, never `exact`. A device that cannot oblige should hand
+ * back what it has, exactly as it does today; refusing to open at all would
+ * trade a slightly worse microphone for no microphone.
+ */
+const CAPTURE_SHAPE: MediaTrackConstraints = {
+  channelCount: { ideal: 1 },
+  sampleRate: { ideal: 48000 },
+};
+
 /** How the song is reaching this person's ears, which decides what is safe. */
 export type AudioMode = "headphones" | "speakers";
 
@@ -53,6 +81,7 @@ export const SPEECH_AUDIO: MediaTrackConstraints = {
  * every process can come off and the voice arrives whole.
  */
 export const HEADPHONE_AUDIO: SingingConstraints = {
+  ...CAPTURE_SHAPE,
   echoCancellation: false,
   noiseSuppression: false,
   autoGainControl: false,
@@ -71,6 +100,7 @@ export const HEADPHONE_AUDIO: SingingConstraints = {
  * "unlistenable", which is worth having.
  */
 export const SPEAKER_AUDIO: SingingConstraints = {
+  ...CAPTURE_SHAPE,
   echoCancellation: true,
   noiseSuppression: false,
   autoGainControl: false,
@@ -83,6 +113,7 @@ export const SPEAKER_AUDIO: SingingConstraints = {
  * gain keep the voice above the room.
  */
 export const HEADPHONE_NOISY_AUDIO: SingingConstraints = {
+  ...CAPTURE_SHAPE,
   echoCancellation: false,
   noiseSuppression: true,
   autoGainControl: true,
@@ -96,6 +127,7 @@ export const HEADPHONE_NOISY_AUDIO: SingingConstraints = {
  * held note, but a voice you can hear beats a purer one buried under a room.
  */
 export const SPEAKER_NOISY_AUDIO: SingingConstraints = {
+  ...CAPTURE_SHAPE,
   echoCancellation: true,
   noiseSuppression: true,
   autoGainControl: true,

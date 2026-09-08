@@ -16,6 +16,11 @@
 /** The narrowest shape needed, so this is testable against a plain object. */
 export interface SettingsTrackLike {
   getSettings?: () => MediaTrackSettings;
+  /**
+   * The device's own name, which the browser fills in once permission is
+   * granted and leaves as an empty string before that.
+   */
+  label?: string;
 }
 
 export interface MicSettings {
@@ -33,6 +38,16 @@ export interface MicSettings {
   voiceIsolation: boolean | null;
   channelCount: number | null;
   sampleRate: number | null;
+  /**
+   * Which physical microphone this actually is.
+   *
+   * Every other field here describes how the device was configured, and all of
+   * them were being read off a device nobody could name. When two microphones
+   * are attached -- a laptop's own and a headset's -- the settings alone
+   * cannot tell you the browser picked the wrong one, and that is a completely
+   * different problem from a profile being refused.
+   */
+  label: string | null;
 }
 
 /** The three flags this app actually asks about, in the order it sets them. */
@@ -68,6 +83,10 @@ export function readMicSettings(track: SettingsTrackLike): MicSettings | null {
     voiceIsolation: bool(raw.voiceIsolation),
     channelCount: num(raw.channelCount),
     sampleRate: num(raw.sampleRate),
+    // Preferred over getSettings().deviceId, which is an opaque hash nobody
+    // can read. An empty label means permission has not been granted yet, and
+    // is reported as unknown rather than as a device called "".
+    label: typeof track.label === "string" && track.label !== "" ? track.label : null,
   };
 }
 

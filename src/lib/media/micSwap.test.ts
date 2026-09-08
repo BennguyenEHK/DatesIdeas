@@ -77,6 +77,7 @@ describe("openMic", () => {
         voiceIsolation: null,
         channelCount: 2,
         sampleRate: 48000,
+        label: null,
       },
       unmet: [],
     });
