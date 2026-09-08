@@ -34,6 +34,13 @@ import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
 import { useKaraokeHelper } from "@/lib/karaoke/useKaraokeHelper";
 import { useTrackTransfer, type ReceivedTrack } from "@/lib/karaoke/useTrackTransfer";
 import { MoviePanel } from "@/components/MoviePanel";
+import { ChatBox } from "@/components/ChatBox";
+import { HouseLights } from "@/components/HouseLights";
+import { LiveToggle } from "@/components/LiveToggle";
+import { PerformerStage } from "@/components/PerformerStage";
+import { addLine, type ChatLine } from "@/lib/ui/chatLog";
+import { getIdentity } from "@/lib/history/identity";
+import { playChime } from "@/lib/ui/chime";
 import { LocalFilePlayer } from "@/components/LocalFilePlayer";
 import { PhotoBoothStage } from "@/components/PhotoBoothStage";
 import { PhotoBoothPanel } from "@/components/PhotoBoothPanel";
@@ -41,7 +48,10 @@ import { PhotoStrip } from "@/components/PhotoStrip";
 import { useBooth } from "@/lib/photo/useBooth";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
-import { tuneMicrophone } from "@/lib/media/micProfile";
+import { tuneMicrophone, type TuneResult } from "@/lib/media/micProfile";
+import { describeMic } from "@/lib/media/micState";
+import { describeLevel } from "@/lib/media/inputLevel";
+import type { MicReport } from "@/lib/rtc/diagnostics";
 import { useOutputMode } from "@/lib/media/outputDevice";
 import { useSingingTurn } from "@/lib/media/useSingingTurn";
 import {
@@ -156,6 +166,10 @@ export function RoomClient({ code }: { code: string }) {
   const remoteVideo = useRef<HTMLVideoElement | null>(null);
   const acceptPhoto = useRef<((m: PeerMessage) => void) | null>(null);
   const acceptSinging = useRef<((m: PeerMessage) => void) | null>(null);
+  // Reaching backwards like the handlers around them: both messages arrive long
+  // before the state they land in has been declared.
+  const acceptChat = useRef<((m: PeerMessage) => void) | null>(null);
+  const acceptLive = useRef<((m: PeerMessage) => void) | null>(null);
   const acceptEnding = useRef<((m: PeerMessage) => void) | null>(null);
   const announceSwitches = useRef<(() => void) | null>(null);
   // State, not a ref: a state setter is a valid callback ref and keeps the
@@ -223,6 +237,14 @@ export function RoomClient({ code }: { code: string }) {
       }
       if (msg.t === "singing") {
         acceptSinging.current?.(msg);
+        return;
+      }
+      if (msg.t === "chat") {
+        acceptChat.current?.(msg);
+        return;
+      }
+      if (msg.t === "live") {
+        acceptLive.current?.(msg);
         return;
       }
       if (msg.t === "presence") {
@@ -784,8 +806,21 @@ export function RoomClient({ code }: { code: string }) {
   // only thing stopping the microphone sending back a second copy of the song;
   // in a noisy room noise suppression goes back on, because otherwise the
   // canceller is left picking a voice out of a crowd and clamps down on both.
+  // Kept, because the answer is the evidence. Whether the singing profile
+  // actually took is the difference between "the microphone is mistuned" and
+  // "the microphone cannot be tuned from here at all", and those need opposite
+  // fixes. Until this was recorded, both looked identical from the outside.
+  const tuning = useRef<TuneResult | null>(null);
   useEffect(() => {
-    void tuneMicrophone(peer.localStream, karaoke ? audio.mode : null, noisy);
+    let live = true;
+    void tuneMicrophone(peer.localStream, karaoke ? audio.mode : null, noisy).then(
+      (result) => {
+        if (live) tuning.current = result;
+      },
+    );
+    return () => {
+      live = false;
+    };
   }, [peer.localStream, karaoke, audio.mode, noisy]);
 
   // Who is actually singing, which is the only thing that can decide whose
@@ -798,6 +833,96 @@ export function RoomClient({ code }: { code: string }) {
   useEffect(() => {
     acceptSinging.current = singing.accept;
   });
+
+  /**
+   * The chat that runs alongside a film, and the stage that can be handed over.
+   *
+   * Both live here rather than inside their components because both are shared
+   * facts about the room: a line of chat is only half a conversation until it
+   * has crossed, and who holds the stage has to be the same answer on both
+   * screens or two people end up performing at each other.
+   */
+  const [chat, setChat] = useState<readonly ChatLine[]>([]);
+  const [performer, setPerformer] = useState<string | null>(null);
+  // One context for the whole evening. Building a fresh one per message leaks
+  // them, and browsers cap how many a page may hold.
+  const chimeCtx = useRef<AudioContext | null>(null);
+  const chime = useCallback((kind: "sent" | "received") => {
+    try {
+      const Ctor = globalThis.AudioContext;
+      if (typeof Ctor !== "function") return;
+      chimeCtx.current ??= new Ctor();
+      playChime(chimeCtx.current, kind);
+    } catch {
+      // A room with no sound is still a room. Never let the chime break chat.
+    }
+  }, []);
+
+  useEffect(() => {
+    acceptChat.current = (m: PeerMessage) => {
+      if (m.t !== "chat") return;
+      setChat((log) => addLine(log, { id: m.id, text: m.text, at: m.at, mine: false }));
+      chime("received");
+    };
+    acceptLive.current = (m: PeerMessage) => {
+      if (m.t !== "live") return;
+      setPerformer(m.performer);
+    };
+  }, [chime]);
+
+  const onSendChat = useCallback(
+    (text: string) => {
+      const line: ChatLine = {
+        // Sender-side id, so a message that crosses twice is still shown once.
+        id: `${getIdentity()}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text,
+        at: Date.now(),
+        mine: true,
+      };
+      setChat((log) => addLine(log, line));
+      peerRef.current?.send({ t: "chat", id: line.id, text: line.text, at: line.at });
+      chime("sent");
+    },
+    [chime],
+  );
+
+  /**
+   * Takes the stage, or gives it back.
+   *
+   * Scheduled on the shared clock like the activity and the card, so the two
+   * screens rearrange themselves at the same moment rather than one of them
+   * jumping a beat early.
+   */
+  const onLive = useCallback((live: boolean) => {
+    const me = getIdentity();
+    const next = live ? me : null;
+    const clock = peerRef.current?.clock;
+    const showAt = clock ? clock.now() + clock.leadTime() : Date.now();
+    peerRef.current?.send({ t: "live", performer: next, showAt });
+    if (clock) clock.scheduleAt(showAt, () => setPerformer(next));
+    else setPerformer(next);
+  }, []);
+
+  /**
+   * The microphone half of the pasteable report, built only when asked for.
+   *
+   * Null until karaoke has actually been opened, because before that nothing
+   * has tuned the microphone and a row of "unknown" would imply we looked and
+   * failed rather than that there was nothing yet to look at.
+   */
+  const micReport = useCallback((): MicReport | null => {
+    const tuned = tuning.current;
+    if (tuned === null) return null;
+    const level = singing.readLevel();
+    return {
+      description: describeMic(tuned.settings),
+      unmet: tuned.unmet,
+      error: tuned.error,
+      level: describeLevel(level),
+      dropouts: level.gates,
+      voiceIsolation: tuned.settings?.voiceIsolation ?? null,
+    };
+  }, [singing]);
 
   const turn = singingTurn(singing.mine, singing.theirs);
 
@@ -933,6 +1058,10 @@ export function RoomClient({ code }: { code: string }) {
   return (
     <>
       <Ambience />
+      {/* The room dims when the film runs. Mounted only for the movie, because
+          karaoke also has a `playing` transport and nobody wants the lights
+          going down every time a song starts. */}
+      {movie && <HouseLights playing={media.playing} />}
       <div className="flex min-h-screen flex-1 flex-col">
         {/* Top letterbox bar */}
         <header className="bar-top flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-[var(--letterbox)] px-5 py-3">
@@ -954,6 +1083,20 @@ export function RoomClient({ code }: { code: string }) {
             />
           </div>
         </header>
+
+        {/* Who has the stage. Its own row under the bar rather than inside it:
+            the bar is about the room, and this is about the next few minutes.
+            Only while karaoke is open, and only once there is somebody to
+            perform to. */}
+        {karaoke && (
+          <div className="flex justify-center px-4 pt-3 md:px-8">
+            <LiveToggle
+              live={performer !== null}
+              enabled={peer.remoteStream !== null}
+              onChange={onLive}
+            />
+          </div>
+        )}
 
         {/* The stage.
 
@@ -993,6 +1136,24 @@ export function RoomClient({ code }: { code: string }) {
                   onDiscard={booth.discard}
                 />
               </PhotoBoothStage>
+            ) : karaoke && performer !== null ? (
+              // One person plays and the other watches. A quarter of a second
+              // of ocean makes a duet genuinely hard and a performance entirely
+              // fine, which is why this shape exists at all.
+              <PerformerStage
+                performer={
+                  performer === getIdentity() ? peer.localStream : peer.remoteStream
+                }
+                audience={
+                  performer === getIdentity() ? peer.remoteStream : peer.localStream
+                }
+                performerLabel={performer === getIdentity() ? "You" : "Them"}
+                audienceLabel={performer === getIdentity() ? "Them" : "You"}
+                performerMemes={performer === getIdentity() ? mine.memes : theirs.memes}
+                audienceMemes={performer === getIdentity() ? theirs.memes : mine.memes}
+                mediaError={peer.mediaError}
+                switches={switches}
+              />
             ) : kind === "takeover" ? (
               <TakeoverStage
                 local={peer.localStream}
@@ -1099,12 +1260,13 @@ export function RoomClient({ code }: { code: string }) {
             jitterMs={peer.jitterMs}
             audioJitterMs={peer.audioJitterMs}
             audioFormat={peer.audioFormat}
+            turnDegraded={peer.turnDegraded}
             audioKbps={peer.audioKbps}
             gestureReady={gesture.ready}
             gestureError={gesture.error}
             gesturesOn={gesturesOn}
             onToggleGestures={setGesturesOn}
-            onReport={() => peer.report(current)}
+            onReport={() => peer.report(current, micReport())}
             onRetry={peer.retry}
           />
           {photobooth && (
@@ -1155,6 +1317,19 @@ export function RoomClient({ code }: { code: string }) {
               onPlayPause={media.playPause}
               onResync={media.resync}
             />
+          )}
+
+          {/* A whisper in a dark room, in the bar rather than over the picture.
+              Only during a film: the karaoke evening already has both of you
+              singing at each other, and does not need a second channel. */}
+          {movie && (
+            <div className="mt-3">
+              <ChatBox
+                lines={chat}
+                onSend={onSendChat}
+                ready={peer.state === "connected"}
+              />
+            </div>
           )}
 
           {karaoke && (

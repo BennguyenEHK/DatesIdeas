@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PeerMessage } from "@/lib/rtc/protocol";
+import { EMPTY_WATCH, observeLevel, type LevelWatch } from "./inputLevel";
 
 /** Sampling more often competes with the camera analysis without improving a turn. */
 export const SINGING_SAMPLE_MS = 100;
@@ -24,6 +25,17 @@ export interface SingingTurnState {
   mine: boolean;
   theirs: boolean;
   accept: (m: PeerMessage) => void;
+  /**
+   * The running picture of what this microphone has actually delivered.
+   *
+   * A function rather than a value because nothing renders from it: it is read
+   * once, at the instant somebody asks for a report. The measurement is taken
+   * here because this is the only place in the app already looking at the raw
+   * microphone -- before the encoder, after all capture processing -- which is
+   * exactly the vantage point that separates "the microphone stopped" from
+   * "the microphone was fine and the call lost it".
+   */
+  readLevel: () => LevelWatch;
 }
 
 /**
@@ -43,6 +55,7 @@ export function useSingingTurn(args: {
   // These all sit above the callbacks that write them. The React Compiler
   // otherwise rejects the write as a ref mutation captured below its hook.
   const mineRef = useRef(false);
+  const watchRef = useRef<LevelWatch>(EMPTY_WATCH);
   const quietSinceRef = useRef<number | null>(null);
   const sendRef = useRef(args.send);
 
@@ -120,6 +133,9 @@ export function useSingingTurn(args: {
             sum += centered * centered;
           }
           const rms = Math.sqrt(sum / samples.length);
+          // Folded in before any of the turn logic, so a reading that never
+          // clears the singing threshold still counts towards the evidence.
+          watchRef.current = observeLevel(watchRef.current, rms);
 
           if (!mineRef.current) {
             if (rms >= SINGING_ON_RMS) {
@@ -168,5 +184,7 @@ export function useSingingTurn(args: {
     };
   }, [args.enabled, args.stream, reportMine]);
 
-  return { mine, theirs, accept };
+  const readLevel = useCallback(() => watchRef.current, []);
+
+  return { mine, theirs, accept, readLevel };
 }

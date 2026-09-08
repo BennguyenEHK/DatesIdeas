@@ -23,8 +23,19 @@ import {
   type Topology,
   type TrafficSample,
   type TrafficRates,
+  type MicReport,
 } from "./diagnostics";
-import { leashSenders, type VideoMode } from "./videoLeash";
+import {
+  applyAudioPriority,
+  leashSenders,
+  type RouteQuality,
+  type VideoMode,
+} from "./videoLeash";
+import {
+  applyJitterTarget,
+  jitterTargetMs,
+  type ReceiverLike,
+} from "./jitterBuffer";
 import { shouldPause } from "./fileChannel";
 import { getIdentity } from "@/lib/history/identity";
 import {
@@ -76,6 +87,15 @@ export interface PeerApi {
   audioFormat: AudioFormat | null;
   audioKbps: number | null;
   rtt: number;
+  /**
+   * Why the TURN credentials are not what they should be, or null when they are.
+   *
+   * A call that falls back to public STUN alone still connects on a friendly
+   * network, so nothing about the picture says anything is wrong -- right up
+   * until the evening one of you is behind a NAT that needs a relay, and the
+   * call simply never joins with no explanation anywhere.
+   */
+  turnDegraded: string | null;
   mediaError: string | null;
   clock: SyncedClock | null;
   send: (m: PeerMessage) => void;
@@ -94,8 +114,14 @@ export interface PeerApi {
   /** Registers the receiver for inbound file chunks. Returns an unsubscribe
    *  function. Only one receiver at a time; a second call replaces the first. */
   onFileChunk: (handler: (chunk: ArrayBuffer) => void) => () => void;
-  /** Everything known about the route, as pasteable text. */
-  report: (activity: string | null) => string;
+  /**
+   * Everything known about the route AND the microphone, as pasteable text.
+   *
+   * The microphone is passed in rather than read here because this hook owns
+   * the connection, not the singing: the level measurement is taken by whoever
+   * is already watching the raw input.
+   */
+  report: (activity: string | null, mic: MicReport | null) => string;
   /** Caps the outgoing camera, or lets it run free. */
   setVideoMode: (mode: VideoMode) => void;
   /** Whether this side's microphone is currently sending anything. */
@@ -144,6 +170,9 @@ const ICE_SETTLE_GRACE_MS = 15_000;
  */
 const DISCONNECTED_GRACE_MS = 4000;
 
+/** How coarsely a measured round trip is bucketed before it can change a decision. */
+const RTT_BUCKET_MS = 50;
+
 const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
   // Two channels asked for so a stereo-capable input is not collapsed before
@@ -164,6 +193,8 @@ export function usePeerConnection(
   const [audioFormat, setAudioFormat] = useState<AudioFormat | null>(null);
   const [audioKbps, setAudioKbps] = useState<number | null>(null);
   const [rtt, setRtt] = useState(0);
+  // Why TURN is not what it should be, or null when it answered normally.
+  const [turnDegraded, setTurnDegraded] = useState<string | null>(null);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   // The clock is state, not just a ref: consumers must re-render when it
@@ -189,7 +220,23 @@ export function usePeerConnection(
   // being re-acquired must still find the stream that eventually arrives.
   const streamRef = useRef<MediaStream | null>(null);
 
+  // The route as the senders and receivers need to hear about it. Held as
+  // state rather than a ref because both the camera budget and the jitter
+  // buffers have to be re-applied when it changes, and ICE migrates mid-call.
+  const [route, setRoute] = useState<RouteQuality | null>(null);
+
   const pcRef = useRef<RTCPeerConnection | null>(null);
+  // Every receiver this connection has produced, so a route change can retune
+  // buffers that were set once at ontrack and never revisited.
+  const receiversRef = useRef<RTCRtpReceiver[]>([]);
+  // The same value as the state above, reachable from the connection handlers.
+  // Declared here rather than beside them because the React Compiler refuses a
+  // ref first written inside a closure declared above it.
+  const routeRef = useRef<RouteQuality | null>(null);
+  // What the current activity asked for. Karaoke is the one activity where two
+  // people try to sing in time with each other, so it doubles as the answer to
+  // "is anyone duetting" that the buffer policy needs.
+  const modeRef = useRef<VideoMode>("full");
   const jitterRef = useRef<JitterSample | null>(null);
   const audioRef = useRef<AudioSample | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -317,8 +364,18 @@ export function usePeerConnection(
   }, [attempt]);
 
   const buildConnection = useCallback(async () => {
-    const { iceServers } = await fetchIceServers();
-    const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 4 });
+    const ice = await fetchIceServers();
+    // Kept rather than discarded. /api/turn answers with public STUN and a
+    // reason string whenever Cloudflare could not be asked, and the route that
+    // produces it says in as many words that the UI must surface the degraded
+    // state rather than hide it. Destructuring only `iceServers` here is what
+    // made a silent fall back to STUN-only indistinguishable from a healthy
+    // call that simply never found a direct path.
+    setTurnDegraded(ice.degraded ?? null);
+    const pc = new RTCPeerConnection({
+      iceServers: ice.iceServers,
+      iceCandidatePoolSize: 4,
+    });
     pcRef.current = pc;
 
     if (localStream) {
@@ -338,7 +395,11 @@ export function usePeerConnection(
 
     pc.ontrack = (e) => {
       setRemoteStream(e.streams[0] ?? null);
-      shortenJitterBuffer(e.receiver);
+      // Kept, because the buffer this receiver wants depends on a route that is
+      // usually not known yet at this instant and can change later anyway. The
+      // effect below retunes everything collected here whenever it does.
+      receiversRef.current.push(e.receiver);
+      tuneReceiver(e.receiver, routeRef.current, modeRef.current === "lean");
     };
     pc.ondatachannel = (e) => {
       if (e.channel.label === "sync") {
@@ -475,13 +536,30 @@ export function usePeerConnection(
       if (!pc) return;
       const stats = await pc.getStats();
       if (cancelled) return;
-      setPath(selectPath(stats));
+      const pathNow = selectPath(stats);
+      setPath(pathNow);
 
       // The evidence behind the report, gathered on the poll that is already
       // running. Rates need two samples, so they only appear from the second
       // poll onwards — which is why the button is worth pressing a little way
       // into a call rather than the instant it connects.
-      topologyRef.current = readTopology(stats);
+      // Kept only when the snapshot actually described a route. ICE spends
+      // stretches of a restart with no succeeded pair at all, and readTopology
+      // answers null for those instants -- which is honest about the snapshot
+      // and wrong about the call. Overwriting with it is what printed
+      // "Route: unknown" on a connection that had been up for fourteen minutes.
+      // The last known good answer is the better thing to hold.
+      const topology = readTopology(stats);
+      if (topology !== null) topologyRef.current = topology;
+
+      // Derived from the sticky value, not the raw snapshot, so a poll that
+      // landed mid-restart cannot briefly tell the encoder the call went direct.
+      // Replaced only when something actually moved: a fresh object every three
+      // seconds would re-apply the camera budget and retune every jitter buffer
+      // on a call where nothing had changed.
+      const nextRoute = routeFrom(topologyRef.current, pathNow?.netRtt ?? null);
+      setRoute((current) => (sameRoute(current, nextRoute) ? current : nextRoute));
+
       const traffic = readTraffic(stats);
       if (traffic) {
         ratesRef.current = trafficRates(trafficRef.current, traffic);
@@ -535,9 +613,11 @@ export function usePeerConnection(
    * from "the video is trampling the voice" — so the app writes them down.
    */
   const report = useCallback(
-    (activity: string | null) =>
+    (activity: string | null, mic: MicReport | null) =>
       formatReport({
+        mic,
         topology: topologyRef.current,
+        degraded: turnDegraded,
         rates: ratesRef.current,
         sample: trafficRef.current,
         netRttMs: path?.netRtt ?? null,
@@ -551,7 +631,7 @@ export function usePeerConnection(
         syncChannel: dcRef.current?.readyState ?? null,
         fileChannel: fileDcRef.current?.readyState ?? null,
       }),
-    [path, rtt, audioJitter, jitterMs, audioFormat],
+    [path, rtt, audioJitter, jitterMs, audioFormat, turnDegraded],
   );
 
   /**
@@ -585,10 +665,50 @@ export function usePeerConnection(
   }, []);
 
   const setVideoMode = useCallback((mode: VideoMode) => {
+    modeRef.current = mode;
     const pc = pcRef.current;
     if (!pc) return;
-    void leashSenders(pc.getSenders(), mode);
+    void leashSenders(pc.getSenders(), mode, routeRef.current);
+    // Karaoke is the one activity where two people try to sing in time with
+    // each other, and that wants the shortest buffer it can survive rather than
+    // the steadiest one. Opening or closing it changes the answer, so the
+    // buffers are retuned here and not only when the route moves.
+    for (const receiver of receiversRef.current) {
+      tuneReceiver(receiver, routeRef.current, mode === "lean");
+    }
   }, []);
+
+  /**
+   * Re-applies everything that depends on the route, whenever the route moves.
+   *
+   * ICE migrates mid-call, and until now the camera budget was set once when
+   * karaoke opened and never revisited -- so a call that started direct and
+   * later fell back to a relay went on sending relay-sized video down a
+   * relay-sized pipe for the rest of the evening.
+   */
+  useEffect(() => {
+    routeRef.current = route;
+    const pc = pcRef.current;
+    if (pc === null || route === null) return;
+    void leashSenders(pc.getSenders(), modeRef.current, route);
+    for (const receiver of receiversRef.current) {
+      tuneReceiver(receiver, route, modeRef.current === "lean");
+    }
+  }, [route]);
+
+  /**
+   * Gives the voice first claim on the link, once there is a link to claim.
+   *
+   * Deliberately after connection rather than at addTrack: parameters set on a
+   * transceiver the browser has not finished negotiating are rejected, and a
+   * rejection here is silent.
+   */
+  useEffect(() => {
+    if (state !== "connected") return;
+    const pc = pcRef.current;
+    if (!pc) return;
+    for (const sender of pc.getSenders()) void applyAudioPriority(sender);
+  }, [state]);
 
   /**
    * Throws away the current connection without touching the camera or this
@@ -617,6 +737,8 @@ export function usePeerConnection(
     pcRef.current = null;
     offeredRef.current = false;
     pendingIce.current = [];
+    receiversRef.current = [];
+    setRoute(null);
     jitterRef.current = null;
     audioRef.current = null;
     setRemoteStream(null);
@@ -641,6 +763,8 @@ export function usePeerConnection(
     pcRef.current = null;
     offeredRef.current = false;
     pendingIce.current = [];
+    receiversRef.current = [];
+    setRoute(null);
     setRemoteStream(null);
     setPath(null);
     setJitterMs(null);
@@ -669,6 +793,7 @@ export function usePeerConnection(
     audioFormat,
     audioKbps,
     rtt,
+    turnDegraded,
     mediaError,
     clock,
     send,
@@ -712,21 +837,57 @@ function cancelRecovery(
 }
 
 /**
- * Ask for the shortest jitter buffer the browser will give us.
- *
- * The buffer trades delay for smoothness, and the default leans hard towards
- * smoothness — often 50-200ms of held-back video. Zero is a request, not an
- * order: the browser still grows the buffer when the network turns rough,
- * which is exactly the safety net worth keeping. Chrome 124+; older browsers
- * simply keep their default.
+ * Reduces a route to the handful of facts the sender budget and the buffer
+ * policy actually decide on.
  */
-function shortenJitterBuffer(receiver: RTCRtpReceiver): void {
-  try {
-    if ("jitterBufferTarget" in receiver) {
-      (receiver as RTCRtpReceiver & { jitterBufferTarget: number | null })
-        .jitterBufferTarget = 0;
-    }
-  } catch {
-    // Some builds expose the property but reject the assignment.
-  }
+function routeFrom(
+  topology: Topology | null,
+  netRttMs: number | null,
+): RouteQuality | null {
+  if (topology === null) return null;
+  return {
+    relayed: topology.relayed,
+    relayProtocol: topology.relayProtocol,
+    // Rounded to a coarse step on purpose. The live measurement wobbles by a
+    // few milliseconds from one poll to the next, and treating every distinct
+    // value as a new route would re-apply the camera budget and retune every
+    // buffer twenty times a minute in response to noise. Everything downstream
+    // compares against thresholds, so only the bucket was ever load-bearing.
+    netRttMs:
+      netRttMs === null
+        ? null
+        : Math.round(netRttMs / RTT_BUCKET_MS) * RTT_BUCKET_MS,
+  };
+}
+
+/** Whether two routes would produce the same decisions, so one can be ignored. */
+function sameRoute(a: RouteQuality | null, b: RouteQuality | null): boolean {
+  if (a === null || b === null) return a === b;
+  return (
+    a.relayed === b.relayed &&
+    a.relayProtocol === b.relayProtocol &&
+    a.netRttMs === b.netRttMs
+  );
+}
+
+/**
+ * Gives one receiver the buffer its route can actually sustain.
+ *
+ * This used to ask every receiver for a zero-length buffer, on the reasoning
+ * that the browser would grow it again when the network turned rough. It does —
+ * and that growing IS the problem on a long relayed link. Asking for nothing
+ * on a path that needs something is what made the buffer underrun, balloon past
+ * a second, drain and underrun again, which reads as a voice that keeps falling
+ * behind and catching up rather than as one steady delay you stop noticing.
+ */
+function tuneReceiver(
+  receiver: RTCRtpReceiver,
+  route: RouteQuality | null,
+  duetting: boolean,
+): void {
+  const kind = receiver.track?.kind === "video" ? "video" : "audio";
+  applyJitterTarget(
+    receiver as unknown as ReceiverLike,
+    jitterTargetMs(kind, route, duetting),
+  );
 }

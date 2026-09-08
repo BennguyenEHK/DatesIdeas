@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatReport, readTopology, readTraffic, trafficRates } from "./diagnostics";
 import type { ReportInput, TrafficSample } from "./diagnostics";
+import { RELAY_SLOW_RTT_MS } from "./path";
 import type { StatsLike } from "./path";
 
 const makeStats = (entries: Record<string, Record<string, unknown>>) =>
@@ -25,7 +26,8 @@ describe("readTopology", () => {
   it("counts all pair states", () => expect(readTopology(makeStats({ ...base, f: { type: "candidate-pair", state: "failed" }, w: { type: "candidate-pair", state: "waiting" } }))?.pairStates).toEqual({ succeeded: 1, failed: 1, waiting: 1 }));
   it("formats candidate addresses and bitrate", () => expect(readTopology(makeStats({ ...base, chosen: { ...base.chosen, availableOutgoingBitrate: 2500000 } }))).toMatchObject({ localAddress: "203.0.113.1:3478", remoteAddress: "198.51.100.4:5000", availableOutgoingKbps: 2500 }));
   it("uses null address when a candidate part is absent", () => expect(readTopology(makeStats({ ...base, l: { ...base.l, port: undefined } }))?.localAddress).toBeNull());
-  it("scans every local candidate for gathering evidence", () => expect(readTopology(makeStats({ ...base, stun: { type: "local-candidate", candidateType: "srflx" }, host: { type: "local-candidate", candidateType: "host" } }))?.gathering).toEqual({ types: ["host", "relay", "srflx"], hasReflexive: true, hasRelay: true }));
+  it("scans every local candidate for gathering evidence", () => expect(readTopology(makeStats({ ...base, stun: { type: "local-candidate", candidateType: "srflx" }, host: { type: "local-candidate", candidateType: "host" } }))?.gathering).toEqual({ types: ["host", "relay", "srflx"], hasReflexive: true, hasRelay: true, relayProtocols: ["tls"] }));
+  it("records every unique relay transport gathered", () => expect(readTopology(makeStats({ ...base, tcpRelay: { type: "local-candidate", candidateType: "relay", relayProtocol: "tcp" }, udpRelay: { type: "local-candidate", candidateType: "relay", relayProtocol: "udp" }, secondTcpRelay: { type: "local-candidate", candidateType: "relay", relayProtocol: "tcp" } }))?.gathering.relayProtocols).toEqual(["tcp", "tls", "udp"]));
   it("does not claim relay protocol for a direct route", () => expect(readTopology(makeStats({ ...base, l: { ...base.l, candidateType: "host" } }))?.relayProtocol).toBeNull());
   it("does not fall through from a stale selected pair", () => expect(readTopology(makeStats({ ...base, transport: { type: "transport", selectedCandidatePairId: "bad" }, bad: { type: "candidate-pair", state: "failed" } }))).toBeNull());
 });
@@ -49,13 +51,29 @@ describe("trafficRates", () => {
 });
 
 describe("formatReport", () => {
-  const empty: ReportInput = { topology: null, rates: null, sample: null, netRttMs: null, pingRttMs: null, audioJitterMs: null, videoJitterMs: null, audioCodec: null, activity: null, connectedForMs: null, syncChannel: null, fileChannel: null };
+  const empty: ReportInput = { topology: null, rates: null, sample: null, degraded: null, netRttMs: null, pingRttMs: null, audioJitterMs: null, videoJitterMs: null, audioCodec: null, activity: null, connectedForMs: null, syncChannel: null, fileChannel: null, mic: null };
   it("never throws when every field is null", () => expect(() => formatReport(empty)).not.toThrow());
   it("prints unknown rather than null for absent data", () => expect(formatReport(empty)).toContain("ICE RTT: unknown"));
   it("explains that no selected route has no verdict yet", () => expect(formatReport(empty)).toContain("VERDICT: no route selected yet."));
-  it("reports a slow relay verdict", () => expect(formatReport({ ...empty, topology: { relayed: true, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: true, hasRelay: true }, pairStates: {} }, netRttMs: 151 })).toContain("VERDICT: relayed and slow - the relay may be far away."));
-  it("reports a close relay verdict", () => expect(formatReport({ ...empty, topology: { relayed: true, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: true, hasRelay: true }, pairStates: {} }, netRttMs: 150 })).toContain("VERDICT: relayed but close - the relay is not the problem."));
-  it("adds the no-reflexive note", () => expect(formatReport({ ...empty, topology: { relayed: false, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: false, hasRelay: false }, pairStates: {} } })).toContain("NOTE: no reflexive candidate"));
+  const relayedTopology = { relayed: true, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: true, hasRelay: true, relayProtocols: [] }, pairStates: {} };
+  it("reports both possible causes of a long relayed round trip", () => expect(formatReport({ ...empty, topology: relayedTopology, netRttMs: RELAY_SLOW_RTT_MS + 1 })).toContain("VERDICT: relayed and slow - the long round trip may be caused by a distant relay or a distant other person."));
+  it("reports a close relay verdict", () => expect(formatReport({ ...empty, topology: relayedTopology, netRttMs: RELAY_SLOW_RTT_MS })).toContain("VERDICT: relayed but close - the relay is not the problem."));
+  it("reports TURN credentials and gathered relay transports", () => {
+    const r = formatReport({ ...empty, degraded: "turn-fetch-failed", topology: { ...relayedTopology, gathering: { ...relayedTopology.gathering, relayProtocols: ["tcp", "udp"] } } });
+    expect(r).toContain("TURN credentials: degraded (turn-fetch-failed)");
+    expect(r).toContain("Relay transports gathered: tcp, udp");
+  });
+  it("reports normal TURN credentials and unknown relay transports when none were gathered", () => {
+    const r = formatReport({ ...empty, topology: relayedTopology });
+    expect(r).toContain("TURN credentials: ok");
+    expect(r).toContain("Relay transports gathered: unknown");
+  });
+  it("reports no activity when no activity is open", () => expect(formatReport(empty)).toContain("Activity: none"));
+  it("explains held and reordered packets when jitter is high without loss", () => {
+    const r = formatReport({ ...empty, rates: { videoUpKbps: null, videoDownKbps: null, audioUpKbps: null, audioDownKbps: null, audioLossPct: 0.5 }, audioJitterMs: 401 });
+    expect(r).toContain("heavy delay with almost no packet loss means packets are being held and reordered rather than dropped - a signature of a TCP-based relay, not a congested network");
+  });
+  it("adds the no-reflexive note", () => expect(formatReport({ ...empty, topology: { relayed: false, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: false, hasRelay: false, relayProtocols: [] }, pairStates: {} } })).toContain("NOTE: no reflexive candidate"));
   it("shows both channel states, since a song and a button do not travel together", () => {
     const r = formatReport({ ...empty, syncChannel: "open", fileChannel: "connecting" });
     expect(r).toContain("Sync channel: open");
@@ -72,5 +90,51 @@ describe("formatReport", () => {
   it("stays quiet when both channels are open", () => {
     const r = formatReport({ ...empty, syncChannel: "open", fileChannel: "open" });
     expect(r).not.toContain("control messages can cross but files cannot");
+  });
+});
+
+/**
+ * The whole reason the microphone block exists. Each of these three notes
+ * points at a different layer, and until one of them fires on a real evening
+ * there is no honest way to choose between them.
+ */
+describe("the microphone findings", () => {
+  const base: ReportInput = { topology: null, rates: null, sample: null, degraded: null, netRttMs: null, pingRttMs: null, audioJitterMs: null, videoJitterMs: null, audioCodec: null, activity: null, connectedForMs: null, syncChannel: null, fileChannel: null, mic: null };
+  const mic = (over: Partial<NonNullable<ReportInput["mic"]>> = {}) => ({
+    description: "aec on, ns off, agc off",
+    unmet: [] as readonly string[],
+    error: null,
+    level: "peak 0.30",
+    dropouts: 0,
+    voiceIsolation: null,
+    ...over,
+  });
+
+  it("says the microphone was never opened when karaoke never ran", () => {
+    expect(formatReport(base)).toContain("Settled as: not opened");
+  });
+
+  it("stays quiet when the microphone did exactly as it was told", () => {
+    const out = formatReport({ ...base, mic: mic() });
+    expect(out).toContain("Requested but refused: nothing");
+    expect(out).not.toContain("NOTE: the microphone");
+  });
+
+  it("names a refused profile, which points at the constraint layer", () => {
+    const out = formatReport({ ...base, mic: mic({ unmet: ["noiseSuppression"] }) });
+    expect(out).toContain("Requested but refused: noiseSuppression");
+    expect(out).toContain("NOTE: the microphone REFUSED noiseSuppression");
+  });
+
+  it("names operating-system voice isolation, which points below the browser", () => {
+    expect(formatReport({ ...base, mic: mic({ voiceIsolation: true }) })).toContain(
+      "voice isolation is switched on",
+    );
+  });
+
+  it("rules the codec and the network out when capture itself went silent", () => {
+    expect(formatReport({ ...base, mic: mic({ dropouts: 3 }) })).toContain(
+      "on 3 occasion(s) while someone was clearly singing",
+    );
   });
 });

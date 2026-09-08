@@ -115,7 +115,9 @@ describe("tuneMicrophone", () => {
   });
 
   it("does nothing without a stream", async () => {
-    await expect(tuneMicrophone(null, "headphones")).resolves.toBeUndefined();
+    const result = await tuneMicrophone(null, "headphones");
+    expect(result.settings).toBeNull();
+    expect(result.error).toBeNull();
   });
 
   it("survives a device that refuses a constraint", async () => {
@@ -126,7 +128,10 @@ describe("tuneMicrophone", () => {
         { applyConstraints: () => Promise.reject(new Error("unsupported")) },
       ],
     } as unknown as MediaStream;
-    await expect(tuneMicrophone(stream, "headphones")).resolves.toBeUndefined();
+    // The refusal no longer vanishes: the call carries on regardless, but the
+    // reason is now recorded so somebody can see it happened.
+    const result = await tuneMicrophone(stream, "headphones");
+    expect(result.error).toBe("Error");
   });
 
   it("switches cleanly when someone puts headphones on mid-song", async () => {

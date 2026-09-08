@@ -61,6 +61,7 @@ export function ConnectionStatus({
   jitterMs,
   audioJitterMs,
   audioFormat,
+  turnDegraded,
   audioKbps,
   gestureReady,
   gestureError,
@@ -77,6 +78,8 @@ export function ConnectionStatus({
   /** The voice buffer — the one that decides how late their singing lands. */
   audioJitterMs: number | null;
   audioFormat: AudioFormat | null;
+  /** Why the relay credentials are not what they should be, or null when fine. */
+  turnDegraded: string | null;
   audioKbps: number | null;
   gestureReady: boolean;
   gestureError: string | null;
@@ -191,6 +194,18 @@ export function ConnectionStatus({
             voice {describeAudio(audioFormat)}
           </span>
           {audioKbps !== null && ` · ${Math.round(audioKbps)}kbps`}
+        </Item>
+      )}
+
+      {/* The relay was not available, so this call is running on public STUN
+          alone. Worth saying out loud even while everything looks fine: a call
+          without a relay still connects happily on a friendly network, and
+          then silently fails to join at all on the evening one of you is
+          behind a NAT that needed one. Neon, because "it works right now" is
+          exactly what makes this the easiest fault to miss. */}
+      {turnDegraded !== null && (
+        <Item>
+          <span className="text-[var(--neon)]">no relay ({turnDegraded})</span>
         </Item>
       )}
 

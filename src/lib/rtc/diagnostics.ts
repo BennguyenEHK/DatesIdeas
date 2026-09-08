@@ -1,3 +1,4 @@
+import { RELAY_SLOW_RTT_MS } from "./path";
 import type { StatsLike } from "./path";
 
 export interface CandidateGathering {
@@ -7,6 +8,8 @@ export interface CandidateGathering {
   hasReflexive: boolean;
   /** True when a relay candidate was gathered at all. */
   hasRelay: boolean;
+  /** Sorted unique relayProtocol values across all gathered relay candidates. */
+  relayProtocols: string[];
 }
 
 export interface Topology {
@@ -51,10 +54,34 @@ export interface TrafficRates {
   audioLossPct: number | null;
 }
 
+/**
+ * What the microphone actually became, and what it has actually delivered.
+ *
+ * Present because "the mic went broke on the high notes" has at least four
+ * possible causes needing opposite fixes, and reading the code cannot choose
+ * between them. These fields can, from one evening of real singing.
+ */
+export interface MicReport {
+  /** The settled processing chain, as a phrase. */
+  description: string;
+  /** Requested processing flags the device did not adopt. */
+  unmet: readonly string[];
+  /** Why the device refused the constraints, or null when it did not. */
+  error: string | null;
+  /** The running input-level picture. */
+  level: string;
+  /** How many times a clear voice collapsed straight into silence. */
+  dropouts: number;
+  /** The operating system's own voice isolation, where the browser reports it. */
+  voiceIsolation: boolean | null;
+}
+
 export interface ReportInput {
   topology: Topology | null;
   rates: TrafficRates | null;
   sample: TrafficSample | null;
+  /** The IceResult.degraded string, or null when TURN answered normally. */
+  degraded: string | null;
   /** ICE-layer round trip, ms. Measured below JavaScript. */
   netRttMs: number | null;
   /** DataChannel ping round trip, ms. Travels through JavaScript. */
@@ -77,6 +104,8 @@ export interface ReportInput {
    */
   syncChannel: string | null;
   fileChannel: string | null;
+  /** The microphone, or null when karaoke was never opened. */
+  mic: MicReport | null;
 }
 
 const num = (v: unknown): number | null =>
@@ -100,6 +129,7 @@ const address = (candidate: Record<string, unknown> | undefined): string | null 
 export function readTopology(stats: StatsLike): Topology | null {
   const pairs: Record<string, unknown>[] = [];
   const types = new Set<string>();
+  const relayProtocols = new Set<string>();
   const pairStates: Record<string, number> = {};
   let selectedId: string | null = null;
 
@@ -115,6 +145,10 @@ export function readTopology(stats: StatsLike): Topology | null {
     if (report.type === "local-candidate") {
       const type = str(report.candidateType);
       if (type !== null) types.add(type);
+      if (type === "relay") {
+        const relayProtocol = str(report.relayProtocol);
+        if (relayProtocol !== null) relayProtocols.add(relayProtocol);
+      }
     }
   }
 
@@ -148,6 +182,7 @@ export function readTopology(stats: StatsLike): Topology | null {
       types: [...types].sort(),
       hasReflexive: types.has("srflx"),
       hasRelay: types.has("relay"),
+      relayProtocols: [...relayProtocols].sort(),
     },
     pairStates,
   };
@@ -273,6 +308,8 @@ export function formatReport(input: ReportInput): string {
     `Candidate types: ${topology === null ? "unknown" : topology.gathering.types.join(", ") || "unknown"}`,
     `Reflexive candidate: ${topology === null ? "unknown" : topology.gathering.hasReflexive ? "yes" : "no"}`,
     `Relay candidate: ${topology === null ? "unknown" : topology.gathering.hasRelay ? "yes" : "no"}`,
+    `Relay transports gathered: ${topology === null ? "unknown" : topology.gathering.relayProtocols.join(", ") || "unknown"}`,
+    `TURN credentials: ${input.degraded === null ? "ok" : `degraded (${input.degraded})`}`,
     `Pair states: ${topology === null ? "unknown" : Object.entries(topology.pairStates).map(([state, count]) => `${state}: ${count}`).join(", ") || "unknown"}`,
     "TRAFFIC",
     `Video up/down: ${whole(rates?.videoUpKbps ?? null, "kbps")} / ${whole(rates?.videoDownKbps ?? null, "kbps")}`,
@@ -285,21 +322,49 @@ export function formatReport(input: ReportInput): string {
     `Audio jitter: ${whole(input.audioJitterMs, "ms")}`,
     `Video jitter: ${whole(input.videoJitterMs, "ms")}`,
     `Audio codec: ${text(input.audioCodec)}`,
-    `Activity: ${text(input.activity)}`,
+    `Activity: ${input.activity === null ? "none" : text(input.activity)}`,
     `Connected for: ${duration(input.connectedForMs)}`,
     "CHANNELS",
     `Sync channel: ${text(input.syncChannel)}`,
     `File channel: ${text(input.fileChannel)}`,
+    "MICROPHONE",
+    `Settled as: ${input.mic === null ? "not opened" : input.mic.description}`,
+    `Requested but refused: ${
+      input.mic === null || input.mic.unmet.length === 0
+        ? "nothing"
+        : input.mic.unmet.join(", ")
+    }`,
+    `Constraint error: ${input.mic === null ? "none" : text(input.mic.error)}`,
+    `Input level: ${input.mic === null ? "not opened" : input.mic.level}`,
   ];
 
   if (topology === null) lines.push("VERDICT: no route selected yet.");
   else if (!topology.relayed) lines.push("VERDICT: direct.");
-  else if (input.netRttMs !== null && input.netRttMs > 150) lines.push("VERDICT: relayed and slow - the relay may be far away.");
+  else if (input.netRttMs !== null && input.netRttMs > RELAY_SLOW_RTT_MS) lines.push("VERDICT: relayed and slow - the long round trip may be caused by a distant relay or a distant other person.");
   else if (input.netRttMs !== null) lines.push("VERDICT: relayed but close - the relay is not the problem.");
   else lines.push("VERDICT: relayed.");
 
   if (topology !== null && !topology.gathering.hasReflexive) {
     lines.push("NOTE: no reflexive candidate - this network hid our public address, so a direct connection was never possible.");
+  }
+  if (rates?.audioLossPct !== null && rates?.audioLossPct !== undefined && rates.audioLossPct < 1.0 && input.audioJitterMs !== null && input.audioJitterMs > 400) {
+    lines.push("NOTE: heavy delay with almost no packet loss means packets are being held and reordered rather than dropped - a signature of a TCP-based relay, not a congested network.");
+  }
+  // The three microphone findings, each of which points somewhere different.
+  if (input.mic !== null && input.mic.unmet.length > 0) {
+    lines.push(
+      `NOTE: the microphone REFUSED ${input.mic.unmet.join(", ")} - the singing profile was asked for and did not take, so this microphone is still running the processing meant for speech. That processing is built to remove a sustained tone.`,
+    );
+  }
+  if (input.mic?.voiceIsolation === true) {
+    lines.push(
+      "NOTE: the operating system's own voice isolation is switched on. It sits below every setting this app can reach, and it is built to keep a talking voice and discard everything else - which includes a held sung note.",
+    );
+  }
+  if (input.mic !== null && input.mic.dropouts > 0) {
+    lines.push(
+      `NOTE: the microphone delivered nothing at all on ${input.mic.dropouts} occasion(s) while someone was clearly singing. This is measured before the encoder, so the signal was already gone at capture and nothing about the codec or the network can explain it.`,
+    );
   }
   // The exact shape of "their controls work but the song never arrives", called
   // out by name so nobody has to know that songs and buttons travel separately.

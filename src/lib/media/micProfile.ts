@@ -18,6 +18,12 @@
  * asks which it is rather than assuming, and why answering wrongly is worse
  * than not answering at all.
  */
+import {
+  readMicSettings,
+  unmetRequests,
+  type MicSettings,
+} from "./micState";
+
 /** How the song is reaching this person's ears, which decides what is safe. */
 export type AudioMode = "headphones" | "speakers";
 
@@ -90,24 +96,58 @@ export function singingProfile(
 }
 
 /**
- * Retunes the live microphone without renegotiating the call.
+ * What the retune was asked for, and what it actually got.
+ *
+ * The second half is the point. A resolved applyConstraints means the browser
+ * considered the request, not that it granted it, and a device is free to
+ * report success while changing nothing whatsoever.
+ */
+export interface TuneResult {
+  requested: MediaTrackConstraints;
+  /** What the first audio track settled on, or null when it cannot be read. */
+  settings: MicSettings | null;
+  /** Requested processing flags the device did not actually adopt. */
+  unmet: string[];
+  /** Why the device refused the constraints, or null when it did not. */
+  error: string | null;
+}
+
+/**
+ * Retunes the live microphone without renegotiating the call, and reports back
+ * what actually happened to it.
  *
  * applyConstraints swaps the settings on the existing track, so the connection
- * is untouched and nothing drops. Failures are swallowed on purpose: not every
- * device honours every constraint, and a microphone that stays tuned for
- * speech is a worse-sounding karaoke, not a broken call.
+ * is untouched and nothing drops. A refusal is still swallowed as far as the
+ * CALL is concerned -- a microphone that stays tuned for speech is a
+ * worse-sounding karaoke, not a broken evening -- but it is no longer swallowed
+ * as far as the EVIDENCE is concerned, which is the distinction that used to be
+ * missing. A profile that never applied and a profile that applied perfectly
+ * produced identical, silent code paths, and they are completely different bugs.
  */
 export async function tuneMicrophone(
   stream: MediaStream | null,
   mode: AudioMode | null,
   noisy = false,
-): Promise<void> {
-  if (!stream) return;
-  const constraints =
+): Promise<TuneResult> {
+  const requested =
     mode === null ? SPEECH_AUDIO : singingProfile(mode, noisy);
+  const empty: TuneResult = { requested, settings: null, unmet: [], error: null };
+  if (!stream) return empty;
+
+  const tracks = stream.getAudioTracks();
+  let error: string | null = null;
+
   await Promise.all(
-    stream.getAudioTracks().map((track) =>
-      track.applyConstraints(constraints).catch(() => {}),
+    tracks.map((track) =>
+      track.applyConstraints(requested).catch((cause: unknown) => {
+        error ??= cause instanceof Error ? cause.name : "refused";
+      }),
     ),
   );
+
+  // Read back from the first track: a machine with two microphones in the
+  // stream is not a case this app creates, and the first one is the one being
+  // sung into.
+  const settings = tracks.length > 0 ? readMicSettings(tracks[0]) : null;
+  return { requested, settings, unmet: unmetRequests(requested, settings), error };
 }
