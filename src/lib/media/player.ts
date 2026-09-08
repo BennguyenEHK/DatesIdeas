@@ -50,3 +50,17 @@ export interface PlayerHandle {
    */
   setVolume(percent: number): void;
 }
+
+/**
+ * How long after reporting a start to ignore another one.
+ *
+ * A correction moves the position, and a player is free to answer that with
+ * another "playing" event -- which would ask for another correction, which
+ * moves the position again. The two settle in practice, because a corrected
+ * player has nothing left to correct, but "in practice" is not a guarantee and
+ * the failure would be a locked-up video. A real start-up happens once.
+ *
+ * Shared by both players rather than written twice. They face the same loop for
+ * the same reason, and two copies of this number would eventually disagree.
+ */
+export const START_REPORT_GAP_MS = 500;

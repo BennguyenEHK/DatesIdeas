@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import type { PlayerHandle } from "@/lib/media/player";
+import { START_REPORT_GAP_MS, type PlayerHandle } from "@/lib/media/player";
 
 interface LocalFilePlayerProps {
   file: File | null;
@@ -21,16 +21,6 @@ interface LocalFilePlayerProps {
   onStarted?: () => void;
 }
 
-/**
- * How long after reporting a start to ignore another one.
- *
- * A correction moves the position, and a browser is free to answer that with
- * another `playing` event -- which would ask for another correction, which
- * moves the position again. The two settle in practice, because a corrected
- * player has nothing left to correct, but "in practice" is not a guarantee and
- * the failure would be a locked-up video. A real start-up happens once.
- */
-const START_REPORT_GAP_MS = 500;
 
 export const LocalFilePlayer = forwardRef<PlayerHandle, LocalFilePlayerProps>(
   function LocalFilePlayer({ file, onDuration, onError, onStarted }, ref) {

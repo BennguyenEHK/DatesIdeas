@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
-import type { PlayerHandle } from "@/lib/media/player";
+import { START_REPORT_GAP_MS, type PlayerHandle } from "@/lib/media/player";
 
 /* ---------------------------------------------------------------------------
  * Minimal local surface of the YouTube IFrame Player API -- just the bits
@@ -125,9 +125,21 @@ export const YouTubePlayer = forwardRef<
   {
     onReady?: () => void;
     onStateChange?: (playing: boolean) => void;
+    /**
+     * Playback has genuinely begun, as opposed to having been asked to.
+     *
+     * The sync layer stamps a position when play() is CALLED, and YouTube does
+     * not start at that instant -- it fetches, decodes and spins up, by a
+     * different amount on each machine and each connection. Until this was
+     * reported, the whole of that start-up delay went unmeasured until the
+     * drift timer next came round, at which point it was large enough to be
+     * corrected with a seek: the film visibly jumping backwards to catch up
+     * with itself, and losing the buffer it had just filled.
+     */
+    onStarted?: () => void;
     onError?: (code: number) => void;
   }
->(function YouTubePlayer({ onReady, onStateChange, onError }, ref) {
+>(function YouTubePlayer({ onReady, onStateChange, onStarted, onError }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayerInstance | null>(null);
   const readyRef = useRef(false);
@@ -140,10 +152,16 @@ export const YouTubePlayer = forwardRef<
   // fetch and player construction.
   const onReadyRef = useRef(onReady);
   const onStateChangeRef = useRef(onStateChange);
+  const onStartedRef = useRef(onStarted);
   const onErrorRef = useRef(onError);
+  // A correction seeks, and YouTube answers a seek with another PLAYING event.
+  // Reporting that as a fresh start would ask for another correction, which
+  // seeks again. A real start-up happens once.
+  const lastStartReport = useRef(0);
   useEffect(() => {
     onReadyRef.current = onReady;
     onStateChangeRef.current = onStateChange;
+    onStartedRef.current = onStarted;
     onErrorRef.current = onError;
   });
 
@@ -204,6 +222,11 @@ export const YouTubePlayer = forwardRef<
             // as "paused" would make the sync layer fight the buffer.
             if (event.data === YT.PlayerState.PLAYING) {
               onStateChangeRef.current?.(true);
+              const at = Date.now();
+              if (at - lastStartReport.current >= START_REPORT_GAP_MS) {
+                lastStartReport.current = at;
+                onStartedRef.current?.();
+              }
             } else if (
               event.data === YT.PlayerState.PAUSED ||
               event.data === YT.PlayerState.ENDED

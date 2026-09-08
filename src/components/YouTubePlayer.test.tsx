@@ -13,11 +13,29 @@ import { YouTubePlayer } from "./YouTubePlayer";
  */
 class FakePlayer {
   iframe: HTMLIFrameElement;
+  /** The most recently constructed player, so a test can drive its events. */
+  static last: FakePlayer | null = null;
+  private readonly fire?: (event: { data: number }) => void;
 
-  constructor(element: HTMLElement, options: { events?: { onReady?: () => void } }) {
+  constructor(
+    element: HTMLElement,
+    options: {
+      events?: {
+        onReady?: () => void;
+        onStateChange?: (event: { data: number }) => void;
+      };
+    },
+  ) {
     this.iframe = document.createElement("iframe");
     element.replaceWith(this.iframe);
+    this.fire = options.events?.onStateChange;
+    FakePlayer.last = this;
     options.events?.onReady?.();
+  }
+
+  /** Pretends YouTube changed state, which is how a real start is reported. */
+  emit(data: number) {
+    this.fire?.({ data });
   }
 
   destroy() {
@@ -104,5 +122,60 @@ describe("YouTubePlayer and the node YouTube takes away", () => {
     await settle();
     view.unmount();
     expect(view.container.querySelector("iframe")).toBeNull();
+  });
+});
+
+/**
+ * Why this matters: the sync layer stamps a position when play() is CALLED, and
+ * YouTube does not begin at that instant. Until the real start was reported,
+ * the whole start-up delay went unmeasured until the drift timer came round --
+ * by which point it was large enough to be answered with a seek, which is the
+ * film visibly jumping backwards and throwing away the buffer it just filled.
+ */
+describe("reporting a genuine start", () => {
+  it("tells the sync layer the moment playback actually begins", async () => {
+    const onStarted = vi.fn();
+    render(<YouTubePlayer onStarted={onStarted} />);
+    await settle();
+
+    FakePlayer.last?.emit(1); // PLAYING
+    expect(onStarted).toHaveBeenCalledOnce();
+  });
+
+  it("says nothing when the film is merely paused or ended", async () => {
+    const onStarted = vi.fn();
+    render(<YouTubePlayer onStarted={onStarted} />);
+    await settle();
+
+    FakePlayer.last?.emit(2); // PAUSED
+    FakePlayer.last?.emit(0); // ENDED
+    expect(onStarted).not.toHaveBeenCalled();
+  });
+
+  it("reports a start once, however many times YouTube announces one", async () => {
+    // The loop this guards: a correction seeks, YouTube answers the seek with
+    // another PLAYING, and reporting that as a fresh start asks for another
+    // correction, which seeks again.
+    const onStarted = vi.fn();
+    render(<YouTubePlayer onStarted={onStarted} />);
+    await settle();
+
+    FakePlayer.last?.emit(1);
+    FakePlayer.last?.emit(1);
+    FakePlayer.last?.emit(1);
+    expect(onStarted).toHaveBeenCalledOnce();
+  });
+
+  it("still reports the play/pause state on every change", async () => {
+    // onStarted is debounced; onStateChange deliberately is not. They answer
+    // different questions and must not be collapsed into one.
+    const onStateChange = vi.fn();
+    render(<YouTubePlayer onStateChange={onStateChange} />);
+    await settle();
+
+    FakePlayer.last?.emit(1);
+    FakePlayer.last?.emit(2);
+    expect(onStateChange).toHaveBeenNthCalledWith(1, true);
+    expect(onStateChange).toHaveBeenNthCalledWith(2, false);
   });
 });
