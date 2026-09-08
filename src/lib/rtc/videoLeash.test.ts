@@ -8,6 +8,7 @@ import {
   FULL_VIDEO,
   leashFor,
   leashSenders,
+  sameSettings,
   LEAN_VIDEO,
   type EncodingLike,
   type SenderLike,
@@ -350,5 +351,43 @@ describe("a browser that refuses the degradation preference", () => {
       }),
     };
     await expect(applyLeash(sender, FULL_VIDEO)).resolves.toBe(false);
+  });
+});
+
+/**
+ * The encoder must be left alone unless the answer has actually changed.
+ *
+ * The route is derived from a live RTT measurement that wobbles by tens of
+ * milliseconds between polls. Treating every wobble as a new route re-applied
+ * setParameters to a running encoder every few seconds, which forces a
+ * reconfiguration and a keyframe each time -- bandwidth spent re-describing a
+ * picture that had not changed, on a link already too small for the call.
+ */
+describe("sameSettings", () => {
+  it("recognises two identical budgets", () => {
+    expect(sameSettings(FULL_VIDEO, { ...FULL_VIDEO })).toBe(true);
+  });
+
+  it("sees through routes that differ but decide the same thing", () => {
+    // 266ms and 352ms are both "relayed, slow, over TCP". The measurement
+    // moved; the decision did not, so the encoder must not be touched.
+    const noisy = (netRttMs: number) => budgetFor("full", {
+      relayed: true,
+      relayProtocol: "tcp",
+      netRttMs,
+    });
+    expect(sameSettings(noisy(266), noisy(352))).toBe(true);
+  });
+
+  it("still notices a real change of budget", () => {
+    const relayed = budgetFor("full", { relayed: true, relayProtocol: "tcp", netRttMs: 300 });
+    const direct = budgetFor("full", { relayed: false, relayProtocol: null, netRttMs: 20 });
+    expect(sameSettings(relayed, direct)).toBe(false);
+  });
+
+  it("compares every field that reaches the encoder", () => {
+    expect(sameSettings(FULL_VIDEO, { ...FULL_VIDEO, maxBitrateBps: 1 })).toBe(false);
+    expect(sameSettings(FULL_VIDEO, { ...FULL_VIDEO, maxFramerate: 1 })).toBe(false);
+    expect(sameSettings(FULL_VIDEO, { ...FULL_VIDEO, scaleResolutionDownBy: 4 })).toBe(false);
   });
 });

@@ -27,7 +27,10 @@ import {
 } from "./diagnostics";
 import {
   applyAudioPriority,
+  budgetFor,
   leashSenders,
+  sameSettings,
+  type LeashSettings,
   type RouteQuality,
   type VideoMode,
 } from "./videoLeash";
@@ -237,6 +240,11 @@ export function usePeerConnection(
   // people try to sing in time with each other, so it doubles as the answer to
   // "is anyone duetting" that the buffer policy needs.
   const modeRef = useRef<VideoMode>("full");
+  // What the encoder and the buffers were last actually told. The route is
+  // recomputed from a wobbling measurement every three seconds; these are what
+  // stop that wobble from being handed to a running encoder as if it were news.
+  const appliedLeash = useRef<LeashSettings | null>(null);
+  const appliedTargets = useRef<string | null>(null);
   const jitterRef = useRef<JitterSample | null>(null);
   const audioRef = useRef<AudioSample | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -668,14 +676,18 @@ export function usePeerConnection(
     modeRef.current = mode;
     const pc = pcRef.current;
     if (!pc) return;
-    void leashSenders(pc.getSenders(), mode, routeRef.current);
     // Karaoke is the one activity where two people try to sing in time with
     // each other, and that wants the shortest buffer it can survive rather than
     // the steadiest one. Opening or closing it changes the answer, so the
     // buffers are retuned here and not only when the route moves.
-    for (const receiver of receiversRef.current) {
-      tuneReceiver(receiver, routeRef.current, mode === "lean");
-    }
+    applyRouteDecisions(
+      pc,
+      routeRef.current,
+      mode,
+      receiversRef.current,
+      appliedLeash,
+      appliedTargets,
+    );
   }, []);
 
   /**
@@ -690,10 +702,14 @@ export function usePeerConnection(
     routeRef.current = route;
     const pc = pcRef.current;
     if (pc === null || route === null) return;
-    void leashSenders(pc.getSenders(), modeRef.current, route);
-    for (const receiver of receiversRef.current) {
-      tuneReceiver(receiver, route, modeRef.current === "lean");
-    }
+    applyRouteDecisions(
+      pc,
+      route,
+      modeRef.current,
+      receiversRef.current,
+      appliedLeash,
+      appliedTargets,
+    );
   }, [route]);
 
   /**
@@ -738,6 +754,8 @@ export function usePeerConnection(
     offeredRef.current = false;
     pendingIce.current = [];
     receiversRef.current = [];
+    appliedLeash.current = null;
+    appliedTargets.current = null;
     setRoute(null);
     jitterRef.current = null;
     audioRef.current = null;
@@ -764,6 +782,8 @@ export function usePeerConnection(
     offeredRef.current = false;
     pendingIce.current = [];
     receiversRef.current = [];
+    appliedLeash.current = null;
+    appliedTargets.current = null;
     setRoute(null);
     setRemoteStream(null);
     setPath(null);
@@ -834,6 +854,47 @@ function cancelRecovery(
   if (timer.current === null) return;
   clearTimeout(timer.current);
   timer.current = null;
+}
+
+/**
+ * Applies the route's consequences to the senders and receivers -- but only the
+ * ones that actually changed.
+ *
+ * This guard is the whole point of the function. The route is recomputed from a
+ * live RTT measurement on every stats poll, three seconds apart, and that
+ * measurement wobbles by tens of milliseconds. Two consecutive readings almost
+ * always describe the same relayed, slow, TCP-carried path: the same decision,
+ * reached again.
+ *
+ * Handing that to the encoder anyway is expensive in a way that is invisible
+ * from here. setParameters on a running sender reconfigures it and costs a
+ * keyframe, so a wobbling measurement became a keyframe every three seconds,
+ * forever, on a link already too small for the call -- and anything else
+ * sharing that link, such as a film being buffered from YouTube, is what pays
+ * for it. Comparing the RESULT rather than the measurement is what stops that.
+ */
+function applyRouteDecisions(
+  pc: RTCPeerConnection,
+  route: RouteQuality | null,
+  mode: VideoMode,
+  receivers: readonly RTCRtpReceiver[],
+  appliedLeash: { current: LeashSettings | null },
+  appliedTargets: { current: string | null },
+): void {
+  const budget = budgetFor(mode, route);
+  if (appliedLeash.current === null || !sameSettings(appliedLeash.current, budget)) {
+    appliedLeash.current = budget;
+    void leashSenders(pc.getSenders(), mode, route);
+  }
+
+  // The buffers get the same treatment, keyed on the two targets they resolve
+  // to rather than on the route that produced them.
+  const duetting = mode === "lean";
+  const targets = `${jitterTargetMs("audio", route, duetting)}/${jitterTargetMs("video", route, duetting)}`;
+  if (appliedTargets.current !== targets) {
+    appliedTargets.current = targets;
+    for (const receiver of receivers) tuneReceiver(receiver, route, duetting);
+  }
 }
 
 /**

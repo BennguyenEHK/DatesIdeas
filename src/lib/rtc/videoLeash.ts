@@ -69,6 +69,31 @@ export function leashFor(mode: VideoMode): LeashSettings {
 }
 
 /**
+ * Whether two budgets would tell the encoder exactly the same thing.
+ *
+ * The route these are derived from carries a live RTT measurement, and that
+ * measurement wobbles by tens of milliseconds from one poll to the next. Two
+ * readings a hundred milliseconds apart routinely describe the same relayed,
+ * slow, TCP-carried path -- the same decision, reached twice.
+ *
+ * Acting on the second one is not free. setParameters on a running sender
+ * reconfigures the encoder and costs a keyframe, and a keyframe every few
+ * seconds is a bandwidth spike repeated forever on a link that was already too
+ * small for the call. Anything else sharing that link -- a film being buffered
+ * from YouTube, for instance -- pays for it.
+ *
+ * So the comparison is on what actually reaches the encoder, not on the
+ * measurement it was computed from.
+ */
+export function sameSettings(a: LeashSettings, b: LeashSettings): boolean {
+  return (
+    a.maxBitrateBps === b.maxBitrateBps &&
+    a.scaleResolutionDownBy === b.scaleResolutionDownBy &&
+    a.maxFramerate === b.maxFramerate
+  );
+}
+
+/**
  * Selects a sender budget from the activity and the path actually carrying
  * media. Until ICE has identified that path, retaining the established budget
  * avoids reacting to an incomplete snapshot.
