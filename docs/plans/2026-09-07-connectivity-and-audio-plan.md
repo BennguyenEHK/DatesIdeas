@@ -119,13 +119,18 @@ singing. It is real and provable from the spec, but it is a DIFFERENT bug from
 the dropout, and folding it in now would muddy the one measurement B1b exists to
 take. Fix it after B1c, on its own.
 
-- [ ] **B2** Own the input chain: re-acquire the mic with all processing off
+- [x] **B2** DONE 2026-09-08. Own the input chain: re-acquire the mic with all processing off
       rather than trying to turn it off afterwards.
-- [ ] **B3** Web Audio compressor/limiter into a `MediaStreamDestination`, and
+- [ ] **B3** NOT DONE, and possibly not needed. Web Audio compressor/limiter into a `MediaStreamDestination`, and
       send *that* track. Our limiter, not the browser's AGC.
-- [ ] **B4** Visible input meter with a clip indicator, so the failure is
+- [x] **B4** DONE as part of B1a. The meter is in the report (`Input level: peak 0.50, 7 dropouts`) rather than on screen, which is what caught this. Visible input meter with a clip indicator, so the failure is
       something you can see instead of something you infer after the evening.
-- [ ] **B5** Verify by singing the songs that used to break it.
+- [ ] **B5** OWNER: Ben. Verify by singing the songs that used to break it.
+      Acceptance is in the report and needs no interpretation: `Settled as:`
+      should read `aec off, ns off, agc off` and `Requested but refused:` should
+      read `nothing`. If it still refuses on a freshly opened device the fault
+      is below the browser, and the voiceIsolation request is what addresses it.
+      The number that actually matters is the dropout count going to zero.
 
 ---
 
@@ -242,3 +247,22 @@ Karaoke video holds 640x360 at ~500 kbps: the lean leash is working.
 - Movie and cards video ran at 2427-4583 kbps against a FULL_VIDEO cap of
   2500 kbps. 4583 is 83% over. Either the leash is not landing or the figure
   includes retransmits and probing. Needs checking before trusting the cap.
+
+
+## Status 2026-09-08
+
+B2 shipped: karaoke opens a second microphone with the profile decided at the
+device and replaces the sender's track with it. Retuning a live track was never
+capable of working, and the telemetry proved it rather than suggesting it.
+
+B3 is left open deliberately. It was written when the cause was unknown, and a
+compressor was one of three guesses. The cause turned out to be the browser's
+own suppression, which B2 removes at the source -- so a limiter would now be
+solving a problem that may no longer exist. Decide it on B5's numbers, not in
+advance.
+
+C3 is still blocked, but only on B5 rather than on the whole of B: once the
+singing profile is confirmed to apply, the live-music profile is the same
+mechanism with a higher bitrate.
+
+Still owned by Ben: **B5**, **C4**, **D4**.
