@@ -44,7 +44,7 @@ So the goal is never latency. The goal is **stability at a fixed 250 ms**:
       null) and two read `Activity: unknown`. Add: which ICE list was used and
       whether it was degraded, and whether a UDP relay candidate was ever
       *gathered* rather than merely selected.
-- [ ] **A6** Capture one fresh report and confirm the jitter band narrowed.
+- [x] **A6** DONE. Capture one fresh report and confirm the jitter band narrowed.
       This is the acceptance test for the whole phase.
       **OWNER: Ben, not Claude.** It needs a real call with K and cannot be
       faked from here. Press the report button a few times mid-call and paste
@@ -80,7 +80,7 @@ Root cause is not yet confirmed; B1 is a diagnosis step, not an assumption.
       - `tuneMicrophone` returns that evidence instead of discarding it.
       - The pasteable report gained a MICROPHONE block and three notes.
 
-- [ ] **B1b** OWNER: Ben. Sing the songs that break it, then paste the report.
+- [x] **B1b** DONE. OWNER: Ben. Sing the songs that break it, then paste the report.
       The measurement is taken from the raw MediaStream through Web Audio,
       which sits AFTER all capture processing and BEFORE the encoder. That
       single vantage point splits the problem in half:
@@ -92,8 +92,17 @@ Root cause is not yet confirmed; B1 is a diagnosis step, not an assumption.
       The `Requested but refused:` line and the voice-isolation note then
       choose between the remaining hypotheses directly.
 
-- [ ] **B1c** Confirm the root cause from that evidence. Ranked
-      hypotheses:
+- [x] **B1c** CONFIRMED 2026-09-07 from real reports. **Hypothesis 1 was right.**
+      Every karaoke report says, in the app's own words:
+          Settled as: aec on, ns on, agc on, stereo, 48000Hz
+          Requested but refused: noiseSuppression, autoGainControl
+      `applyConstraints` cannot switch off noise suppression or automatic gain
+      on a live track. The singing profile has NEVER applied. Karaoke has always
+      run the microphone processing built for speech -- and noise suppression is
+      built to remove a sustained tone, which is exactly what a held note is.
+      The same reports show 1 to 7 dropouts, measured before the encoder, so the
+      signal was already gone at capture. Codec and network are ruled out.
+      The original ranked hypotheses, kept for the record:
       1. `applyConstraints` silently fails to change audio processing on a live
          track (`micProfile.ts` swallows every failure by design), so the
          headphone profile has never actually applied and singing has always
@@ -210,3 +219,26 @@ by Claude, since all three phases would otherwise have collided in them.
 
 Still owned by Ben: **A6** (call report), **B1b** (sing the high notes),
 **C4** (real instrument), **D4** (chat vs film bandwidth).
+
+
+---
+
+## Evidence from the 2026-09-07 evening (A6 + B1b)
+
+**Connectivity is transformed.** Every report now reads `Route: direct`,
+`Candidate types: srflx / srflx`, `Reflexive candidate: yes`,
+`Relay transports gathered: tcp, tls, udp`, `TURN credentials: ok`. The earlier
+"no reflexive candidate, relayed over TCP" sessions were a property of the
+network on that night, not of this app. A1 and A5 are what made this legible.
+
+RTT sits at 247-260 ms, exactly the Pacific floor predicted at the start, with
+one 511 ms excursion. It is not going lower and nothing here should try.
+
+Karaoke video holds 640x360 at ~500 kbps: the lean leash is working.
+
+**Open, from the same data:**
+- Audio jitter still spikes to 480-1038 ms on a DIRECT route with 0.0% loss.
+  A4 asks for a stable 180 ms and is not getting it. Worth a second look.
+- Movie and cards video ran at 2427-4583 kbps against a FULL_VIDEO cap of
+  2500 kbps. 4583 is 83% over. Either the leash is not landing or the figure
+  includes retransmits and probing. Needs checking before trusting the cap.

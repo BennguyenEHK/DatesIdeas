@@ -69,9 +69,27 @@ describe("formatReport", () => {
     expect(r).toContain("Relay transports gathered: unknown");
   });
   it("reports no activity when no activity is open", () => expect(formatReport(empty)).toContain("Activity: none"));
-  it("explains held and reordered packets when jitter is high without loss", () => {
-    const r = formatReport({ ...empty, rates: { videoUpKbps: null, videoDownKbps: null, audioUpKbps: null, audioDownKbps: null, audioLossPct: 0.5 }, audioJitterMs: 401 });
-    expect(r).toContain("heavy delay with almost no packet loss means packets are being held and reordered rather than dropped - a signature of a TCP-based relay, not a congested network");
+  const heldBackRates = { videoUpKbps: null, videoDownKbps: null, audioUpKbps: null, audioDownKbps: null, audioLossPct: 0.5 };
+  const topologyWith = (relayed: boolean) => ({ relayed, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: true, hasRelay: true, relayProtocols: [] }, pairStates: {} });
+
+  it("blames the relay for held and reordered packets, when there is a relay", () => {
+    const r = formatReport({ ...empty, topology: topologyWith(true), rates: heldBackRates, audioJitterMs: 401 });
+    expect(r).toContain("a signature of a TCP-based relay");
+  });
+
+  it("does NOT blame a relay on a direct route", () => {
+    // Only a relay can hold packets back and hand them over in order. Saying
+    // this about a direct connection sent a real debugging session hunting a
+    // TCP relay that was not in the path at all.
+    const r = formatReport({ ...empty, topology: topologyWith(false), rates: heldBackRates, audioJitterMs: 401 });
+    expect(r).not.toContain("TCP-based relay");
+    expect(r).toContain("on a DIRECT route");
+  });
+
+  it("says nothing at all when the delay is ordinary", () => {
+    const r = formatReport({ ...empty, topology: topologyWith(true), rates: heldBackRates, audioJitterMs: 100 });
+    expect(r).not.toContain("held and reordered");
+    expect(r).not.toContain("on a DIRECT route");
   });
   it("adds the no-reflexive note", () => expect(formatReport({ ...empty, topology: { relayed: false, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: false, hasRelay: false, relayProtocols: [] }, pairStates: {} } })).toContain("NOTE: no reflexive candidate"));
   it("shows both channel states, since a song and a button do not travel together", () => {

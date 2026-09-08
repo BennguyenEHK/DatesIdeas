@@ -175,7 +175,11 @@ export function readTopology(stats: StatsLike): Topology | null {
     remoteType: str(remote?.candidateType),
     localAddress: address(local),
     remoteAddress: address(remote),
-    protocol: str(chosen.protocol),
+    // Read from the candidate, not the pair. RTCIceCandidatePairStats has no
+    // protocol field at all, so asking the pair for one always answered null --
+    // which is why a healthy direct UDP route described its transport as
+    // "unknown" and looked like a gap in the measurement rather than a bug.
+    protocol: str(local?.protocol) ?? str(chosen.protocol),
     relayProtocol: localType === "relay" ? str(local?.relayProtocol) : null,
     availableOutgoingKbps: outgoing === null ? null : outgoing / 1000,
     gathering: {
@@ -334,7 +338,7 @@ export function formatReport(input: ReportInput): string {
         ? "nothing"
         : input.mic.unmet.join(", ")
     }`,
-    `Constraint error: ${input.mic === null ? "none" : text(input.mic.error)}`,
+    `Constraint error: ${input.mic?.error ?? "none"}`,
     `Input level: ${input.mic === null ? "not opened" : input.mic.level}`,
   ];
 
@@ -347,8 +351,18 @@ export function formatReport(input: ReportInput): string {
   if (topology !== null && !topology.gathering.hasReflexive) {
     lines.push("NOTE: no reflexive candidate - this network hid our public address, so a direct connection was never possible.");
   }
-  if (rates?.audioLossPct !== null && rates?.audioLossPct !== undefined && rates.audioLossPct < 1.0 && input.audioJitterMs !== null && input.audioJitterMs > 400) {
+  const heldBack =
+    rates?.audioLossPct !== null &&
+    rates?.audioLossPct !== undefined &&
+    rates.audioLossPct < 1.0 &&
+    input.audioJitterMs !== null &&
+    input.audioJitterMs > 400;
+  // Only a relay can hold packets back and deliver them in order. Saying this
+  // about a direct route sent us hunting a TCP relay that was not there.
+  if (heldBack && topology?.relayed === true) {
     lines.push("NOTE: heavy delay with almost no packet loss means packets are being held and reordered rather than dropped - a signature of a TCP-based relay, not a congested network.");
+  } else if (heldBack) {
+    lines.push("NOTE: heavy delay with almost no packet loss on a DIRECT route - nothing is dropping the audio, so it is being buffered. Either the path briefly stalled or the receiver is holding more than it needs.");
   }
   // The three microphone findings, each of which points somewhere different.
   if (input.mic !== null && input.mic.unmet.length > 0) {
