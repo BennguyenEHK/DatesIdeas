@@ -928,3 +928,104 @@ describe("a film on a connection that cannot keep up", () => {
     expect(moves(p.calls)).toBe(1);
   });
 });
+
+/**
+ * The reported fault, and the reason `started` exists at all.
+ *
+ * Position is stamped when play() is CALLED, and no player begins then -- it
+ * fetches, decodes and spins up. Shared time keeps running throughout, so by
+ * the time the film genuinely starts the clock says it should already be
+ * seconds further on. The old design read that as drift and answered it with a
+ * jump, which is a film being moved when it was already exactly right.
+ */
+describe("a film that has only just started", () => {
+  const sent: PeerMessage[] = [];
+  beforeEach(() => {
+    sent.length = 0;
+  });
+  const send = (m: PeerMessage) => sent.push(m);
+  const lastMedia = () =>
+    [...sent].reverse().find((m) => m.t === "media") as
+      | Extract<PeerMessage, { t: "media" }>
+      | undefined;
+
+  it("re-stamps shared time instead of moving the film", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+
+    act(() => result.current.load(film("abc"), 0));
+    act(() => result.current.playPause());
+    p.calls.length = 0;
+
+    // Three seconds of fetching and decoding, during which the film has not
+    // moved because it has not begun.
+    act(() => void vi.advanceTimersByTime(3000));
+    p.setTime(0);
+    act(() => result.current.started());
+
+    // The film is left exactly where it is: no seek, no nudge.
+    expect(p.calls.some((c) => c.startsWith("seek") || c.startsWith("nudge"))).toBe(false);
+    // And the truth both sides share is the moment it really began.
+    expect(lastMedia()?.positionSec).toBe(0);
+    expect(lastMedia()?.playing).toBe(true);
+  });
+
+  it("does not re-stamp when the other side started it", () => {
+    // Their play, their stamp. Publishing our own start-up delay over theirs
+    // would have the two of us chasing each other for the length of the film.
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+
+    act(() =>
+      result.current.accept({
+        t: "media",
+        videoId: "abc",
+        source: "youtube",
+        durationSec: null,
+        positionSec: 30,
+        playing: true,
+        atSharedTime: Date.now(),
+      }),
+    );
+    sent.length = 0;
+    act(() => void vi.advanceTimersByTime(3000));
+    act(() => result.current.started());
+
+    expect(lastMedia()).toBeUndefined();
+  });
+
+  it("says nothing when the film is not running", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+    act(() => result.current.load(film("abc"), 0));
+    sent.length = 0;
+    act(() => result.current.started());
+    expect(lastMedia()).toBeUndefined();
+  });
+
+  it("only absorbs the start, not every later hiccup", () => {
+    // The flag is spent on the first genuine start. A stall thirty minutes in
+    // is real drift and must still be corrected, not published as truth.
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+
+    act(() => result.current.load(film("abc"), 0));
+    act(() => result.current.playPause());
+    act(() => void vi.advanceTimersByTime(3000));
+    p.setTime(0);
+    act(() => result.current.started());
+
+    // Immediately, so no heartbeat can fire and be mistaken for a re-stamp.
+    sent.length = 0;
+    act(() => result.current.started());
+    expect(lastMedia()).toBeUndefined();
+  });
+});

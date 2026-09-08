@@ -1180,7 +1180,7 @@ export function RoomClient({ code }: { code: string }) {
                     // by a different amount on each machine. This is the first
                     // instant the resulting error exists to be measured, and
                     // without it nothing looked again for up to two seconds.
-                    onStarted={media.correct}
+                    onStarted={media.started}
                     onError={setFileError}
                   />
                 ) : stage === "waiting" ? (
@@ -1209,7 +1209,7 @@ export function RoomClient({ code }: { code: string }) {
                     ref={setPlayer}
                     // The one thing that stops a film's own start-up delay
                     // being mistaken for drift and answered with a seek.
-                    onStarted={media.correct}
+                    onStarted={media.started}
                     onError={setVideoError}
                   />
                 ) : movie ? (
@@ -1223,7 +1223,7 @@ export function RoomClient({ code }: { code: string }) {
                       // both.
                       if (seconds !== null) media.reportDuration(seconds);
                     }}
-                    onStarted={media.correct}
+                    onStarted={media.started}
                     onError={setFileError}
                   />
                 ) : (

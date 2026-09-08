@@ -84,6 +84,15 @@ export interface SyncedPlayback {
    * begins, where this side is simply late and the other side is not wrong.
    */
   correct: () => void;
+  /**
+   * Playback has genuinely begun on this side.
+   *
+   * Distinct from `correct`, and the distinction is the whole point. A player
+   * that has just started is not a player that has drifted: it is exactly where
+   * it should be, and shared time has simply been running without it while it
+   * fetched and decoded. Correcting that is how a start-up delay became a jump.
+   */
+  started: () => void;
   clear: () => void;
   /** Feed inbound media messages here. */
   accept: (msg: PeerMessage) => void;
@@ -226,6 +235,15 @@ export function useSyncedPlayback(
     [broadcast],
   );
 
+  /**
+   * Whether the playback about to begin was asked for here.
+   *
+   * Only the side that pressed play may re-stamp shared time when its film
+   * actually starts. If both did, each would publish its own start-up delay as
+   * truth and the two would chase each other for the length of the film.
+   */
+  const iStartedPlay = useRef(false);
+
   const playPause = useCallback(() => {
     const cur = stateRef.current;
     if (!cur.videoId) return;
@@ -243,6 +261,9 @@ export function useSyncedPlayback(
       // put that local accommodation back before broadcasting shared truth.
       ? player.current.currentTime() + offsetRef.current
       : targetPosition(cur, now());
+    // Only when starting. A pause has no start-up delay to absorb, and leaving
+    // the flag set would let the next inbound play be re-stamped from here.
+    iStartedPlay.current = !cur.playing;
     broadcast(stateAt(cur, at, !cur.playing, now()));
   }, [broadcast, cancelRamp, now]);
 
@@ -402,12 +423,49 @@ export function useSyncedPlayback(
     }
   }, [cancelRamp, now, startRamp]);
 
+  /**
+   * Called the instant playback genuinely begins on this side.
+   *
+   * For the side that asked for it, this re-stamps shared time from where the
+   * film actually is rather than dragging the film to where the clock says it
+   * should be. That is the correction the old design could not express: a
+   * player two seconds into its own start-up has not drifted two seconds, and
+   * every attempt to "fix" it moved a film that was already right.
+   *
+   * The stamp is published rather than applied locally, because the other side
+   * is waiting on exactly this number -- it is what lets them start from the
+   * moment the film really began instead of the moment a button was pressed.
+   *
+   * For the following side there is nothing to publish, so this falls back to
+   * an ordinary correction: they genuinely do have to catch up to a stamp
+   * somebody else set.
+   */
+  const started = useCallback(() => {
+    const p = player.current;
+    const cur = stateRef.current;
+    if (!p?.isReady() || cur.videoId === null || !cur.playing) return;
+
+    if (!iStartedPlay.current) {
+      applyState();
+      return;
+    }
+    iStartedPlay.current = false;
+    cancelRamp();
+    // The local offset is a private accommodation for voice latency, so it has
+    // to come back off before this becomes shared truth.
+    broadcast(stateAt(cur, p.currentTime() + offsetRef.current, true, now()));
+  }, [applyState, broadcast, cancelRamp, now]);
+
+
   const accept = useCallback((msg: PeerMessage) => {
     if (msg.t !== "media") return;
     const cur = stateRef.current;
     if (cur.videoId !== msg.videoId || cur.source !== msg.source) cancelRamp();
     // Their film now, so their length is the one to measure against.
     iChose.current = false;
+    // Their message, so the playback beginning here is a response to theirs.
+    // Re-stamping from this side would publish our start-up delay over theirs.
+    iStartedPlay.current = false;
     const next: PlaybackState = {
       videoId: msg.videoId,
       source: msg.source,
@@ -465,6 +523,7 @@ export function useSyncedPlayback(
     playPause,
     resync,
     correct: applyState,
+    started,
     clear,
     accept,
   };
