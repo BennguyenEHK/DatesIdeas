@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePeerConnection } from "@/lib/rtc/usePeerConnection";
 import { useGestureDetection } from "@/lib/vision/useGestureDetection";
@@ -48,7 +48,7 @@ import { PhotoStrip } from "@/components/PhotoStrip";
 import { useBooth } from "@/lib/photo/useBooth";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
-import { tuneMicrophone, type TuneResult } from "@/lib/media/micProfile";
+import { useMicProfile } from "@/lib/media/useMicProfile";
 import { describeMic } from "@/lib/media/micState";
 import { describeLevel } from "@/lib/media/inputLevel";
 import type { MicReport } from "@/lib/rtc/diagnostics";
@@ -806,27 +806,47 @@ export function RoomClient({ code }: { code: string }) {
   // only thing stopping the microphone sending back a second copy of the song;
   // in a noisy room noise suppression goes back on, because otherwise the
   // canceller is left picking a voice out of a crowd and clamps down on both.
-  // Kept, because the answer is the evidence. Whether the singing profile
-  // actually took is the difference between "the microphone is mistuned" and
-  // "the microphone cannot be tuned from here at all", and those need opposite
-  // fixes. Until this was recorded, both looked identical from the outside.
-  const tuning = useRef<TuneResult | null>(null);
-  useEffect(() => {
-    let live = true;
-    void tuneMicrophone(peer.localStream, karaoke ? audio.mode : null, noisy).then(
-      (result) => {
-        if (live) tuning.current = result;
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [peer.localStream, karaoke, audio.mode, noisy]);
+  /**
+   * The microphone the call is actually sending.
+   *
+   * This used to retune the existing one with applyConstraints. A whole
+   * evening's telemetry showed why that never worked: every karaoke report came
+   * back saying "Requested but refused: noiseSuppression, autoGainControl".
+   * The browser decides a microphone's processing when the DEVICE IS OPENED and
+   * never again, so the singing profile was asked for and quietly ignored, and
+   * karaoke ran the processing built for speech -- which exists to remove a
+   * sustained tone, and a held note is a sustained tone.
+   *
+   * So a fresh microphone is opened with the profile baked in and swapped onto
+   * the sender. replaceTrack does that without renegotiating, so nothing drops.
+   */
+  const mic = useMicProfile({
+    sender: peer.audioSender,
+    mode: karaoke ? audio.mode : null,
+    noisy,
+    // A freshly opened microphone always arrives enabled. The hook that opened
+    // it is the only place that can put the switch back before it goes live.
+    enabled: peer.micOn,
+  });
+
+  /**
+   * What the level meter and the singing detector should listen to.
+   *
+   * The swapped track, once there is one: the original stream still holds the
+   * microphone the peer connection opened, and measuring that would report on a
+   * device no longer carrying the call.
+   */
+  const micStream = useMemo(() => {
+    if (mic.track === null || typeof MediaStream !== "function") {
+      return peer.localStream;
+    }
+    return new MediaStream([mic.track]);
+  }, [mic.track, peer.localStream]);
 
   // Who is actually singing, which is the only thing that can decide whose
   // music moves. Both sides run this, and each tells the other.
   const singing = useSingingTurn({
-    stream: peer.localStream,
+    stream: micStream,
     send: peer.send,
     enabled: karaoke,
   });
@@ -911,18 +931,17 @@ export function RoomClient({ code }: { code: string }) {
    * failed rather than that there was nothing yet to look at.
    */
   const micReport = useCallback((): MicReport | null => {
-    const tuned = tuning.current;
-    if (tuned === null) return null;
+    if (mic.settings === null && mic.error === null) return null;
     const level = singing.readLevel();
     return {
-      description: describeMic(tuned.settings),
-      unmet: tuned.unmet,
-      error: tuned.error,
+      description: describeMic(mic.settings),
+      unmet: mic.unmet,
+      error: mic.error,
       level: describeLevel(level),
       dropouts: level.gates,
-      voiceIsolation: tuned.settings?.voiceIsolation ?? null,
+      voiceIsolation: mic.settings?.voiceIsolation ?? null,
     };
-  }, [singing]);
+  }, [mic, singing]);
 
   const turn = singingTurn(singing.mine, singing.theirs);
 

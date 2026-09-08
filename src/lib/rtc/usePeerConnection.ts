@@ -127,6 +127,15 @@ export interface PeerApi {
   report: (activity: string | null, mic: MicReport | null) => string;
   /** Caps the outgoing camera, or lets it run free. */
   setVideoMode: (mode: VideoMode) => void;
+  /**
+   * The sender carrying this side's voice, so a caller can put a different
+   * microphone on it without renegotiating.
+   *
+   * Karaoke needs this because the browser decides a microphone's processing
+   * when the device is OPENED and never afterwards -- so a singing profile can
+   * only be had by opening a second microphone and replacing the track here.
+   */
+  audioSender: RTCRtpSender | null;
   /** Whether this side's microphone is currently sending anything. */
   micOn: boolean;
   /** Whether this side's camera is currently sending a picture. */
@@ -227,6 +236,7 @@ export function usePeerConnection(
   // state rather than a ref because both the camera budget and the jitter
   // buffers have to be re-applied when it changes, and ICE migrates mid-call.
   const [route, setRoute] = useState<RouteQuality | null>(null);
+  const [audioSender, setAudioSender] = useState<RTCRtpSender | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   // Every receiver this connection has produced, so a route change can retune
@@ -393,6 +403,9 @@ export function usePeerConnection(
         if (track.kind === "video") track.contentHint = "motion";
         pc.addTrack(track, localStream);
       }
+      setAudioSender(
+        pc.getSenders().find((s) => s.track?.kind === "audio") ?? null,
+      );
       setSending(true);
     } else {
       setSending(false);
@@ -665,6 +678,11 @@ export function usePeerConnection(
   const setMicOn = useCallback((on: boolean) => {
     setMicOnState(on);
     for (const track of streamRef.current?.getAudioTracks() ?? []) track.enabled = on;
+    // Deliberately only the stream's own tracks. During karaoke the sender is
+    // carrying a DIFFERENT microphone -- one opened separately so its
+    // processing could be chosen at the device -- and whoever put it there is
+    // responsible for keeping it in step with this switch. Two owners of one
+    // fact is how they end up disagreeing.
   }, []);
 
   const setCamOn = useCallback((on: boolean) => {
@@ -756,6 +774,7 @@ export function usePeerConnection(
     receiversRef.current = [];
     appliedLeash.current = null;
     appliedTargets.current = null;
+    setAudioSender(null);
     setRoute(null);
     jitterRef.current = null;
     audioRef.current = null;
@@ -784,6 +803,7 @@ export function usePeerConnection(
     receiversRef.current = [];
     appliedLeash.current = null;
     appliedTargets.current = null;
+    setAudioSender(null);
     setRoute(null);
     setRemoteStream(null);
     setPath(null);
@@ -822,6 +842,7 @@ export function usePeerConnection(
     onFileChunk,
     report,
     setVideoMode,
+    audioSender,
     micOn,
     camOn,
     setMicOn,
