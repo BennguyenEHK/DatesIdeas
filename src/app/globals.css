@@ -172,6 +172,12 @@ body {
 --------------------------------------------------------------------------- */
 .stage {
   width: 100%;
+  /* House lights sit at z-1 so they can shade the room furniture. The stage
+     must be a higher stacking context: a cinema dims the room around the
+     screen, never the film surface itself. Blackout remains above both at
+     z-50 when the evening ends. */
+  position: relative;
+  z-index: 2;
 }
 
 @media (min-width: 768px) {
@@ -226,6 +232,15 @@ body {
   animation: rise 900ms cubic-bezier(0.22, 1, 0.36, 1) 220ms both;
 }
 
+/* The room changes in one deliberate breath when transport changes. A CSS
+   transition lets the browser reverse from the opacity it is actually showing
+   when somebody pauses halfway down; a script-driven loop would either waste
+   work or snap through an invented intermediate state. */
+.house-lights {
+  transition-property: opacity;
+  transition-timing-function: linear;
+}
+
 :focus-visible {
   outline: 2px solid var(--lamp);
   outline-offset: 3px;
@@ -236,8 +251,10 @@ body {
   .bar-bottom,
   .rise,
   .rise-late,
-  .twinkle {
+  .twinkle,
+  .house-lights {
     animation: none !important;
+    transition: none !important;
   }
   /* The sign is simply already on. */
   .wordmark--hero::after {

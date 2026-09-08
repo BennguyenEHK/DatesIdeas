@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { encode, decode, MEME_IDS, type PeerMessage } from "./protocol";
+import { encode, decode, MEME_IDS, type PeerMessage , CHAT_MAX_CHARS } from "./protocol";
 
 describe("protocol", () => {
   const cases: PeerMessage[] = [
@@ -350,5 +350,55 @@ describe("ending", () => {
 
   it("rejects a missing field, which is neither", () => {
     expect(decode(JSON.stringify({ t: "ending" }))).toBeNull();
+  });
+});
+
+describe("chat", () => {
+  it("carries a line between two people", () => {
+    expect(decode(JSON.stringify({ t: "chat", id: "a1", text: "hi", at: 5 }))).toEqual({
+      t: "chat",
+      id: "a1",
+      text: "hi",
+      at: 5,
+    });
+  });
+
+  it("refuses a line with no id, because that is how repeats are spotted", () => {
+    expect(decode(JSON.stringify({ t: "chat", text: "hi", at: 5 }))).toBeNull();
+  });
+
+  it("refuses a line longer than the agreed limit", () => {
+    const tooLong = "x".repeat(CHAT_MAX_CHARS + 1);
+    expect(decode(JSON.stringify({ t: "chat", id: "a", text: tooLong, at: 1 }))).toBeNull();
+  });
+
+  it("accepts a line exactly at the limit", () => {
+    const exact = "x".repeat(CHAT_MAX_CHARS);
+    expect(decode(JSON.stringify({ t: "chat", id: "a", text: exact, at: 1 }))?.t).toBe("chat");
+  });
+
+  it("accepts an empty line rather than inventing a rule for it", () => {
+    expect(decode(JSON.stringify({ t: "chat", id: "a", text: "", at: 1 }))?.t).toBe("chat");
+  });
+});
+
+describe("live", () => {
+  it("names who has the stage", () => {
+    expect(decode(JSON.stringify({ t: "live", performer: "abc", showAt: 9 }))).toEqual({
+      t: "live",
+      performer: "abc",
+      showAt: 9,
+    });
+  });
+
+  it("treats null as handing the stage back", () => {
+    // Null is a real value here, exactly as it is for the ending countdown, so
+    // an absent field and a deliberate hand-back must not be confused.
+    expect(decode(JSON.stringify({ t: "live", performer: null, showAt: 9 }))).toEqual({
+      t: "live",
+      performer: null,
+      showAt: 9,
+    });
+    expect(decode(JSON.stringify({ t: "live", showAt: 9 }))).toBeNull();
   });
 });

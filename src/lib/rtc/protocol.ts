@@ -91,6 +91,19 @@ export type PeerMessage =
   // you may cancel it, which is the same authority you both already have over
   // the activity and the song.
   | { t: "ending"; endsAt: number | null }
+  // A line of chat, for watching a film together. Carries its own id so the
+  // two sides can agree about what has already been shown without either of
+  // them counting -- a message that crosses twice on a flaky channel must not
+  // appear twice on the screen.
+  | { t: "chat"; id: string; text: string; at: number }
+  // Who, if anyone, has the stage to play live.
+  //
+  // Separate from the karaoke activity rather than folded into it. Karaoke is
+  // two people singing to one backing track and is symmetric; this is one
+  // person performing and one person listening, which is the only shape a
+  // quarter-second of ocean actually permits. `performer` is null when the
+  // room is back to ordinary karaoke.
+  | { t: "live"; performer: string | null; showAt: number }
   | { t: "track-request"; url: string; requestId: string }
   // No lyrics field. The helper now fetches the video rather than its sound, and
   // the karaoke videos people paste already have the words burned into the
@@ -118,6 +131,9 @@ export type PeerMessage =
   // the other person does not have yet.
   | { t: "track-ready"; requestId: string }
   | { t: "track-error"; requestId: string; message: string };
+
+/** The longest chat line that will cross, and the longest one anyone may type. */
+export const CHAT_MAX_CHARS = 500;
 
 export function encode(m: PeerMessage): string {
   return JSON.stringify(m);
@@ -211,6 +227,21 @@ export function decode(raw: string): PeerMessage | null {
       // so an absent field and a cancellation must not be confused.
       return m.endsAt === null || isNum(m.endsAt)
         ? { t: "ending", endsAt: m.endsAt === null ? null : (m.endsAt as number) }
+        : null;
+    case "chat":
+      // Length is bounded here rather than at the input: the guard exists to
+      // stop a peer, not to stop a typist, and only this side's decoder is in
+      // a position to refuse.
+      return isStr(m.id) && isStr(m.text) && isNum(m.at) && m.text.length <= CHAT_MAX_CHARS
+        ? { t: "chat", id: m.id, text: m.text, at: m.at }
+        : null;
+    case "live":
+      return (m.performer === null || isStr(m.performer)) && isNum(m.showAt)
+        ? {
+            t: "live",
+            performer: m.performer === null ? null : (m.performer as string),
+            showAt: m.showAt,
+          }
         : null;
     case "track-request":
       return isStr(m.url) && isStr(m.requestId)
