@@ -127,9 +127,17 @@ export function RoomClient({ code }: { code: string }) {
   const acceptTrackLoading = useRef<((requestId: string) => void) | null>(null);
   const clearTrackLoading = useRef<((requestId: string) => void) | null>(null);
   const [videoError, setVideoError] = useState<number | null>(null);
-  // Local to this side, never sent. Starts below full because the reported
-  // problem was the backing track burying the other person's voice.
-  const [musicVolume, setMusicVolume] = useState(70);
+  // Local to this side, never sent. Starts low because the backing track burying
+  // the other person's voice is the reported problem, and 70 was not enough.
+  //
+  // Both sides hear the same song from their own copy of the video, at whatever
+  // volume they chose. The only thing crossing the link is the singing, and
+  // since the singing microphone stopped using automatic gain control that
+  // singing arrives about 14dB quieter than it used to -- measured, peak 0.50
+  // down to peak 0.10. The music did not get quieter to match, so it took over.
+  // Twenty-five is the level a duet actually sits on top of; the slider is
+  // right there for anyone who wants the room louder.
+  const [musicVolume, setMusicVolume] = useState(25);
   // Whether this room is loud. A separate question from where the song is
   // playing: in a noisy room the microphone processing that ruins singing is
   // the same processing keeping the singing audible at all.
@@ -820,10 +828,23 @@ export function RoomClient({ code }: { code: string }) {
    * So a fresh microphone is opened with the profile baked in and swapped onto
    * the sender. replaceTrack does that without renegotiating, so nothing drops.
    */
+  /**
+   * The microphone the peer connection itself opened, which this page does not
+   * own and must never stop -- only lend out and take back.
+   */
+  const originalMic = useMemo(
+    () => peer.localStream?.getAudioTracks()[0] ?? null,
+    [peer.localStream],
+  );
+
   const mic = useMicProfile({
     sender: peer.audioSender,
     mode: karaoke ? audio.mode : null,
     noisy,
+    // What to hand the call back when the singing stops. Without it the hook
+    // has nowhere to return the sender to, and its replacement microphone would
+    // have to stay open for the rest of the evening.
+    original: originalMic,
     // A freshly opened microphone always arrives enabled. The hook that opened
     // it is the only place that can put the switch back before it goes live.
     enabled: peer.micOn,

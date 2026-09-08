@@ -27,6 +27,18 @@ export type DuetRole = "anchor" | "follower" | "none";
 export const MAX_OFFSET_MS = 1000;
 
 /**
+ * The most jitter-buffer delay that may move the music, in milliseconds.
+ *
+ * A modest steady buffer is a real part of when the voice arrives and belongs
+ * in the offset. A much larger reading is a temporary stall while the browser
+ * covers congestion, not a new property of the route. Charging that entire
+ * stall to the backing track would make the song late once the audio recovers,
+ * so the diagnostics keep reporting the full reading while the music only
+ * follows this bounded contribution.
+ */
+export const MAX_JITTER_CONTRIBUTION_MS = 200;
+
+/**
  * How much the measured figure must move before the music follows it.
  *
  * Every change to the offset re-seeks the player, which rebuffers and clicks
@@ -96,10 +108,11 @@ export function offsetForDuet(
  * How late their voice actually arrives: half the round trip, plus however
  * long their audio is sitting in this browser's jitter buffer.
  *
- * The buffer matters as much as the network. It is audio the browser is
+ * A steady buffer matters as much as the network. It is audio the browser is
  * deliberately holding back to smooth out uneven arrivals, and it is invisible
  * to a round-trip measurement, which times a text message that never touches
- * it. Leaving it out understates the delay by most of its length on a bad link.
+ * it. A stall-sized buffer is deliberately bounded here: it belongs in the
+ * diagnostics, but must not rewrite where the song sits after the stall ends.
  */
 export function measuredLatencyMs(
   rttMs: number,
@@ -108,7 +121,7 @@ export function measuredLatencyMs(
   if (!Number.isFinite(rttMs) || rttMs <= 0) return null;
   const jitter =
     audioJitterMs !== null && Number.isFinite(audioJitterMs) && audioJitterMs > 0
-      ? audioJitterMs
+      ? Math.min(audioJitterMs, MAX_JITTER_CONTRIBUTION_MS)
       : 0;
   return Math.round(rttMs / 2 + jitter);
 }

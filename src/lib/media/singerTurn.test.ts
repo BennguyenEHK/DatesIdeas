@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_JITTER_CONTRIBUTION_MS,
   MAX_OFFSET_MS,
   OFFSET_STEP_MS,
   clampOffset,
@@ -31,6 +32,21 @@ describe("measuredLatencyMs", () => {
 
   it("treats a missing buffer reading as no buffer rather than no answer", () => {
     expect(measuredLatencyMs(140, null)).toBe(70);
+  });
+
+  it("counts a steady jitter buffer below the stall ceiling in full", () => {
+    expect(measuredLatencyMs(294, 150)).toBe(297);
+  });
+
+  it("charges no more than the bounded buffer contribution to the music offset", () => {
+    expect(measuredLatencyMs(294, 1058)).toBe(347);
+    expect(measuredLatencyMs(294, MAX_JITTER_CONTRIBUTION_MS)).toBe(347);
+  });
+
+  it("keeps missing, zero, and non-finite jitter readings equivalent to no buffer", () => {
+    for (const jitter of [null, 0, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(measuredLatencyMs(140, jitter)).toBe(70);
+    }
   });
 
   it("has no answer before the round trip has been measured", () => {

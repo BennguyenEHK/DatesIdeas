@@ -27,14 +27,17 @@ const params = (sdp: string) => {
 };
 
 describe("preferMusicAudio", () => {
-  it("raises the bitrate and turns on stereo", () => {
+  it("raises the bitrate and pins the voice to a single channel", () => {
     const out = preferMusicAudio(
       sdpWith(["a=rtpmap:111 opus/48000/2", "a=fmtp:111 minptime=10;useinbandfec=1"]),
     );
     const p = params(out);
-    expect(p.get("stereo")).toBe("1");
-    expect(p.get("sprop-stereo")).toBe("1");
-    expect(p.get("maxaveragebitrate")).toBe("128000");
+    // Mono is asked for rather than left to the default, because a browser is
+    // free to propose stereo and a microphone capsule has no second channel to
+    // fill -- so the encoder would be paid to carry a duplicate.
+    expect(p.get("stereo")).toBe("0");
+    expect(p.get("sprop-stereo")).toBe("0");
+    expect(p.get("maxaveragebitrate")).toBe("64000");
   });
 
   it("turns off discontinuous transmission", () => {
@@ -61,10 +64,10 @@ describe("preferMusicAudio", () => {
 
   it("overrides a conflicting value rather than appending a second one", () => {
     const out = preferMusicAudio(
-      sdpWith(["a=rtpmap:111 opus/48000/2", "a=fmtp:111 stereo=0;usedtx=1"]),
+      sdpWith(["a=rtpmap:111 opus/48000/2", "a=fmtp:111 stereo=1;usedtx=1"]),
     );
     const line = /^a=fmtp:111 (.*)$/m.exec(out)?.[1] ?? "";
-    expect(params(out).get("stereo")).toBe("1");
+    expect(params(out).get("stereo")).toBe("0");
     // A duplicated key is undefined behaviour; there must be exactly one.
     expect(line.match(/stereo=/g)).toHaveLength(2); // stereo= and sprop-stereo=
     expect(line.match(/(^|;)stereo=/g)).toHaveLength(1);
@@ -73,7 +76,7 @@ describe("preferMusicAudio", () => {
   it("adds a parameter line when Opus was offered without one", () => {
     const out = preferMusicAudio(sdpWith(["a=rtpmap:111 opus/48000/2"]));
     expect(out).toContain("a=fmtp:111 ");
-    expect(params(out).get("maxaveragebitrate")).toBe("128000");
+    expect(params(out).get("maxaveragebitrate")).toBe("64000");
   });
 
   it("inserts its line with the ending the rest of the SDP uses", () => {
@@ -96,7 +99,7 @@ describe("preferMusicAudio", () => {
       ["m=audio 9 UDP/TLS/RTP/SAVPF 96", "a=rtpmap:96 opus/48000/2"].join(CRLF),
     );
     expect(out).toContain("a=fmtp:96 ");
-    expect(out).toContain("maxaveragebitrate=128000");
+    expect(out).toContain("maxaveragebitrate=64000");
   });
 
   it("leaves an SDP with no Opus completely alone", () => {

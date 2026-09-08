@@ -38,6 +38,38 @@ function fakeSender() {
   return { sender, replaceTrack };
 }
 
+/**
+ * Enough Web Audio for the real boost stage to build a graph, so the hook is
+ * tested on the path that actually reaches a call rather than the jsdom path
+ * where boostMic declines and hands the raw track straight back.
+ */
+function stubWebAudio(processed: MediaStreamTrack) {
+  const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
+  const close = vi.fn(() => Promise.resolve());
+  vi.stubGlobal("MediaStream", class {});
+  vi.stubGlobal(
+    "AudioContext",
+    class {
+      state = "running";
+      createMediaStreamSource = () => node();
+      createDynamicsCompressor = () => ({
+        ...node(),
+        threshold: { value: 0 },
+        knee: { value: 0 },
+        ratio: { value: 0 },
+        attack: { value: 0 },
+        release: { value: 0 },
+      });
+      createGain = () => ({ ...node(), gain: { value: 0 } });
+      createMediaStreamDestination = () => ({
+        stream: { getAudioTracks: () => [processed] } as MediaStream,
+      });
+      close = close;
+    },
+  );
+  return { close };
+}
+
 describe("useMicProfile", () => {
   it("does not open a microphone before there is an audio sender", () => {
     const source = fakeSource([fakeTrack()]);
@@ -60,7 +92,7 @@ describe("useMicProfile", () => {
     const source = fakeSource([track]);
     const { sender, replaceTrack } = fakeSender();
     const { result } = renderHook(() =>
-      useMicProfile({ sender, mode: null, noisy: false, source }),
+      useMicProfile({ sender, mode: "headphones", noisy: false, source }),
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(track));
@@ -95,6 +127,112 @@ describe("useMicProfile", () => {
     rerender({ mode: "speakers" });
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(second));
     expect(first.stop).toHaveBeenCalledOnce();
+  });
+
+  it("opens no microphone at all for ordinary talking", async () => {
+    // The peer connection already opened one tuned for speech. Opening a second
+    // almost identical to it ran two captures on one device all evening.
+    const source = fakeSource([fakeTrack()]);
+    const { sender, replaceTrack } = fakeSender();
+    const original = fakeTrack();
+
+    renderHook(() =>
+      useMicProfile({ sender, mode: null, noisy: false, original, source }),
+    );
+
+    await Promise.resolve();
+    expect(source.getUserMedia).not.toHaveBeenCalled();
+    expect(replaceTrack).not.toHaveBeenCalled();
+  });
+
+  it("hands the call's own microphone back when the singing ends", async () => {
+    const singing = fakeTrack();
+    const source = fakeSource([singing]);
+    const { sender, replaceTrack } = fakeSender();
+    const original = fakeTrack();
+
+    const { rerender } = renderHook(
+      ({ mode }: { mode: AudioMode | null }) =>
+        useMicProfile({ sender, mode, noisy: false, original, source }),
+      { initialProps: { mode: "headphones" as AudioMode | null } },
+    );
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(singing));
+    rerender({ mode: null });
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(original));
+    // Only the one this hook opened, and only after the original is back.
+    expect(singing.stop).toHaveBeenCalledOnce();
+    expect(original.stop).not.toHaveBeenCalled();
+  });
+
+  it("keeps the singing microphone when there is nothing to restore", async () => {
+    // A sender carrying this hook's only track must never be left with none:
+    // the wrong profile is a worse-sounding call, no track is a silent one.
+    const singing = fakeTrack();
+    const source = fakeSource([singing]);
+    const { sender, replaceTrack } = fakeSender();
+
+    const { rerender } = renderHook(
+      ({ mode }: { mode: AudioMode | null }) =>
+        useMicProfile({ sender, mode, noisy: false, original: null, source }),
+      { initialProps: { mode: "headphones" as AudioMode | null } },
+    );
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(singing));
+    rerender({ mode: null });
+
+    await act(async () => {});
+    expect(replaceTrack).toHaveBeenCalledTimes(1);
+    expect(singing.stop).not.toHaveBeenCalled();
+  });
+
+  it("sends the processed track and mutes the captured one", async () => {
+    // The switch has to act on the microphone, not on the graph's output:
+    // disabling the far end of the graph would leave the device recording
+    // behind a control that says it is off.
+    const captured = fakeTrack();
+    const processed = fakeTrack();
+    stubWebAudio(processed);
+    const source = fakeSource([captured]);
+    const { sender, replaceTrack } = fakeSender();
+
+    const { result } = renderHook(() =>
+      useMicProfile({
+        sender,
+        mode: "headphones",
+        noisy: false,
+        enabled: false,
+        source,
+      }),
+    );
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(processed));
+    expect(result.current.track).toBe(processed);
+    expect(captured.enabled).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("closes the processing graph when the singing ends", async () => {
+    const captured = fakeTrack();
+    const { close } = stubWebAudio(fakeTrack());
+    const source = fakeSource([captured]);
+    const { sender, replaceTrack } = fakeSender();
+    const original = fakeTrack();
+
+    const { rerender } = renderHook(
+      ({ mode }: { mode: AudioMode | null }) =>
+        useMicProfile({ sender, mode, noisy: false, original, source }),
+      { initialProps: { mode: "headphones" as AudioMode | null } },
+    );
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
+    rerender({ mode: null });
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(original));
+    expect(close).toHaveBeenCalled();
+    expect(captured.stop).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
   });
 
   it("reopens when room noise resolves to a different profile", async () => {
@@ -136,7 +274,7 @@ describe("useMicProfile", () => {
     const source = fakeSource([track]);
     const { sender, replaceTrack } = fakeSender();
     const { unmount } = renderHook(() =>
-      useMicProfile({ sender, mode: null, noisy: false, source }),
+      useMicProfile({ sender, mode: "headphones", noisy: false, source }),
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(track));

@@ -56,10 +56,13 @@ const overTcp = (relayProtocol: string | null): boolean =>
 /**
  * Milliseconds to request, or null to leave the browser's own default.
  *
- * A zero target is helpful only on a direct, fast route. On a relay or a slow
- * direct path it asks the browser to run without the margin it needs, so the
- * browser repeatedly grows and drains the buffer instead of keeping one stable
- * amount of delay. Duetting trims that stable margin, but never removes it.
+ * A zero target is helpful on a direct route, regardless of how far away its
+ * other end is. Round-trip time measures distance, not variation: a distant
+ * direct path with steady arrivals has no relay-sized jitter problem to solve.
+ * A relay still needs its stable margin, because asking it for nothing makes
+ * the browser repeatedly grow and drain the buffer instead of holding one
+ * dependable amount of delay. Duetting trims that relay margin, but never
+ * removes it.
  */
 export function jitterTargetMs(
   kind: BufferKind,
@@ -68,9 +71,7 @@ export function jitterTargetMs(
 ): number | null {
   if (route === null) return null;
 
-  if (!route.relayed && (route.netRttMs === null || route.netRttMs <= 150)) {
-    return 0;
-  }
+  if (!route.relayed) return 0;
 
   const base = kind === "audio" ? AUDIO_JITTER_TARGET_MS : VIDEO_JITTER_TARGET_MS;
   const extra =

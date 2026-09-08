@@ -6,7 +6,6 @@ import {
   jitterTargetMs,
   MAX_JITTER_TARGET_MS,
   TCP_RELAY_EXTRA_MS,
-  VIDEO_JITTER_TARGET_MS,
 } from "./jitterBuffer";
 import type { BufferRoute, ReceiverLike } from "./jitterBuffer";
 
@@ -28,18 +27,17 @@ describe("jitterTargetMs", () => {
     expect(jitterTargetMs("video", null, true)).toBeNull();
   });
 
-  it("keeps the zero-length request for fast direct routes", () => {
-    expect(jitterTargetMs("audio", direct(null), false)).toBe(0);
-    expect(jitterTargetMs("video", direct(150), false)).toBe(0);
+  it("keeps a direct route at zero regardless of distance or duet mode", () => {
+    for (const kind of ["audio", "video"] as const) {
+      for (const duetting of [false, true]) {
+        expect(jitterTargetMs(kind, direct(292), duetting)).toBe(0);
+      }
+    }
   });
 
-  it("uses stable positive targets for slow direct routes", () => {
-    expect(jitterTargetMs("audio", direct(151), false)).toBe(
-      AUDIO_JITTER_TARGET_MS,
-    );
-    expect(jitterTargetMs("video", direct(300), false)).toBe(
-      VIDEO_JITTER_TARGET_MS,
-    );
+  it("keeps a direct route at zero while its RTT is unknown", () => {
+    expect(jitterTargetMs("audio", direct(null), false)).toBe(0);
+    expect(jitterTargetMs("video", direct(null), true)).toBe(0);
   });
 
   it("uses stable positive targets for UDP and TCP relays", () => {
@@ -54,8 +52,8 @@ describe("jitterTargetMs", () => {
     );
   });
 
-  it("substantially shortens every bad-route target while duetting", () => {
-    for (const route of [direct(300), relay("udp"), relay("tcp")]) {
+  it("substantially shortens every relay target while duetting", () => {
+    for (const route of [relay("udp"), relay("tcp")]) {
       for (const kind of ["audio", "video"] as const) {
         const ordinary = jitterTargetMs(kind, route, false);
         const duetting = jitterTargetMs(kind, route, true);
@@ -70,8 +68,8 @@ describe("jitterTargetMs", () => {
     }
   });
 
-  it("caps an extreme finite RTT at the sane maximum", () => {
-    expect(jitterTargetMs("audio", direct(1_000_000), false)).toBe(
+  it("caps an extreme relay RTT at the sane maximum", () => {
+    expect(jitterTargetMs("audio", { ...relay("tcp"), netRttMs: 1_000_000 }, false)).toBe(
       MAX_JITTER_TARGET_MS,
     );
   });
@@ -86,8 +84,13 @@ describe("jitterTargetMs", () => {
     }
   });
 
-  it("never lowers a target as a route becomes worse", () => {
-    const routes = [direct(null), direct(150), direct(151), relay("udp"), relay("tcp"), direct(1_000_000)];
+  it("never lowers a relay target as the relay route becomes worse", () => {
+    const routes = [
+      { ...relay("udp"), netRttMs: null },
+      relay("udp"),
+      relay("tcp"),
+      { ...relay("tcp"), netRttMs: 1_000_000 },
+    ];
 
     for (const kind of ["audio", "video"] as const) {
       for (const duetting of [false, true]) {
@@ -153,11 +156,11 @@ describe("a relay reached over TCP", () => {
 
   it("still respects the maximum", () => {
     const far: BufferRoute = { relayed: true, relayProtocol: "tcp", netRttMs: 9_000 };
-    expect(jitterTargetMs("video", far, false)).toBeLessThanOrEqual(MAX_JITTER_TARGET_MS);
+    expect(jitterTargetMs("video", far, false)).toBe(MAX_JITTER_TARGET_MS);
   });
 
   it("does not surcharge a direct route that merely reports a protocol", () => {
     const oddly: BufferRoute = { relayed: false, relayProtocol: "tcp", netRttMs: 300 };
-    expect(jitterTargetMs("audio", oddly, false)).toBe(AUDIO_JITTER_TARGET_MS);
+    expect(jitterTargetMs("audio", oddly, false)).toBe(0);
   });
 });

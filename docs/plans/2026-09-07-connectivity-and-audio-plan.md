@@ -121,11 +121,21 @@ take. Fix it after B1c, on its own.
 
 - [x] **B2** DONE 2026-09-08. Own the input chain: re-acquire the mic with all processing off
       rather than trying to turn it off afterwards.
-- [ ] **B3** NOT DONE, and possibly not needed. Web Audio compressor/limiter into a `MediaStreamDestination`, and
-      send *that* track. Our limiter, not the browser's AGC.
+- [x] **B3** DONE 2026-09-08, and B5 is what decided it. Web Audio compressor into a
+      `MediaStreamDestination`, and send *that* track. Our compressor, not the
+      browser's AGC. Turning AGC off is what stopped the high notes cutting
+      out, and it also cost about 14dB: the session peak fell from 0.50 to
+      0.10, which is what "her voice is submerged" means. A slow 350ms release
+      is the whole difference from the AGC it replaces -- longer than any
+      vibrato cycle, so a held note passes at one steady gain instead of
+      swelling. `src/lib/media/micGain.ts`.
 - [x] **B4** DONE as part of B1a. The meter is in the report (`Input level: peak 0.50, 7 dropouts`) rather than on screen, which is what caught this. Visible input meter with a clip indicator, so the failure is
       something you can see instead of something you infer after the evening.
-- [ ] **B5** OWNER: Ben. Verify by singing the songs that used to break it.
+- [x] **B5** PASSED 2026-09-08, on Ben's own reports. Five karaoke reports across
+      fifteen minutes, every one of them: `Settled as: aec off, ns off, agc off`
+      and `Requested but refused: nothing`, with no dropout clause printed at
+      all -- `inputLevel.ts` only prints one above zero. Seven dropouts became
+      none. The original acceptance, kept for the record:
       Acceptance is in the report and needs no interpretation: `Settled as:`
       should read `aec off, ns off, agc off` and `Requested but refused:` should
       read `nothing`. If it still refuses on a freshly opened device the fault
@@ -249,7 +259,7 @@ Karaoke video holds 640x360 at ~500 kbps: the lean leash is working.
   includes retransmits and probing. Needs checking before trusting the cap.
 
 
-## Status 2026-09-08
+## Status 2026-09-08 (morning)
 
 B2 shipped: karaoke opens a second microphone with the profile decided at the
 device and replaces the sender's track with it. Retuning a live track was never
@@ -266,3 +276,68 @@ singing profile is confirmed to apply, the live-music profile is the same
 mechanism with a higher bitrate.
 
 Still owned by Ben: **B5**, **C4**, **D4**.
+
+
+## Status 2026-09-08 (evening) -- B5 passed, and told us three new things
+
+The microphone fix works. Five reports, zero dropouts, the profile applying
+exactly as asked. B2, B3, B4 and B5 are all closed.
+
+What B5 also produced was the first honest measurement of what the fix cost,
+and three follow-ups shipped in the same wave.
+
+**1. The voice got quiet.** Peak 0.50 -> 0.10 is the price of switching off
+automatic gain control, and it is why the other person sounded "submerged" and
+sometimes "filtered". Two things follow from it, and both are now fixed: B3's
+compressor gives the level back without the pumping, and the karaoke music
+slider now starts at 25 instead of 70. The music was never buried in the
+microphone -- both people hear their own copy of it locally -- it was simply
+louder than a voice that had lost 14dB.
+
+There is a second consequence worth writing down, because it will bite again if
+anyone re-tunes these numbers. `useSingingTurn` decides whose music moves using
+`SINGING_ON_RMS = 0.06` and `SINGING_OFF_RMS = 0.03`. A session whose LOUDEST
+moment is 0.10 sits barely above them, so on a quiet, slow song the detector
+flickers mid-verse. The level meter now reads the processed track, which is
+what actually restores the margin those thresholds assume.
+
+**2. We were charging the delay twice.** `measuredLatencyMs` is `rtt/2 + jitter`
+and its result shifts the follower's backing track. So every millisecond in the
+jitter buffer was paid once as late audio and once as displaced music. A real
+report caught it: 1058ms of buffer on a DIRECT route with 0.0% loss, which is
+congestion queuing rather than a property of the link, and it would have dragged
+the song by the full `MAX_OFFSET_MS`. The jitter contribution to the music
+offset is now capped at 200ms. The diagnostics still print the true figure --
+that number is how this was found.
+
+**3. A direct route was being given a relay-sized buffer.** `jitterTargetMs`
+returned 0 only when `!relayed && rtt <= 150`. St Paul to Surabaya is direct at
+~292ms, so it failed that gate and took the relay margin. RTT measures distance;
+a jitter buffer absorbs variance. A far-away direct path with steady arrivals
+has no variance problem, and 0.0% loss said so. Non-relayed routes return 0
+again at any RTT; every relay behaviour is untouched.
+
+**And the fix had left a microphone running.** `useMicProfile` resolved ordinary
+talking to `SPEECH_AUDIO` and opened a second device for it, from the moment the
+call connected, karaoke or not -- alongside the one the peer connection already
+had. Two captures on one device all evening. That is the likeliest reason the
+device settled at 44100Hz where it used to report 48000Hz. Talking now opens
+nothing and hands the call's own microphone back instead.
+
+**Audio bitrate halved.** The SDP asked Opus for `stereo=1` at 128kbps. A single
+microphone capsule has nothing to put in a second channel, so half of that was
+a duplicate -- on a link measured at 84% utilisation, with the buffer already
+ballooning. Now mono at 64kbps. FEC and no-DTX stay; those were the parts of
+that change that fixed "filtered" in the first place.
+
+### Still owned by Ben
+
+**C4** and **D4**, plus a retest of this wave. What to look for next time:
+
+- `Audio jitter:` on karaoke should sit far below the 155-177ms it read before,
+  because a direct route now asks for no buffer at all.
+- `Input level: peak` should be roughly 0.3, not 0.10.
+- `Audio up/down` should read about 64 kbps, not 128.
+- `Settled as:` should say `48000Hz` again, now that only one device is open.
+- And the ear test that matters more than any of them: whether K still sounds
+  submerged, and whether the song still feels late.

@@ -1,19 +1,43 @@
 /**
- * Asks Opus for music instead of speech.
+ * Asks Opus for a singing voice instead of a speaking one.
  *
- * WebRTC negotiates audio for a phone call by default: mono, around 32kbps,
- * with discontinuous transmission that clips the start of quiet sounds. Every
- * one of those choices is right for talking and wrong for singing — it is
- * exactly the thin, band-limited voice people describe as "filtered".
+ * WebRTC negotiates audio for a phone call by default: around 32kbps, with
+ * discontinuous transmission that clips the start of quiet sounds. Both are
+ * right for talking and wrong for singing — they are exactly the thin,
+ * band-limited voice people describe as "filtered".
+ *
+ * What it does NOT need is a second channel. The fix for "filtered" is the
+ * bitrate and the transmission settings below; stereo was included with them
+ * once and turned out to be the expensive half of a change whose cheap half did
+ * all the work.
  *
  * Rewriting the offer is the only place these can be set; there is no API for
  * it. The parameters are merged into whatever the browser already proposed
  * rather than replacing the line, so nothing else it negotiated is lost.
  */
 const MUSIC_PARAMS: Record<string, string> = {
-  stereo: "1",
-  "sprop-stereo": "1",
-  maxaveragebitrate: "128000",
+  // Mono, and asked for explicitly rather than by omission.
+  //
+  // This used to ask for stereo, on the reasoning that music deserves two
+  // channels. It does -- but the thing being encoded here is never music. It is
+  // one person singing into one microphone capsule, and a capsule has nothing to
+  // put in a second channel. The device reports two because the capture request
+  // asks for two, so the encoder was being handed a duplicate and charged for
+  // carrying it.
+  //
+  // A real evening's telemetry says what that cost: audio ran at 128 kbps in
+  // both directions while the uplink headroom fell to 752 kbps and video was
+  // already taking 500. Nothing was lost -- 0.0% -- but the jitter buffer
+  // ballooned past a second, which is what a queue does before it starts
+  // dropping. Half of that audio was a copy of the other half.
+  stereo: "0",
+  "sprop-stereo": "0",
+  // Twice the ~32kbps WebRTC negotiates for a phone call, which is what made
+  // the voice sound thin and band-limited, and half what was being spent on
+  // carrying it in duplicate. Mono Opus is transparent for a solo voice here,
+  // so this buys back real headroom on a link measured at 84% utilisation
+  // without giving up anything anybody can hear.
+  maxaveragebitrate: "64000",
   // Forward error correction: a lost packet is filled in rather than dropped,
   // which matters far more for a held note than for a syllable.
   useinbandfec: "1",
