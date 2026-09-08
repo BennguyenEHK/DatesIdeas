@@ -34,7 +34,7 @@ import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
 import { useKaraokeHelper } from "@/lib/karaoke/useKaraokeHelper";
 import { useTrackTransfer, type ReceivedTrack } from "@/lib/karaoke/useTrackTransfer";
 import { MoviePanel } from "@/components/MoviePanel";
-import { ChatBox } from "@/components/ChatBox";
+import { ChatBubble } from "@/components/ChatBubble";
 import { HouseLights } from "@/components/HouseLights";
 import { LiveToggle } from "@/components/LiveToggle";
 import { PerformerStage } from "@/components/PerformerStage";
@@ -1205,7 +1205,13 @@ export function RoomClient({ code }: { code: string }) {
                     </p>
                   </div>
                 ) : stage === "youtube" ? (
-                  <YouTubePlayer ref={setPlayer} onError={setVideoError} />
+                  <YouTubePlayer
+                    ref={setPlayer}
+                    // The one thing that stops a film's own start-up delay
+                    // being mistaken for drift and answered with a seek.
+                    onStarted={media.correct}
+                    onError={setVideoError}
+                  />
                 ) : movie ? (
                   <LocalFilePlayer
                     ref={setPlayer}
@@ -1217,6 +1223,7 @@ export function RoomClient({ code }: { code: string }) {
                       // both.
                       if (seconds !== null) media.reportDuration(seconds);
                     }}
+                    onStarted={media.correct}
                     onError={setFileError}
                   />
                 ) : (
@@ -1251,7 +1258,7 @@ export function RoomClient({ code }: { code: string }) {
         </main>
 
         {/* Bottom letterbox bar */}
-        <footer className="bar-bottom bg-[var(--letterbox)] px-5 py-3">
+        <footer className="bar-bottom relative bg-[var(--letterbox)] px-5 py-3">
           <ConnectionStatus
             state={peer.state}
             path={peer.path}
@@ -1319,17 +1326,17 @@ export function RoomClient({ code }: { code: string }) {
             />
           )}
 
-          {/* A whisper in a dark room, in the bar rather than over the picture.
-              Only during a film: the karaoke evening already has both of you
-              singing at each other, and does not need a second channel. */}
+          {/* A whisper in a dark room. A bulb in the corner of the bar rather
+              than a panel across it: the film is what the evening is for, and a
+              conversation that is not happening should not be taking room from
+              it. Only during a film -- the karaoke evening already has both of
+              you singing at each other and does not need a second channel. */}
           {movie && (
-            <div className="mt-3">
-              <ChatBox
-                lines={chat}
-                onSend={onSendChat}
-                ready={peer.state === "connected"}
-              />
-            </div>
+            <ChatBubble
+              lines={chat}
+              onSend={onSendChat}
+              ready={peer.state === "connected"}
+            />
           )}
 
           {karaoke && (
