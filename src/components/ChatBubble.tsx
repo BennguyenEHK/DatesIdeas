@@ -80,12 +80,19 @@ export function ChatBubble({
 
   return (
     /* Anchored to the bar's own box rather than to the viewport, and stretched
-       across it, so every child can be capped with max-w-full and nothing is
-       able to reach past the edge. The previous version sized itself with
-       calc(100vw - 2rem), and 100vw INCLUDES the vertical scrollbar -- so on a
-       scrolling page the panel was wider than the room it actually had, which
-       is the horizontal scrollbar that appeared the moment it opened. */
-    <div className="pointer-events-none absolute bottom-full left-0 right-0 z-30 mb-4 flex flex-col items-end gap-2">
+       across it, so every child can be capped with max-w-full. The old version
+       sized itself with calc(100vw - 2rem), and 100vw INCLUDES the vertical
+       scrollbar, so on a scrolling page the panel was wider than the room it
+       actually had.
+
+       Held 40px clear of the right-hand edge rather than flush against it, and
+       that inset is load-bearing rather than taste. The bulb's bloom is drawn
+       at inset-[-7px] -- deliberately OUTSIDE the button, which is what makes
+       it read as light rather than as a border -- so a bulb sitting flush at
+       right-0 spills its glow past the viewport and the browser grows the
+       document sideways to contain it. The scrollbar was the glow, not the
+       panel. */
+    <div className="pointer-events-none absolute bottom-full left-0 right-10 z-30 mb-4 flex flex-col items-end gap-2">
       <AnimatePresence>
         {open && (
           <motion.div
