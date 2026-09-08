@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { selectPath } from "./path";
+import { RELAY_SLOW_RTT_MS, selectPath } from "./path";
 
 /**
  * The old reporter took the FIRST candidate pair whose state was "succeeded".
@@ -20,6 +20,7 @@ const relay = { type: "local-candidate", candidateType: "relay" };
 const srflx = { type: "local-candidate", candidateType: "srflx" };
 
 describe("selectPath", () => {
+  it("exports the shared slow-relay RTT threshold", () => expect(RELAY_SLOW_RTT_MS).toBe(150));
   it("follows the transport's selected pair rather than the first success", () => {
     const stats = makeStats({
       // Listed first, and succeeded — but not the one in use.

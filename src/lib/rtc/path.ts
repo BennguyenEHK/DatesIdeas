@@ -11,6 +11,9 @@ export interface PathInfo {
   remoteType: string | null;
 }
 
+/** This is the point above which a relayed round trip needs an honest explanation of both endpoints. */
+export const RELAY_SLOW_RTT_MS = 150;
+
 /** RTCStatsReport is Map-like. Only these two members are needed. */
 export interface StatsLike {
   values(): Iterable<Record<string, unknown>>;
