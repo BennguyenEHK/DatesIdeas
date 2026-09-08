@@ -78,7 +78,7 @@ export function ChatBox(props: {
           aria-label="Messages"
           aria-live="polite"
           aria-relevant="additions text"
-          className="max-h-28 min-h-8 space-y-1 overflow-y-auto pr-1 text-xs"
+          className="max-h-64 min-h-24 space-y-1 overflow-y-auto pr-1 text-xs"
         >
           {lines.length === 0 ? (
             <p className="py-0.5 text-[0.65rem] text-[var(--mist)]">A quiet line travels here.</p>

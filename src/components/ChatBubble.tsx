@@ -79,12 +79,18 @@ export function ChatBubble({
   const lit = unread > 0;
 
   return (
-    <div className="pointer-events-none absolute bottom-full right-0 z-30 mb-2 flex flex-col items-end gap-2">
+    /* Anchored to the bar's own box rather than to the viewport, and stretched
+       across it, so every child can be capped with max-w-full and nothing is
+       able to reach past the edge. The previous version sized itself with
+       calc(100vw - 2rem), and 100vw INCLUDES the vertical scrollbar -- so on a
+       scrolling page the panel was wider than the room it actually had, which
+       is the horizontal scrollbar that appeared the moment it opened. */
+    <div className="pointer-events-none absolute bottom-full left-0 right-0 z-30 mb-2 flex flex-col items-start gap-2">
       <AnimatePresence>
         {open && (
           <motion.div
             key="panel"
-            className="pointer-events-auto w-[min(20rem,calc(100vw-2rem))]"
+            className="pointer-events-auto w-[26rem] max-w-full"
             initial={reduceMotion ? false : { opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
@@ -100,7 +106,7 @@ export function ChatBubble({
           <motion.p
             key={toast.id}
             role="status"
-            className="pointer-events-none max-w-[min(18rem,calc(100vw-2rem))] truncate rounded-[6px] border-l-2 border-[var(--lamp)]/60 bg-[rgba(8,11,28,0.92)] px-3 py-1.5 text-xs text-[var(--cream)] shadow-[0_10px_30px_-18px_rgba(0,0,0,0.9)]"
+            className="pointer-events-none max-w-full truncate rounded-[6px] border-l-2 border-[var(--lamp)]/60 bg-[rgba(8,11,28,0.92)] px-3 py-1.5 text-xs text-[var(--cream)] shadow-[0_10px_30px_-18px_rgba(0,0,0,0.9)]"
             initial={reduceMotion ? false : { opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
