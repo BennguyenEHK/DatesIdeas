@@ -19,15 +19,46 @@
    Name      FestiBooth, set as the marquee sign over a booth
 --------------------------------------------------------------------------- */
 
-:root {
-  /* Ground — the Griffith Park sky, blue rather than black. */
-  --night: #131a38;
-  --dusk: #1e2148;
-  --letterbox: #080b1c;
+/* ---------------------------------------------------------------------------
+   The house lights.
 
-  /* Warmth — the streetlamp and the marquee. */
-  --lamp: #e8b94a;
-  --dress: #f2c230;
+   Registered rather than merely declared, because an unregistered custom
+   property is a string as far as the browser is concerned and strings do not
+   animate. @property gives it a type, and a typed custom property interpolates
+   like any other animatable value.
+
+   This replaces a full-screen overlay, and the reason is worth writing down.
+   An overlay covering the viewport necessarily covers the film too, and could
+   only stay off the picture by winning a stacking-context argument against it.
+   That left a full-viewport layer permanently on top of a video iframe, being
+   repainted every frame for the length of the fade. Dimming the room's own
+   colours instead means nothing is ever laid over the picture at all: the
+   surfaces darken because they are darker, not because something is in front
+   of them. It is also the more literal reading of the idea -- the theme's
+   colours get slowly darker -- and a cinema has never dimmed its screen.
+--------------------------------------------------------------------------- */
+@property --dim {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+:root {
+  /* Driven by the HouseLights component; absent means the lights are up. */
+  --dim: var(--dim-target, 0);
+  transition: --dim var(--dim-duration, 3000ms) linear;
+
+  /* Ground — the Griffith Park sky, blue rather than black. The dim factor is
+     folded in here so every surface built from these follows the room down. */
+  --night: color-mix(in srgb, #131a38, #000 calc(var(--dim) * 100%));
+  --dusk: color-mix(in srgb, #1e2148, #000 calc(var(--dim) * 100%));
+  --letterbox: color-mix(in srgb, #080b1c, #000 calc(var(--dim) * 100%));
+
+  /* Warmth — the streetlamp and the marquee. These dim too, but only halfway:
+     a cinema keeps its aisle lights on, and controls that vanished entirely
+     would leave somebody hunting for the pause button in the dark. */
+  --lamp: color-mix(in srgb, #e8b94a, #000 calc(var(--dim) * 50%));
+  --dress: color-mix(in srgb, #f2c230, #000 calc(var(--dim) * 50%));
 
   /* Decoration only. Fails text contrast on the night ground by design. */
   --neon: #c74b6d;
@@ -172,12 +203,6 @@ body {
 --------------------------------------------------------------------------- */
 .stage {
   width: 100%;
-  /* House lights sit at z-1 so they can shade the room furniture. The stage
-     must be a higher stacking context: a cinema dims the room around the
-     screen, never the film surface itself. Blackout remains above both at
-     z-50 when the evening ends. */
-  position: relative;
-  z-index: 2;
 }
 
 @media (min-width: 768px) {
@@ -232,15 +257,6 @@ body {
   animation: rise 900ms cubic-bezier(0.22, 1, 0.36, 1) 220ms both;
 }
 
-/* The room changes in one deliberate breath when transport changes. A CSS
-   transition lets the browser reverse from the opacity it is actually showing
-   when somebody pauses halfway down; a script-driven loop would either waste
-   work or snap through an invented intermediate state. */
-.house-lights {
-  transition-property: opacity;
-  transition-timing-function: linear;
-}
-
 :focus-visible {
   outline: 2px solid var(--lamp);
   outline-offset: 3px;
@@ -251,9 +267,12 @@ body {
   .bar-bottom,
   .rise,
   .rise-late,
-  .twinkle,
-  .house-lights {
+  .twinkle {
     animation: none !important;
+  }
+  /* The dark room is the feature; only the journey into it is optional, so
+     the lights still go down -- they simply arrive already down. */
+  :root {
     transition: none !important;
   }
   /* The sign is simply already on. */
