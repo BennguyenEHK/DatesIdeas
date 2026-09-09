@@ -78,6 +78,30 @@ export function isAnchor(
 }
 
 /**
+ * The duet role for two singers whose identities may not both be known yet.
+ *
+ * The anchor has to be settled before the arrangement means anything. Asking
+ * isAnchor with a missing identity answers "not the anchor", and BOTH sides
+ * get that same answer -- so both would take the follower's part and both
+ * would shift by the same amount. Equal shifts cancel exactly, which is the
+ * arithmetic at the top of this file: the two of you end up hearing precisely
+ * the gap you started with, having each spent a seek and a dip in the music
+ * to get nowhere.
+ *
+ * So an unknown peer is "none" rather than a guess. The turn logic keeps sole
+ * charge until hello has arrived, which is where it was doing fine anyway.
+ */
+export function duetRoleFor(
+  mine: boolean,
+  theirs: boolean,
+  myIdentity: string | null,
+  theirIdentity: string | null,
+): DuetRole {
+  if (myIdentity === null || theirIdentity === null) return "none";
+  return duetRole(mine, theirs, isAnchor(myIdentity, theirIdentity));
+}
+
+/**
  * Resolves the asymmetric roles a duet needs.
  *
  * When both sides sing, the sum of their perceived misalignments is always 2d

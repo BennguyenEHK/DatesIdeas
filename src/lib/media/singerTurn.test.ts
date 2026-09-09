@@ -5,6 +5,7 @@ import {
   OFFSET_STEP_MS,
   clampOffset,
   duetRole,
+  duetRoleFor,
   isAnchor,
   measuredLatencyMs,
   offsetForDuet,
@@ -159,6 +160,38 @@ describe("isAnchor", () => {
 
   it("does not choose an anchor when the identities are identical", () => {
     expect(isAnchor("same-peer", "same-peer")).toBe(false);
+  });
+});
+
+describe("duetRoleFor", () => {
+  it("gives the two known peers opposite parts", () => {
+    expect(duetRoleFor(true, true, "alice", "bob")).toBe("anchor");
+    expect(duetRoleFor(true, true, "bob", "alice")).toBe("follower");
+  });
+
+  it("stays out of the way until the peer has said hello", () => {
+    // Both sides would otherwise read "not the anchor", both take the
+    // follower's part, and both shift by the same amount -- which cancels.
+    expect(duetRoleFor(true, true, "alice", null)).toBe("none");
+    expect(duetRoleFor(true, true, null, "bob")).toBe("none");
+    expect(duetRoleFor(true, true, null, null)).toBe("none");
+  });
+
+  it("is none unless both are actually singing", () => {
+    expect(duetRoleFor(false, true, "alice", "bob")).toBe("none");
+    expect(duetRoleFor(true, false, "alice", "bob")).toBe("none");
+    expect(duetRoleFor(false, false, "alice", "bob")).toBe("none");
+  });
+
+  it("never makes both sides the anchor", () => {
+    for (const [a, b] of [["alice", "bob"], ["z", "a"], ["p1", "p2"]] as const) {
+      const roles = [
+        duetRoleFor(true, true, a, b),
+        duetRoleFor(true, true, b, a),
+      ];
+      expect(roles.filter((r) => r === "anchor")).toHaveLength(1);
+      expect(roles.filter((r) => r === "follower")).toHaveLength(1);
+    }
   });
 });
 

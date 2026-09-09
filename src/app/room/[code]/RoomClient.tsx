@@ -55,8 +55,7 @@ import type { MicReport } from "@/lib/rtc/diagnostics";
 import { useOutputMode } from "@/lib/media/outputDevice";
 import { useSingingTurn } from "@/lib/media/useSingingTurn";
 import {
-  duetRole,
-  isAnchor,
+  duetRoleFor,
   measuredLatencyMs,
   offsetForDuet,
   offsetForTurn,
@@ -986,12 +985,13 @@ export function RoomClient({ code }: { code: string }) {
   // Which part this side plays when BOTH of you are singing. `turn` cannot
   // answer that on its own: it reports "nobody" for two people singing
   // together and for two people saying nothing, and those want opposite
-  // offsets. Until the peer has said hello there is no anchor and this is
-  // "none", which leaves the turn logic in sole charge exactly as before.
-  const role = duetRole(
+  // offsets. An unknown peer answers "none" rather than guessing -- see
+  // duetRoleFor for why a guess costs both sides a seek and buys nothing.
+  const role = duetRoleFor(
     singing.mine,
     singing.theirs,
-    isAnchor(getIdentity(), theirIdentity),
+    getIdentity(),
+    theirIdentity,
   );
 
   // How late their voice arrives: half the round trip, plus however long their
