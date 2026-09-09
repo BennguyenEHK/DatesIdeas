@@ -48,6 +48,18 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
 }
 
 describe("transport-first karaoke controls", () => {
+  it("warns that speakers send the other person's room back through the mic", () => {
+    setup({ audioMode: "speakers" });
+    expect(screen.getByRole("note").textContent).toMatch(
+      /sends their voice and room back to them .* keep the volume down, or use headphones/i,
+    );
+  });
+
+  it("does not show the speaker warning with headphones", () => {
+    setup({ audioMode: "headphones" });
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
   it("shows the transport and choose-song action before a song is loaded", () => {
     setup({ videoId: null, playing: false });
     expect(screen.getByRole("button", { name: /choose song/i })).toBeTruthy();

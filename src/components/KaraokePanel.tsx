@@ -775,6 +775,16 @@ function Transport({
         <AudioSwitch audioMode={audioMode} audioAuto={audioAuto} onChoose={onChooseAudio} />
 
         <NoisyToggle noisy={noisy} onNoisy={onNoisy} />
+
+        {audioMode === "speakers" ? (
+          <p
+            role="note"
+            className="min-w-0 max-w-full flex-[1_1_16rem] text-[0.65rem] leading-tight text-[var(--mist)]"
+          >
+            On speakers your mic sends their voice and room back to them —
+            keep the volume down, or use headphones.
+          </p>
+        ) : null}
       </div>
 
       {/* A fetch outlives the picker that started it, so the wait has to be
@@ -811,9 +821,6 @@ function Transport({
         ) : (
           <>
             {turnStatus(turn)}
-            {audioMode === "speakers"
-              ? " On speakers, keep the volume moderate — the louder it is, the more of it your mic sends back."
-              : null}
           </>
         )}
       </p>

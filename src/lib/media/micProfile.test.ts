@@ -58,12 +58,14 @@ describe("audio profiles", () => {
 
   it("selects the headphones noisy profile", () => {
     expect(singingProfile("headphones", true)).toBe(HEADPHONE_NOISY_AUDIO);
+    expect(HEADPHONE_NOISY_AUDIO.autoGainControl).toBe(false);
+    expect(HEADPHONE_NOISY_AUDIO.noiseSuppression).toBe(true);
     expect(HEADPHONE_NOISY_AUDIO).toEqual({
       channelCount: { ideal: 1 },
       sampleRate: { ideal: 48000 },
       echoCancellation: false,
       noiseSuppression: true,
-      autoGainControl: true,
+      autoGainControl: false,
       voiceIsolation: false,
     });
   });
@@ -82,12 +84,14 @@ describe("audio profiles", () => {
 
   it("selects the speakers noisy profile", () => {
     expect(singingProfile("speakers", true)).toBe(SPEAKER_NOISY_AUDIO);
+    expect(SPEAKER_NOISY_AUDIO.autoGainControl).toBe(false);
+    expect(SPEAKER_NOISY_AUDIO.noiseSuppression).toBe(true);
     expect(SPEAKER_NOISY_AUDIO).toEqual({
       channelCount: { ideal: 1 },
       sampleRate: { ideal: 48000 },
       echoCancellation: true,
       noiseSuppression: true,
-      autoGainControl: true,
+      autoGainControl: false,
       voiceIsolation: false,
     });
   });

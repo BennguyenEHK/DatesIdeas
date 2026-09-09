@@ -6,9 +6,9 @@
  * pumps the level up and down across a held note — so a singing voice arrives
  * thin and gated. Turning them off is what makes quiet-room karaoke sound
  * like a person rather than a phone call. In a noisy room, noise suppression
- * and automatic gain keep the voice present over the room. Automatic gain
- * pumps across a held note, but that trade is accepted because a voice you can
- * hear beats a purer one buried under a room.
+ * keeps the room down and the compressor carries the voice level, so automatic
+ * gain is no longer needed. That avoids automatic-gain pumping across held
+ * notes and lifting room noise between phrases.
  *
  * How far the processing can come off depends on where the song is playing.
  * In headphones nothing but the voice reaches the microphone, so all of it can
@@ -109,28 +109,31 @@ export const SPEAKER_AUDIO: SingingConstraints = {
 
 /**
  * Singing in headphones in a noisy room. Echo cancellation can stay off
- * because the song cannot reach the microphone, while noise suppression and
- * gain keep the voice above the room.
+ * because the song cannot reach the microphone, while noise suppression keeps
+ * the room down. The compressor carries the vocal level, so automatic gain is
+ * no longer needed; leaving it off avoids pumping across held notes and
+ * lifting room noise between phrases.
  */
 export const HEADPHONE_NOISY_AUDIO: SingingConstraints = {
   ...CAPTURE_SHAPE,
   echoCancellation: false,
   noiseSuppression: true,
-  autoGainControl: true,
+  autoGainControl: false,
   voiceIsolation: false,
 };
 
 /**
  * Singing on speakers in a noisy room. Echo cancellation still has to stay on
- * to subtract the song, while noise suppression gives it a cleaner signal and
- * gain keeps the voice present over the room. Automatic gain pumps across a
- * held note, but a voice you can hear beats a purer one buried under a room.
+ * to subtract the song, while noise suppression gives it a cleaner signal.
+ * The compressor carries the vocal level, so automatic gain is no longer
+ * needed; leaving it off avoids pumping across held notes and lifting room
+ * noise between phrases.
  */
 export const SPEAKER_NOISY_AUDIO: SingingConstraints = {
   ...CAPTURE_SHAPE,
   echoCancellation: true,
   noiseSuppression: true,
-  autoGainControl: true,
+  autoGainControl: false,
   voiceIsolation: false,
 };
 

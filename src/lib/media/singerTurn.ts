@@ -60,6 +60,24 @@ export function singingTurn(mine: boolean, theirs: boolean): SingingTurn {
 }
 
 /**
+ * Chooses the duet anchor from the two peer identities.
+ *
+ * The comparison itself is arbitrary, but it must be stable across the evening
+ * and opposite on the two sides, so each peer reaches the same one-anchor
+ * arrangement without coordinating a separate choice. The anchor takes the
+ * worse seat during a duet because it never shifts its own music and therefore
+ * absorbs the full lag, so which side anchors is a fairness question rather
+ * than a technical one.
+ */
+export function isAnchor(
+  myIdentity: string | null,
+  theirIdentity: string | null,
+): boolean {
+  if (myIdentity === null || theirIdentity === null) return false;
+  return myIdentity < theirIdentity;
+}
+
+/**
  * Resolves the asymmetric roles a duet needs.
  *
  * When both sides sing, the sum of their perceived misalignments is always 2d

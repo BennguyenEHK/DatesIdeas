@@ -55,7 +55,10 @@ import type { MicReport } from "@/lib/rtc/diagnostics";
 import { useOutputMode } from "@/lib/media/outputDevice";
 import { useSingingTurn } from "@/lib/media/useSingingTurn";
 import {
+  duetRole,
+  isAnchor,
   measuredLatencyMs,
+  offsetForDuet,
   offsetForTurn,
   settledOffset,
   singingTurn,
@@ -141,12 +144,23 @@ export function RoomClient({ code }: { code: string }) {
   // Whether this room is loud. A separate question from where the song is
   // playing: in a noisy room the microphone processing that ruins singing is
   // the same processing keeping the singing audible at all.
-  const [noisy, setNoisy] = useState(false);
+  //
+  // Remembered, because it describes the room somebody sits in rather than
+  // anything about tonight. Starting fresh at false every reload is why a
+  // person in a genuinely loud room could spend an evening on the profile
+  // built for a silent one, sending their whole room down the call. Device
+  // local like every other switch here: it configures this microphone, so
+  // sharing it would let one person retune the other's.
+  const [noisy, setNoisy] = usePersistentToggle("datesidea.noisy-room", false);
   // What the other person last said about their own microphone and camera.
   // Assumed on until they say otherwise: a peer on a build that never sends
   // this should look like somebody whose devices are working, not like
   // somebody sitting in the dark.
   const [theirSwitches, setTheirSwitches] = useState({ mic: true, cam: true });
+  // Who is on the other end. Kept only so a duet can settle which side
+  // anchors: comparing the two identities is the one answer both sides can
+  // reach alone and still disagree about in the right direction.
+  const [theirIdentity, setTheirIdentity] = useState<string | null>(null);
   // Browsing for the next song. Local on purpose — opening the picker used to
   // clear the video through shared state, which cut the other person off
   // mid-verse just because you went looking for the next track.
@@ -264,6 +278,9 @@ export function RoomClient({ code }: { code: string }) {
         return;
       }
       if (msg.t === "hello") {
+        // Their name for the duet arrangement, which has to be decided before
+        // anybody sings rather than in the middle of the first chorus.
+        setTheirIdentity(msg.identity);
         // They have only just arrived, so they know nothing about the state of
         // this side's devices. Said once, on their arrival, rather than
         // repeated: nothing else here changes it without saying so.
@@ -966,6 +983,16 @@ export function RoomClient({ code }: { code: string }) {
   }, [mic, singing]);
 
   const turn = singingTurn(singing.mine, singing.theirs);
+  // Which part this side plays when BOTH of you are singing. `turn` cannot
+  // answer that on its own: it reports "nobody" for two people singing
+  // together and for two people saying nothing, and those want opposite
+  // offsets. Until the peer has said hello there is no anchor and this is
+  // "none", which leaves the turn logic in sole charge exactly as before.
+  const role = duetRole(
+    singing.mine,
+    singing.theirs,
+    isAnchor(getIdentity(), theirIdentity),
+  );
 
   // How late their voice arrives: half the round trip, plus however long their
   // audio is sitting in this browser's jitter buffer. Measured continuously,
@@ -1013,7 +1040,16 @@ export function RoomClient({ code }: { code: string }) {
   });
   useEffect(() => {
     if (!karaoke || manualOffset) return;
-    const wanted = offsetForTurn(turn, smoothLatency(latencySamples.current));
+    const latency = smoothLatency(latencySamples.current);
+    // Only ever one of the two is in force. duetRole answers "none" unless
+    // both microphones are live, and that is precisely the case singingTurn
+    // has no answer for -- so the two never both apply, and never both fail
+    // to. The follower's duet offset is the same figure the listening turn
+    // already uses, so joining in costs no seek at all; only the anchor moves.
+    const wanted =
+      role === "none"
+        ? offsetForTurn(turn, latency)
+        : offsetForDuet(role, latency);
     const next = settledOffset(offsetRef.current, wanted);
     if (next === offsetRef.current) return;
     if (!worthDucking((next - offsetRef.current) / 1000)) {
@@ -1021,7 +1057,7 @@ export function RoomClient({ code }: { code: string }) {
       return;
     }
     duck(() => setOffsetMs(next));
-  }, [karaoke, manualOffset, turn, duck]);
+  }, [karaoke, manualOffset, turn, role, duck]);
 
 
 

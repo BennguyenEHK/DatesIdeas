@@ -5,6 +5,7 @@ import {
   OFFSET_STEP_MS,
   clampOffset,
   duetRole,
+  isAnchor,
   measuredLatencyMs,
   offsetForDuet,
   offsetForTurn,
@@ -127,6 +128,37 @@ describe("duetRole", () => {
   it("returns anchor or follower when both sing, based on iAmAnchor", () => {
     expect(duetRole(true, true, true)).toBe("anchor");
     expect(duetRole(true, true, false)).toBe("follower");
+  });
+});
+
+describe("isAnchor", () => {
+  const identityPairs = [
+    ["alice", "bob"],
+    ["room-17-host", "room-17-guest"],
+    ["Zoe", "anna"],
+    ["peer:0009", "peer:0010"],
+  ] as const;
+
+  it("gives swapped peers opposite answers", () => {
+    for (const [first, second] of identityPairs) {
+      expect(isAnchor(first, second)).toBe(!isAnchor(second, first));
+    }
+  });
+
+  it("chooses exactly one anchor for distinct identities", () => {
+    for (const [first, second] of identityPairs) {
+      expect(Number(isAnchor(first, second)) + Number(isAnchor(second, first))).toBe(1);
+    }
+  });
+
+  it("waits until both identities are known", () => {
+    expect(isAnchor(null, "bob")).toBe(false);
+    expect(isAnchor("alice", null)).toBe(false);
+    expect(isAnchor(null, null)).toBe(false);
+  });
+
+  it("does not choose an anchor when the identities are identical", () => {
+    expect(isAnchor("same-peer", "same-peer")).toBe(false);
   });
 });
 
