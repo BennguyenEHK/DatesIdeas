@@ -101,7 +101,9 @@ export async function PUT(request: Request) {
   if (!stored) return NextResponse.json({ error: "could not confirm upload" }, { status: 409 });
   const item = await itemForClient({ id: body.id, pairId: pair.id, objectKey: body.objectKey, posterKey,
     kind: fields.kind, contentType: fields.contentType, bytes: fields.sizeBytes, happenedAt,
-    createdAt: new Date().toISOString(), caption: null, loved: false, sourceRoom: room });
+    createdAt: new Date().toISOString(), caption: null, loved: false, sourceRoom: room,
+    // Never paged from; this row is echoed straight back to the uploader.
+    cursor: "" });
   if (item === null) return unavailable();
   return NextResponse.json({ item });
 }
@@ -122,6 +124,12 @@ export async function GET(request: Request) {
   // at all has no way to find that out. Total failure still reports itself,
   // because that is storage being unreachable rather than one bad row.
   if (rows.length > 0 && items.length === 0) return unavailable();
-  const cursor = rows.reduce<string | null>((newest, item) => newest === null || item.createdAt > newest ? item.createdAt : newest, null);
+  // Paged on row.cursor, not row.createdAt. The two differ by microseconds and
+  // that difference is the whole thing: see AlbumItemRow.cursor. Both are
+  // Postgres-formatted UTC to the same width, so a string compare orders them.
+  const cursor = rows.reduce<string | null>(
+    (newest, item) => (newest === null || item.cursor > newest ? item.cursor : newest),
+    null,
+  );
   return NextResponse.json({ items, occasions, cursor });
 }

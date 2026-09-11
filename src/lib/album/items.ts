@@ -23,6 +23,22 @@ export interface AlbumItemRow {
   caption: string | null;
   loved: boolean;
   sourceRoom: string | null;
+  /**
+   * The paging cursor for this row, and deliberately NOT the same value as
+   * `createdAt`.
+   *
+   * Postgres keeps timestamptz to the microsecond; a JavaScript Date, and so
+   * every ISO string derived from one, stops at the millisecond. Feeding
+   * `createdAt` back as `since` therefore asks for rows after 13:06:51.404,
+   * and the row stored at 13:06:51.404567 answers yes -- forever. A poller
+   * would re-fetch the same photograph on every single pass and believe each
+   * time that something new had arrived.
+   *
+   * So this carries the full microsecond precision, formatted by Postgres and
+   * compared by Postgres, and it is treated as opaque everywhere else.
+   * `createdAt` remains what you show a person; this is what you page with.
+   */
+  cursor: string;
 }
 
 export interface InsertItem {
@@ -66,7 +82,10 @@ function readItem(value: unknown): AlbumItemRow | null {
   ) return null;
   return { id: row.id, pairId: row.pair_id, objectKey: row.object_key, posterKey: row.poster_key,
     kind: row.kind, contentType: row.content_type, bytes: size, happenedAt, createdAt,
-    caption: row.caption, loved: row.loved, sourceRoom: row.source_room };
+    caption: row.caption, loved: row.loved, sourceRoom: row.source_room,
+    // Absent on the paths that do not select it (insert echo, delete). Those
+    // callers never page, so an absent cursor is correct rather than missing.
+    cursor: typeof row.cursor === "string" ? row.cursor : createdAt };
 }
 
 function readOccasion(value: unknown): Occasion | null {
@@ -97,13 +116,16 @@ export function listItems(sql: QueryTag, pairId: string, since?: string | null):
 export async function listItems(sql: QueryTag, pairId: string, since?: string | null): Promise<AlbumItemRow[]> {
   const rows = since === null || since === undefined ? await sql`
     SELECT id, pair_id, object_key, poster_key, kind, content_type, bytes, happened_at,
-           caption, loved, source_room, created_at
+           caption, loved, source_room, created_at,
+           to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor
     FROM album_items WHERE pair_id = ${pairId}
     ORDER BY happened_at DESC LIMIT 500
   ` : await sql`
     SELECT id, pair_id, object_key, poster_key, kind, content_type, bytes, happened_at,
-           caption, loved, source_room, created_at
-    FROM album_items WHERE pair_id = ${pairId} AND created_at > ${since}
+           caption, loved, source_room, created_at,
+           to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor
+    FROM album_items
+    WHERE pair_id = ${pairId} AND created_at > ${since}::timestamptz
     ORDER BY happened_at DESC LIMIT 500
   `;
   return Array.isArray(rows) ? rows.map(readItem).filter((item): item is AlbumItemRow => item !== null) : [];

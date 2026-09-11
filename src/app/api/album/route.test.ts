@@ -106,6 +106,9 @@ describe("GET /api/album", () => {
       loved: false,
       source_room: null,
       created_at: new Date("2026-02-03T00:00:00.000Z"),
+      // Postgres keeps microseconds; a JS Date stops at milliseconds. The
+      // gap between these two values is the bug this row exists to pin.
+      cursor: "2026-02-03T00:00:00.000567Z",
     };
   }
 
@@ -151,7 +154,12 @@ describe("GET /api/album", () => {
     }));
     results = [[pair], [row("a", `album/${pair.id}/photo-a.jpg`)], []];
     const body = (await (await GET(authorized())).json()) as { cursor: string };
-    expect(body.cursor).toBe(new Date("2026-02-03T00:00:00.000Z").toISOString());
+    // Full microsecond precision, NOT the millisecond ISO string. Handing back
+    // the truncated value asks for "rows after .000", which the row stored at
+    // .000567 satisfies forever -- a poller would re-fetch the same photograph
+    // on every pass and think each time that something new had arrived.
+    expect(body.cursor).toBe("2026-02-03T00:00:00.000567Z");
+    expect(body.cursor).not.toBe(new Date("2026-02-03T00:00:00.000Z").toISOString());
   });
 
   it("refuses a cursor that is not a date", async () => {
