@@ -8,6 +8,23 @@ export interface AlbumUploadResult {
   error?: string;
 }
 
+/**
+ * This browser's push device id, when it has one.
+ *
+ * Sent with the confirm so the server can leave this device out of the push it
+ * is about to cause. Without it the phone you just took the photograph on
+ * buzzes in your hand to tell you that you took a photograph.
+ */
+function deviceHeader(): Record<string, string> {
+  try {
+    const id = localStorage.getItem("festibooth.device");
+    return id === null || id === "" ? {} : { "X-Device-Id": id };
+  } catch {
+    // A browser refusing storage simply gets told about its own snap.
+    return {};
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -161,7 +178,7 @@ export async function addToAlbum(
     };
     const confirmResponse = await fetchImpl("/api/album", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...deviceHeader() },
       body: JSON.stringify(confirm),
       signal: options.signal,
     });

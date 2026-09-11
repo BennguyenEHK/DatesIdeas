@@ -57,6 +57,15 @@ export async function presignKeepsake(
   key: string,
   contentType: string,
   config?: StorageConfig | null,
+  /**
+   * How long the download link should last, when the default is wrong.
+   *
+   * It is wrong in exactly one place: a link put inside a push notification.
+   * A push can sit on the service for hours before the phone comes back, and
+   * a picture signed for the length of a page view would be dead by the time
+   * anybody saw the notification carrying it.
+   */
+  downloadTtlSec?: number,
 ): Promise<PresignedPair | null> {
   const resolvedConfig = config === undefined ? storageConfig() : config;
   if (resolvedConfig === null) return null;
@@ -92,7 +101,7 @@ export async function presignKeepsake(
           // so disposition and type come from stored metadata set at PUT time.
           // The client, not this URL, therefore decides the download filename.
         }),
-        { expiresIn: DOWNLOAD_URL_TTL_SEC },
+        { expiresIn: downloadTtlSec ?? DOWNLOAD_URL_TTL_SEC },
       ),
     ]);
 

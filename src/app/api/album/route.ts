@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { db } from "@/lib/db";
 import { newShareId } from "@/lib/keepsakes/store";
 import { randomToken } from "@/lib/photo/keepsake";
@@ -10,6 +10,8 @@ import { albumExtension, albumKey, allowsContentType, isAlbumKey, needsPoster, p
 import { isAlbumKind, type AlbumItem, type AlbumKind } from "@/lib/album/types";
 import { clampHappenedAt, type PresignResponse } from "@/lib/album/wire";
 import { presignKeepsake } from "@/lib/storage/objects";
+import { devicesToNotify } from "@/lib/push/devices";
+import { sendToDevices, SNAP_PUSH_TTL_SEC } from "@/lib/push/send";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -115,6 +117,50 @@ export async function PUT(request: Request) {
     // Never paged from; this row is echoed straight back to the uploader.
     cursor: "" });
   if (item === null) return unavailable();
+
+  /*
+   * Ring the other phone, after the reply has already gone.
+   *
+   * `after` rather than an awaited call, and rather than a fire-and-forget
+   * promise: the upload is finished and the person is waiting on nothing, but
+   * a bare floating promise on a serverless function is killed the moment the
+   * response is flushed, so half the pushes would simply never be sent.
+   *
+   * Everything in here is allowed to fail quietly. The photograph is already
+   * saved; a notification that does not arrive is a smaller loss than an
+   * upload that reports failure because a push service was having a bad day.
+   */
+  const senderDevice = request.headers.get("x-device-id");
+  after(async () => {
+    try {
+      const devices = await devicesToNotify(sql, pair.id, senderDevice);
+      if (devices.length === 0) return;
+
+      // Signed for as long as the push may sit undelivered. The ten minutes a
+      // page view gets would expire long before a phone that was switched off
+      // came back to look at it.
+      const picture = await presignKeepsake(
+        posterKey ?? body.objectKey as string,
+        posterKey === null ? fields.contentType : POSTER_CONTENT_TYPE,
+        undefined,
+        SNAP_PUSH_TTL_SEC,
+      );
+
+      await sendToDevices(sql, devices, {
+        title: fields.kind === "video" || fields.kind === "recording" ? "A video note" : "A new snap",
+        body: "Tap to see it on the reel.",
+        image: picture?.downloadUrl ?? null,
+        url: "/album",
+        // One tag for all of them, so five snaps while a phone was in a
+        // pocket arrive as one line rather than as five.
+        tag: "festibooth-snap",
+      });
+    } catch {
+      // Nobody left to tell. An exception here would surface only as an
+      // unhandled rejection in a log nobody reads.
+    }
+  });
+
   return NextResponse.json({ item });
 }
 

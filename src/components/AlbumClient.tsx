@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { Wordmark } from "./Wordmark";
+import { NotificationToggle } from "./NotificationToggle";
 import { Projector } from "./Projector";
 import { Reel } from "./Reel";
 import { buildReel } from "@/lib/album/timeline";
 import { addToAlbum } from "@/lib/album/upload";
 import { posterFromVideo } from "@/lib/album/poster";
+import { clearSharedFiles, takeSharedFiles } from "@/lib/album/shared";
 import { moves, type AlbumItem, type AlbumKind, type Gear, type Occasion } from "@/lib/album/types";
 import type { ListResponse } from "@/lib/album/wire";
 
@@ -36,10 +39,10 @@ function viewerTimeZone(): string {
   }
 }
 
-/** What a picked file is, in the album's vocabulary. */
-function kindForFile(file: File): AlbumKind | null {
-  if (file.type.startsWith("image/")) return "photo";
-  if (file.type.startsWith("video/")) return "video";
+/** What a picked or shared file is, in the album's vocabulary. */
+function kindForType(type: string): AlbumKind | null {
+  if (type.startsWith("image/")) return "photo";
+  if (type.startsWith("video/")) return "video";
   return null;
 }
 
@@ -158,21 +161,21 @@ export function AlbumClient() {
     }
   }, []);
 
-  const add = useCallback(
-    async (chosen: FileList | null) => {
-      if (chosen === null || chosen.length === 0) return;
-      const files = Array.from(chosen);
+  const addFiles = useCallback(
+    async (files: { blob: Blob; type: string; lastModified: number }[]) => {
+      if (files.length === 0) return false;
+      let allSaved = true;
 
       // Sequential, not Promise.all. These are photographs and videos over a
       // phone's uplink; five at once is five that all crawl, and the person is
       // watching a counter either way.
       for (const [index, file] of files.entries()) {
-        const kind = kindForFile(file);
+        const kind = kindForType(file.type);
         if (kind === null) continue;
         setBusy(`Adding ${index + 1} of ${files.length}…`);
 
-        const poster = moves(kind) ? await posterFromVideo(file) : null;
-        const result = await addToAlbum(file, {
+        const poster = moves(kind) ? await posterFromVideo(file.blob) : null;
+        const result = await addToAlbum(file.blob, {
           kind,
           contentType: file.type,
           // The file's own timestamp, not now. A photograph taken on Saturday
@@ -182,9 +185,10 @@ export function AlbumClient() {
         });
 
         if (!result.ok) {
+          allSaved = false;
           setBusy(null);
           setStatus({ state: "failed", message: result.error ?? "That did not save." });
-          return;
+          break;
         }
         if (result.item !== undefined) {
           const added = result.item;
@@ -194,21 +198,89 @@ export function AlbumClient() {
       }
 
       setBusy(null);
-      if (filesRef.current !== null) filesRef.current.value = "";
+      return allSaved;
     },
     [],
   );
+
+  const add = useCallback(
+    async (chosen: FileList | null) => {
+      if (chosen === null || chosen.length === 0) return;
+      await addFiles(
+        Array.from(chosen).map((file) => ({
+          blob: file,
+          type: file.type,
+          lastModified: file.lastModified,
+        })),
+      );
+      if (filesRef.current !== null) filesRef.current.value = "";
+    },
+    [addFiles],
+  );
+
+  /*
+   * Anything the Android share sheet left with the service worker.
+   *
+   * The worker parks the files and redirects here with ?shared, because a page
+   * cannot read its own POST body. They are cleared only once every one of
+   * them is safely in the album -- clearing on arrival would throw away the
+   * photograph exactly when the cached copy is the only one left, the person
+   * having already walked away from the Photos app.
+   */
+  useEffect(() => {
+    const marker = new URLSearchParams(window.location.search).get("shared");
+    if (marker === null) return;
+
+    let cancelled = false;
+    // takeSharedFiles resolves to an empty list when there is nothing cached,
+    // so both outcomes are handled in this one callback -- which is also what
+    // keeps every setState below out of the effect body itself.
+    void takeSharedFiles().then(async (shared) => {
+      if (cancelled) return;
+
+      if (shared.length === 0) {
+        // The worker never got the files: missing on a first launch, or evicted.
+        // Worth saying, because sharing again from Photos is the only remedy.
+        if (marker === "failed") {
+          setStatus({
+            state: "failed",
+            message: "That share did not arrive. Try sharing it again, or add it with +.",
+          });
+        }
+        window.history.replaceState(null, "", "/album");
+        return;
+      }
+
+      const saved = await addFiles(shared);
+      // Cleared only once every one of them is safely in the album. Clearing on
+      // arrival would throw the photograph away exactly when the cached copy is
+      // the last one, the person having already left the Photos app behind.
+      if (saved) await clearSharedFiles();
+      window.history.replaceState(null, "", "/album");
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [addFiles]);
 
   return (
     <div className="flex h-dvh flex-col bg-[var(--night)]">
       <header className="bar-top flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-[var(--letterbox)] px-5 py-3">
         <Wordmark size="compact" />
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           {busy !== null ? (
             <span className="font-sans text-[11px] tracking-wide text-[var(--mist)]">
               {busy}
             </span>
           ) : null}
+          <NotificationToggle />
+          <Link
+            href="/snap"
+            className="inline-flex h-8 items-center gap-2 rounded-full bg-[var(--lamp)]/15 px-3 font-sans text-xs tracking-wide text-[var(--cream)] ring-1 ring-[var(--lamp)]/50 transition-colors hover:bg-[var(--lamp)]/25"
+          >
+            Snap
+          </Link>
           <button
             type="button"
             onClick={() => filesRef.current?.click()}
