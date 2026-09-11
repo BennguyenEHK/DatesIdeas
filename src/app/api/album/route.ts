@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { newShareId } from "@/lib/keepsakes/store";
 import { randomToken } from "@/lib/photo/keepsake";
 import { pairFromRequest } from "@/lib/pair/session";
+import { linkRoomToPair } from "@/lib/pair/store";
+import { isValidRoomCode } from "@/lib/room/code";
 import { insertItem, listItems, listOccasions, type AlbumItemRow } from "@/lib/album/items";
 import { albumExtension, albumKey, allowsContentType, isAlbumKey, needsPoster, posterKeyFor, POSTER_CONTENT_TYPE, withinCap } from "@/lib/album/keys";
 import { isAlbumKind, type AlbumItem, type AlbumKind } from "@/lib/album/types";
@@ -99,6 +101,14 @@ export async function PUT(request: Request) {
     posterKey, kind: fields.kind, contentType: fields.contentType, bytes: fields.sizeBytes,
     happenedAt, sourceRoom: room });
   if (!stored) return NextResponse.json({ error: "could not confirm upload" }, { status: 409 });
+
+  // Record that this evening belonged to this pair, now that it has produced
+  // something worth keeping. Best effort on purpose: the photograph is saved
+  // either way, and the room may have closed between the shutter and the save.
+  // It also refuses to take a room another pair already claimed.
+  if (room !== null && isValidRoomCode(room)) {
+    await linkRoomToPair(sql, room.toUpperCase(), pair.id);
+  }
   const item = await itemForClient({ id: body.id, pairId: pair.id, objectKey: body.objectKey, posterKey,
     kind: fields.kind, contentType: fields.contentType, bytes: fields.sizeBytes, happenedAt,
     createdAt: new Date().toISOString(), caption: null, loved: false, sourceRoom: room,

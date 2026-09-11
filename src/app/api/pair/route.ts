@@ -55,3 +55,16 @@ export async function POST(request: Request) {
   response.cookies.set(ticketCookie(created.ticket));
   return response;
 }
+
+/**
+ * Whether this browser holds a season ticket.
+ *
+ * Says yes or no and nothing else -- not the pair id, not the ticket, not when
+ * it was made. The room only needs to know whether to offer "Keep in the
+ * album", and an endpoint that answers exactly that question cannot leak
+ * anything by being called.
+ */
+export async function GET(request: Request) {
+  const pair = await pairFromRequest(queryTag(), request);
+  return NextResponse.json({ paired: pair !== null });
+}

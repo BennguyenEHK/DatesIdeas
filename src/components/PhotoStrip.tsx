@@ -20,6 +20,8 @@ export function PhotoStrip({
   busy,
   onSave,
   onUpload,
+  onKeep,
+  canKeep,
   hasClip,
   clipMimeType,
   clipPending,
@@ -36,6 +38,9 @@ export function PhotoStrip({
     url?: string;
     error?: string;
   }>;
+  /** Saves into the album, when this browser holds a season ticket. */
+  onKeep?: (kind: KeepsakeKind) => Promise<{ ok: boolean; error?: string }>;
+  canKeep?: boolean;
   /** False when this sitting produced no live photo. */
   hasClip: boolean;
   /** What the browser recorded in, which decides whether a phone can keep it. */
@@ -85,6 +90,8 @@ export function PhotoStrip({
         <SaveMenu
           onDownload={onSave}
           onUpload={onUpload}
+          onKeep={onKeep}
+          canKeep={canKeep}
           hasClip={hasClip}
           clipMimeType={clipMimeType}
           clipPending={clipPending}

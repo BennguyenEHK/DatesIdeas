@@ -68,7 +68,9 @@ import type { SyncPrecision } from "@/lib/media/sync";
 import { stagePlayer, holdsCurrentSong, songLanding } from "@/lib/media/stagePlayer";
 import { useVolumeDuck } from "@/lib/media/useVolumeDuck";
 import { worthDucking } from "@/lib/media/duck";
-import { uploadKeepsake, type KeepsakeKind } from "@/lib/photo/keepsake";
+import { baseMimeType, uploadKeepsake, type KeepsakeKind } from "@/lib/photo/keepsake";
+import { usePair } from "@/lib/pair/usePair";
+import { addToAlbum } from "@/lib/album/upload";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
 
@@ -528,6 +530,10 @@ export function RoomClient({ code }: { code: string }) {
   // Stamped along the bottom of every strip: the evening it came from. The
   // code lasts a day and will never exist again, which is what turns a collage
   // into a keepsake.
+  // Whether this browser holds a season ticket, which decides only whether the
+  // booth offers to keep a strip in the album.
+  const { paired } = usePair();
+
   const booth = useBooth({
     clock: peer.clock,
     send: peer.send,
@@ -566,6 +572,38 @@ export function RoomClient({ code }: { code: string }) {
       // The recorder picks its own format at runtime, so the blob is the only
       // thing that actually knows what this file is.
       return uploadKeepsake(blob, { room: code, kind, mimeType: blob.type });
+    },
+    [booth, code],
+  );
+
+  /**
+   * The fourth way out of the booth, and the only one that needs no phone.
+   *
+   * A strip saved here is dated tonight and carries the room it came from, so
+   * an evening shows up on the reel beside the photographs taken on the same
+   * day from a pocket. The other three routes all end somewhere you have to
+   * remember to look; this one ends where you will actually look.
+   */
+  const onKeepInAlbum = useCallback(
+    async (kind: KeepsakeKind) => {
+      let blob: Blob | null = null;
+      if (kind === "clip") {
+        blob = await booth.liveStrip();
+      } else if (booth.stripUrl !== null) {
+        blob = await fetch(booth.stripUrl)
+          .then((r) => r.blob())
+          .catch(() => null);
+      }
+      if (blob === null) return { ok: false, error: "there was nothing to save" };
+      // Same reasoning as the keepsake upload: the recorder chooses its format
+      // at runtime, so only the blob knows what this file actually is.
+      const contentType = baseMimeType(blob.type) ?? (kind === "clip" ? "video/mp4" : "image/png");
+      const result = await addToAlbum(blob, {
+        kind: kind === "clip" ? "clip" : "strip",
+        contentType,
+        sourceRoom: code,
+      });
+      return { ok: result.ok, error: result.error };
     },
     [booth, code],
   );
@@ -1207,6 +1245,8 @@ export function RoomClient({ code }: { code: string }) {
                   busy={booth.busy}
                   onSave={booth.save}
                   onUpload={onUploadKeepsake}
+                  onKeep={onKeepInAlbum}
+                  canKeep={paired}
                   hasClip={booth.hasClip}
                   clipMimeType={booth.clipMimeType}
                   clipPending={booth.clipPending}

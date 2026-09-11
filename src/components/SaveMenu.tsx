@@ -8,7 +8,7 @@ import { phoneCanKeep } from "@/lib/photo/record";
 import type { KeepsakeKind } from "@/lib/photo/keepsake";
 
 /** Which way of taking the strip away is open. */
-export type SaveMode = "local" | "picture" | "video";
+export type SaveMode = "album" | "local" | "picture" | "video";
 
 interface Choice {
   mode: SaveMode;
@@ -28,6 +28,10 @@ interface Choice {
  * rather than discovering afterwards.
  */
 const CHOICES: readonly Choice[] = [
+  // First, and only shown to a paired browser. It is the one route out that
+  // needs no phone at all: the strip goes where you will actually look for it
+  // in a year, rather than into a downloads folder or a camera roll.
+  { mode: "album", label: "Keep in the album", note: "Saved to your album, dated tonight." },
   { mode: "local", label: "Save to this computer", note: "Stays here. Nothing is uploaded." },
   { mode: "picture", label: "QR — photo strip", note: "Uploads the strip so a phone can scan it." },
   { mode: "video", label: "QR — live strip", note: "The moving version. Bigger, slower to send." },
@@ -57,11 +61,17 @@ function noteFor(
 export function SaveMenu({
   onDownload,
   onUpload,
+  onKeep,
+  canKeep = false,
   hasClip,
   clipMimeType,
   clipPending,
 }: {
   onDownload: () => void;
+  /** Saves into the album. Absent, or canKeep false, hides that choice. */
+  onKeep?: (kind: KeepsakeKind) => Promise<{ ok: boolean; error?: string }>;
+  /** True when this browser holds a season ticket. */
+  canKeep?: boolean;
   /** Uploads and resolves the link a QR should carry, or an error. */
   onUpload: (kind: KeepsakeKind) => Promise<{ ok: boolean; url?: string; error?: string }>;
   /** False when this sitting produced no live photo to offer. */
@@ -78,6 +88,7 @@ export function SaveMenu({
   const [qr, setQr] = useState<string | null>(null);
   const [link, setLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [kept, setKept] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
   // Clicking anywhere else closes the list, which is what every menu on every
@@ -105,7 +116,20 @@ export function SaveMenu({
       setQr(null);
       setLink(null);
       setMode(next);
+      setKept(false);
       if (next === "local") return;
+
+      if (next === "album") {
+        if (onKeep === undefined) return;
+        setBusy(true);
+        // The strip is already a picture; a live strip has to be stitched, and
+        // the menu offers whichever of the two this sitting produced.
+        const outcome = await onKeep(hasClip ? "clip" : "strip");
+        if (!outcome.ok) setError(outcome.error ?? "that did not save");
+        else setKept(true);
+        setBusy(false);
+        return;
+      }
 
       setBusy(true);
       const result = await onUpload(next === "picture" ? "strip" : "clip");
@@ -118,7 +142,7 @@ export function SaveMenu({
       setQr(await qrDataUrl(result.url));
       setBusy(false);
     },
-    [onUpload],
+    [onUpload, onKeep, hasClip],
   );
 
   const current = CHOICES.find((c) => c.mode === mode) ?? null;
@@ -151,7 +175,7 @@ export function SaveMenu({
             exit={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 6 }}
             transition={{ duration: reduceMotion ? 0 : 0.16, ease: "easeOut" }}
           >
-            {CHOICES.map((choice) => {
+            {CHOICES.filter((choice) => choice.mode !== "album" || canKeep).map((choice) => {
               const unavailable = choice.mode === "video" && !hasClip;
               // A WebM live strip stays offered rather than disabled: it is a
               // real file that plays perfectly on the computer it was made on.
@@ -192,6 +216,24 @@ export function SaveMenu({
 
       {(mode === "picture" || mode === "video") && (
         <QrCard busy={busy} qr={qr} link={link} error={error} />
+      )}
+
+      {mode === "album" && (
+        <p
+          className={
+            error !== null
+              ? "max-w-56 text-center text-[0.65rem] leading-relaxed text-[var(--neon)]"
+              : "max-w-56 text-center text-[0.65rem] leading-relaxed text-[var(--mist)]"
+          }
+        >
+          {busy
+            ? "Saving…"
+            : error !== null
+              ? error
+              : kept
+                ? "Kept. It is on the reel now."
+                : null}
+        </p>
       )}
     </div>
   );

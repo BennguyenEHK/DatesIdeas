@@ -6,7 +6,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/db", () => ({ db: () => (strings: TemplateStringsArray, ...values: unknown[]) => {
   void values; queries.push(strings.join("?").replace(/\s+/g, " ")); return Promise.resolve(results.shift() ?? []);
 } }));
-const { POST } = await import("./route");
+const { POST, GET } = await import("./route");
 
 beforeEach(() => { queries.length = 0; results = []; });
 
@@ -79,5 +79,38 @@ describe("POST /api/pair", () => {
   it("will not rotate for a caller holding no ticket", async () => {
     const response = await POST(new Request("http://x/api/pair?rotate=1", { method: "POST" }));
     expect(response.status).toBe(401);
+  });
+});
+
+describe("GET /api/pair", () => {
+  it("says no for a browser holding nothing, without asking the database", async () => {
+    const response = await GET(new Request("http://x/api/pair"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ paired: false });
+    expect(queries).toHaveLength(0);
+  });
+
+  it("says yes for a ticket somebody holds", async () => {
+    results = [[{ id: "11111111-1111-1111-1111-111111111111", created_at: new Date() }]];
+    const response = await GET(
+      new Request("http://x/api/pair", {
+        headers: { authorization: `Bearer ${"A".repeat(22)}` },
+      }),
+    );
+    expect(await response.json()).toEqual({ paired: true });
+  });
+
+  it("answers yes or no and nothing else", async () => {
+    // An endpoint the room calls on every visit must not be a way to read the
+    // pair id, the ticket, or when the album was started.
+    results = [[{ id: "11111111-1111-1111-1111-111111111111", created_at: new Date() }]];
+    const body = await (
+      await GET(
+        new Request("http://x/api/pair", {
+          headers: { authorization: `Bearer ${"A".repeat(22)}` },
+        }),
+      )
+    ).json();
+    expect(Object.keys(body)).toEqual(["paired"]);
   });
 });

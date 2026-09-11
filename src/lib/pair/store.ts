@@ -109,6 +109,12 @@ export async function rotateTicket(
  *
  * Only while the room is open. A closed room being adopted would let a code
  * somebody once saw reach an album that did not exist when they saw it.
+ *
+ * And never over another pair's claim. A six-character code is guessable
+ * enough that two different couples reaching the same one is a question of
+ * when rather than whether, and the second must not be able to relabel the
+ * first's evening. Returning false here means "somebody else has this room",
+ * which callers should treat as ordinary rather than as an error.
  */
 export async function linkRoomToPair(
   sql: QueryTag,
@@ -118,6 +124,7 @@ export async function linkRoomToPair(
   const rows = await sql`
     UPDATE couples SET pair_id = ${pairId}
     WHERE code = ${roomCode} AND expires_at > now()
+      AND (pair_id IS NULL OR pair_id = ${pairId})
     RETURNING code
   `;
   return Array.isArray(rows) && rows.length > 0;

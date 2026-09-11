@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SaveMenu } from "./SaveMenu";
 
 function open(options: {
@@ -58,5 +58,76 @@ describe("what the live-strip choice admits to", () => {
     open({ clipMimeType: "video/webm" });
     expect(screen.getByText(/Stays here. Nothing is uploaded./i)).toBeTruthy();
     expect(screen.getByText(/Uploads the strip so a phone can scan it./i)).toBeTruthy();
+  });
+});
+
+describe("keeping a strip in the album", () => {
+  afterEach(cleanup);
+
+  function openWith(options: { canKeep: boolean; onKeep?: () => Promise<{ ok: boolean; error?: string }> }) {
+    const onKeep = vi.fn(options.onKeep ?? (async () => ({ ok: true })));
+    render(
+      <SaveMenu
+        onDownload={vi.fn()}
+        onUpload={vi.fn(async () => ({ ok: true, url: "https://example/k/abc" }))}
+        onKeep={onKeep}
+        canKeep={options.canKeep}
+        hasClip={false}
+        clipMimeType={null}
+        clipPending={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    return onKeep;
+  }
+
+  it("is not offered to a browser with no season ticket", () => {
+    // Offering it and failing on press would be worse than not offering it:
+    // the person has no way to act on "you are not paired" from inside a room.
+    openWith({ canKeep: false });
+    expect(screen.queryByRole("menuitem", { name: /Keep in the album/i })).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /Save to this computer/i })).toBeTruthy();
+  });
+
+  it("is offered first to a paired browser, because it needs no phone", () => {
+    openWith({ canKeep: true });
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0].textContent).toMatch(/Keep in the album/i);
+  });
+
+  it("saves the strip and says where it went", async () => {
+    const onKeep = openWith({ canKeep: true });
+    fireEvent.click(screen.getByRole("menuitem", { name: /Keep in the album/i }));
+    await waitFor(() => expect(onKeep).toHaveBeenCalledWith("strip"));
+    await waitFor(() => expect(screen.getByText(/on the reel now/i)).toBeTruthy());
+  });
+
+  it("shows the reason when it does not save, rather than claiming it did", async () => {
+    const onKeep = openWith({
+      canKeep: true,
+      onKeep: async () => ({ ok: false, error: "this device is not paired yet" }),
+    });
+    fireEvent.click(screen.getByRole("menuitem", { name: /Keep in the album/i }));
+    await waitFor(() => expect(onKeep).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/not paired yet/i)).toBeTruthy());
+    expect(screen.queryByText(/on the reel now/i)).toBeNull();
+  });
+
+  it("saves the moving version when the sitting made one", async () => {
+    const onKeep = vi.fn(async () => ({ ok: true }));
+    render(
+      <SaveMenu
+        onDownload={vi.fn()}
+        onUpload={vi.fn(async () => ({ ok: true, url: "u" }))}
+        onKeep={onKeep}
+        canKeep
+        hasClip
+        clipMimeType="video/mp4"
+        clipPending={false}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Keep in the album/i }));
+    await waitFor(() => expect(onKeep).toHaveBeenCalledWith("clip"));
   });
 });
