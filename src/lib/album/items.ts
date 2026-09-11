@@ -41,6 +41,20 @@ export interface AlbumItemRow {
   cursor: string;
 }
 
+export interface NewOccasion {
+  id: string;
+  title: string;
+  /** YYYY-MM-DD. A civil date, never an instant. */
+  onDate: string;
+  yearly: boolean;
+}
+
+export interface OccasionPatch {
+  title?: string;
+  onDate?: string;
+  yearly?: boolean;
+}
+
 export interface InsertItem {
   id: string;
   pairId: string;
@@ -139,6 +153,52 @@ export async function listOccasions(sql: QueryTag, pairId: string): Promise<Occa
     WHERE pair_id = ${pairId} ORDER BY on_date ASC
   `;
   return Array.isArray(rows) ? rows.map(readOccasion).filter((item): item is Occasion => item !== null) : [];
+}
+
+/**
+ * Names a day.
+ *
+ * An occasion is a title pinned to a date and nothing else -- membership is
+ * happened_at::date = on_date, computed at read time. That is what lets you
+ * name a day months later and have it gather the photographs already sitting
+ * there, and it is why there is no "add item to occasion" anywhere.
+ */
+export function createOccasion(sql: SqlTag, pairId: string, occasion: NewOccasion): Promise<boolean>;
+export function createOccasion(sql: QueryTag, pairId: string, occasion: NewOccasion): Promise<boolean>;
+export async function createOccasion(sql: QueryTag, pairId: string, occasion: NewOccasion): Promise<boolean> {
+  const rows = await sql`
+    INSERT INTO occasions (id, pair_id, title, on_date, yearly)
+    VALUES (${occasion.id}, ${pairId}, ${occasion.title}, ${occasion.onDate}::date, ${occasion.yearly})
+    RETURNING id
+  `;
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+export function updateOccasion(sql: SqlTag, pairId: string, id: string, patch: OccasionPatch): Promise<boolean>;
+export function updateOccasion(sql: QueryTag, pairId: string, id: string, patch: OccasionPatch): Promise<boolean>;
+export async function updateOccasion(sql: QueryTag, pairId: string, id: string, patch: OccasionPatch): Promise<boolean> {
+  const hasTitle = Object.hasOwn(patch, "title");
+  const hasDate = Object.hasOwn(patch, "onDate");
+  const hasYearly = Object.hasOwn(patch, "yearly");
+  const rows = await sql`
+    UPDATE occasions SET
+      title = CASE WHEN ${hasTitle} THEN ${patch.title ?? null} ELSE title END,
+      on_date = CASE WHEN ${hasDate} THEN ${patch.onDate ?? null}::date ELSE on_date END,
+      yearly = CASE WHEN ${hasYearly} THEN ${patch.yearly ?? false} ELSE yearly END
+    WHERE pair_id = ${pairId} AND id = ${id}
+    RETURNING id
+  `;
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+/** Forgets the name. The photographs taken that day are untouched. */
+export function deleteOccasion(sql: SqlTag, pairId: string, id: string): Promise<boolean>;
+export function deleteOccasion(sql: QueryTag, pairId: string, id: string): Promise<boolean>;
+export async function deleteOccasion(sql: QueryTag, pairId: string, id: string): Promise<boolean> {
+  const rows = await sql`
+    DELETE FROM occasions WHERE pair_id = ${pairId} AND id = ${id} RETURNING id
+  `;
+  return Array.isArray(rows) && rows.length > 0;
 }
 
 export function updateItem(sql: SqlTag, pairId: string, id: string, patch: { loved?: boolean; caption?: string | null; happenedAt?: string }): Promise<boolean>;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { moves, type AlbumItem } from "@/lib/album/types";
 
 /**
@@ -40,12 +40,21 @@ export function Projector({
   item,
   timeZone,
   onLove,
+  onCaption,
+  onDelete,
+  empty,
 }: {
   item: AlbumItem | null;
   timeZone: string;
   onLove: (item: AlbumItem, loved: boolean) => void;
+  onCaption: (item: AlbumItem, caption: string | null) => void;
+  onDelete: (item: AlbumItem) => void;
+  empty?: "search";
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [editingCaption, setEditingCaption] = useState(false);
+  const [caption, setCaption] = useState("");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   // Stop the outgoing video when the reel moves on. Without this, scrubbing
   // past three video notes leaves three of them playing audio at once, which
@@ -57,16 +66,25 @@ export function Projector({
     };
   }, [item?.id]);
 
+  /** Saving on Enter and on blur must not be two different pieces of code. */
+  function commitCaption() {
+    // Declared above the empty-state return, so the narrowing there does not
+    // reach it. Nothing can be captioned when there is nothing projected.
+    if (item === null) return;
+    onCaption(item, caption.trim() === "" ? null : caption.trim());
+    setEditingCaption(false);
+  }
+
   if (item === null) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
         <p className="font-display text-2xl text-[var(--cream)]">
-          Nothing on the reel yet
+          {empty === "search" ? "Find another memory" : "Nothing on the reel yet"}
         </p>
         <p className="max-w-xs font-sans text-sm leading-relaxed text-[var(--mist)]">
-          Share a photo to FestiBooth from your phone, or pick{" "}
-          <span className="text-[var(--cream)]">Keep in the album</span> the next
-          time the booth asks what to do with a strip.
+          {empty === "search"
+            ? "Try a caption, a date like 2026-02, a month, or the name of a day you marked."
+            : <>Share a photo to FestiBooth from your phone, or pick <span className="text-[var(--cream)]">Keep in the album</span> the next time the booth asks what to do with a strip.</>}
         </p>
       </div>
     );
@@ -98,15 +116,40 @@ export function Projector({
         )}
       </div>
 
-      <figcaption className="flex items-center gap-3 font-sans text-xs tracking-wide text-[var(--mist)]">
+      <figcaption className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 font-sans text-xs tracking-wide text-[var(--mist)]">
         <span>{dayLabel(item.happenedAt, timeZone)}</span>
         <span aria-hidden className="text-[var(--edge)]">
           |
         </span>
         <span>{NOUN[item.kind]}</span>
-        {item.caption !== null && item.caption !== "" ? (
-          <span className="text-[var(--cream)]">{item.caption}</span>
-        ) : null}
+        {editingCaption ? (
+          <input
+            autoFocus
+            aria-label="Caption"
+            value={caption}
+            onChange={(event) => setCaption(event.target.value)}
+            onKeyDown={(event) => {
+              // Escape abandons the edit; Enter commits it. Both are what a
+              // person expects from a field that appeared where text used to be.
+              if (event.key === "Escape") setEditingCaption(false);
+              if (event.key === "Enter") commitCaption();
+            }}
+            onBlur={commitCaption}
+            className="h-7 border-b border-[var(--lamp)] bg-transparent px-1 text-[var(--cream)]"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setCaption(item.caption ?? "");
+              setEditingCaption(true);
+            }}
+            aria-label="Edit caption"
+            className="text-[var(--cream)] underline decoration-[var(--edge)] underline-offset-4 hover:decoration-[var(--lamp)]"
+          >
+            {item.caption ?? "Add a caption"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onLove(item, !item.loved)}
@@ -120,6 +163,34 @@ export function Projector({
         >
           <span aria-hidden>{item.loved ? "♥" : "♡"}</span>
         </button>
+        {confirmingDelete ? (
+          <span className="flex items-center gap-2">
+            <span>This cannot be undone.</span>
+            <button
+              type="button"
+              onClick={() => onDelete(item)}
+              className="text-[var(--neon)] underline underline-offset-4"
+            >
+              Delete it
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(false)}
+              className="text-[var(--mist)]"
+            >
+              Keep it
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(true)}
+            aria-label="Delete this item"
+            className="text-[var(--mist)] underline underline-offset-4 hover:text-[var(--cream)]"
+          >
+            Delete
+          </button>
+        )}
       </figcaption>
     </figure>
   );

@@ -6,7 +6,9 @@ import { Wordmark } from "./Wordmark";
 import { NotificationToggle } from "./NotificationToggle";
 import { Projector } from "./Projector";
 import { Reel } from "./Reel";
+import { OccasionEditor } from "./OccasionEditor";
 import { buildReel } from "@/lib/album/timeline";
+import { searchItems } from "@/lib/album/search";
 import { addToAlbum } from "@/lib/album/upload";
 import { posterFromVideo } from "@/lib/album/poster";
 import { clearSharedFiles, takeSharedFiles } from "@/lib/album/shared";
@@ -87,6 +89,7 @@ export function AlbumClient() {
   const [gear, setGear] = useState<Gear>("frames");
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const filesRef = useRef<HTMLInputElement>(null);
 
   // Resolved once, as lazy initial state. The zone cannot change while the
@@ -117,12 +120,13 @@ export function AlbumClient() {
     };
   }, [apply]);
 
-  const view = useMemo(
-    () => buildReel(items, occasions, gear, timeZone),
-    [items, occasions, gear, timeZone],
+  const visibleItems = useMemo(
+    () => searchItems(items, occasions, query, timeZone),
+    [items, occasions, query, timeZone],
   );
+  const view = useMemo(() => buildReel(visibleItems, occasions, gear, timeZone), [visibleItems, occasions, gear, timeZone]);
 
-  const current = items.find((item) => item.id === currentId) ?? items[0] ?? null;
+  const current = visibleItems.find((item) => item.id === currentId) ?? visibleItems[0] ?? null;
 
   // Threading is left to CSS rather than tracked here. `.reel-thread` is a
   // one-shot animation, so it plays when the class first lands on the element
@@ -160,6 +164,21 @@ export function AlbumClient() {
       );
     }
   }, []);
+
+  const caption = useCallback(async (item: AlbumItem, next: string | null) => {
+    setItems((previous) => previous.map((candidate) => candidate.id === item.id ? { ...candidate, caption: next } : candidate));
+    try { const response = await fetch(`/api/album/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ caption: next }) }); if (!response.ok) throw new Error("refused"); }
+    catch { setItems((previous) => previous.map((candidate) => candidate.id === item.id ? { ...candidate, caption: item.caption } : candidate)); }
+  }, []);
+
+  const remove = useCallback(async (item: AlbumItem) => {
+    const position = visibleItems.findIndex((candidate) => candidate.id === item.id);
+    const next = visibleItems[position + 1] ?? visibleItems[position - 1] ?? null;
+    setItems((previous) => previous.filter((candidate) => candidate.id !== item.id));
+    setCurrentId(next?.id ?? null);
+    try { const response = await fetch(`/api/album/${item.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) throw new Error("refused"); }
+    catch { setItems((previous) => { const restored = [...previous]; restored.splice(Math.max(0, position), 0, item); return restored; }); setCurrentId(item.id); }
+  }, [visibleItems]);
 
   const addFiles = useCallback(
     async (files: { blob: Blob; type: string; lastModified: number }[]) => {
@@ -269,6 +288,10 @@ export function AlbumClient() {
       <header className="bar-top flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-[var(--letterbox)] px-5 py-3">
         <Wordmark size="compact" />
         <div className="flex items-center gap-3">
+          <label className="sr-only" htmlFor="album-search">Search the album</label>
+          <input id="album-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search the album" className="h-8 w-36 border border-[var(--edge)] bg-[var(--night)] px-2 font-sans text-xs text-[var(--cream)] placeholder:text-[var(--mist)]" />
+          {query.trim() !== "" ? <span className="font-sans text-[11px] text-[var(--mist)]">{visibleItems.length} of {items.length}</span> : null}
+          <OccasionEditor occasions={occasions} onChange={setOccasions} />
           {busy !== null ? (
             <span className="font-sans text-[11px] tracking-wide text-[var(--mist)]">
               {busy}
@@ -317,7 +340,7 @@ export function AlbumClient() {
             </button>
           </div>
         ) : (
-          <Projector item={current} timeZone={timeZone} onLove={(i, l) => void love(i, l)} />
+          <Projector item={current} timeZone={timeZone} onLove={(i, l) => void love(i, l)} onCaption={(i, value) => void caption(i, value)} onDelete={(item) => void remove(item)} empty={query.trim() !== "" && visibleItems.length === 0 ? "search" : undefined} />
         )}
       </main>
 

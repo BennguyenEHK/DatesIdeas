@@ -116,7 +116,16 @@ export async function presignKeepsake(
 export function isKeepsakeKey(key: string): boolean {
   // This constrains client input so it cannot turn our signer into bucket-wide access.
   if (key.includes("..") || key.includes("\\")) return false;
-  return /^keepsakes\/[A-Za-z0-9_-]+\/(?:strip|clip)-[A-Za-z0-9_-]+\.[a-z0-9]+$/.test(
+  if (/^keepsakes\/[A-Za-z0-9_-]+\/(?:strip|clip)-[A-Za-z0-9_-]+\.[a-z0-9]+$/.test(key)) {
+    return true;
+  }
+  // An album object may also be pointed at by a keepsake row.
+  //
+  // A keepsake is a public, room-lifetime-bounded pointer at one object; it has
+  // never cared where that object came from. Allowing an album key here is what
+  // lets a recording already saved to the album be shared by QR without
+  // uploading the same fifty megabytes a second time.
+  return /^album\/[0-9a-f-]{36}\/(?:strip|clip|photo|video|recording)-[A-Za-z0-9_-]+(?:-poster)?\.[a-z0-9]{2,4}$/.test(
     key,
   );
 }

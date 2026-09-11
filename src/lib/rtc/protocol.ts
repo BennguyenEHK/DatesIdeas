@@ -82,6 +82,14 @@ export type PeerMessage =
   // Nothing in the picture can tell them which. This is the only way they learn
   // it was a decision.
   | { t: "presence"; mic: boolean; cam: boolean }
+  // Whether this side is recording the call right now.
+  //
+  // Not optional, and not a nicety. A recording made from one browser captures
+  // the other person's face and voice, and they have no other way to know it is
+  // happening -- the recorder's screen shows a button, theirs shows nothing.
+  // Everything else about the recording stays private to whoever made it; this
+  // one bit is the other person's to know.
+  | { t: "recording"; on: boolean }
   // The moment the evening is set to end, on the shared clock, or null to call
   // it off.
   //
