@@ -31,14 +31,53 @@ export interface Mixed {
 }
 
 export interface MixSources {
-  /** The elements already on screen. Drawing these means the recording shows
-   *  what was actually being watched, including a paused or black feed. */
+  /**
+   * The elements already on screen, when the caller has them. Null is fine and
+   * common: the room only hands its video elements to the photo booth, so in an
+   * ordinary call these arrive empty and the mixer films the streams itself.
+   */
   localVideo: HTMLVideoElement | null;
   remoteVideo: HTMLVideoElement | null;
   /** For audio. The video elements' own sound is playing through speakers and
    *  cannot be tapped without taking it off them. */
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+}
+
+/**
+ * A hidden video element playing a stream, for when nobody handed us one.
+ *
+ * This is what stops an ordinary call from recording as two black rectangles
+ * with sound. The elements on screen live inside VideoTile and are not exposed
+ * to the room; rather than plumb refs through every stage, the mixer plays each
+ * stream into an element of its own. Muted, because the audio is already being
+ * summed separately and a second copy would double it.
+ */
+function ownVideo(stream: MediaStream | null): HTMLVideoElement | null {
+  if (stream === null || stream.getVideoTracks().length === 0) return null;
+  try {
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+    void video.play().catch(() => {
+      // Autoplay is allowed for a muted element; if it is refused anyway the
+      // tile paints the room colour rather than failing the recording.
+    });
+    return video;
+  } catch {
+    return null;
+  }
+}
+
+function releaseVideo(video: HTMLVideoElement | null): void {
+  if (video === null) return;
+  try {
+    video.pause();
+    video.srcObject = null;
+  } catch {
+    // Already released.
+  }
 }
 
 function drawTile(
@@ -108,7 +147,14 @@ export function mixCall(sources: MixSources): Mixed | null {
   }
   if (context === null) return null;
 
-  const both = sources.remoteVideo !== null;
+  // Only elements this mixer made are its to release; ones on screen belong to
+  // the room and stopping them would black out the call.
+  const ownedLocal = sources.localVideo === null ? ownVideo(sources.localStream) : null;
+  const ownedRemote = sources.remoteVideo === null ? ownVideo(sources.remoteStream) : null;
+  const localElement = sources.localVideo ?? ownedLocal;
+  const remoteElement = sources.remoteVideo ?? ownedRemote;
+
+  const both = remoteElement !== null;
   const boxes = pairLayout(RECORDING_WIDTH, RECORDING_HEIGHT, both ? 2 : 1);
 
   let frame = 0;
@@ -117,8 +163,8 @@ export function mixCall(sources: MixSources): Mixed | null {
     // room's own colour rather than whatever was in the buffer before.
     context.fillStyle = "#080b1c";
     context.fillRect(0, 0, RECORDING_WIDTH, RECORDING_HEIGHT);
-    drawTile(context, sources.localVideo, boxes[0]);
-    if (both) drawTile(context, sources.remoteVideo, boxes[1]);
+    drawTile(context, localElement, boxes[0]);
+    if (both) drawTile(context, remoteElement, boxes[1]);
     frame = requestAnimationFrame(paint);
   };
   frame = requestAnimationFrame(paint);
@@ -143,6 +189,8 @@ export function mixCall(sources: MixSources): Mixed | null {
     stream,
     stop() {
       cancelAnimationFrame(frame);
+      releaseVideo(ownedLocal);
+      releaseVideo(ownedRemote);
       video.getTracks().forEach((track) => track.stop());
       stream.getTracks().forEach((track) => track.stop());
       // Closing the context releases the sources; leaving it open keeps an

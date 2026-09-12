@@ -218,6 +218,36 @@ export function occurrencesIn(
   let count = 0;
   let first = true;
 
+  // Jump close to the window before walking. Stepping from the very first
+  // occurrence counts every one that ever happened against the cap, so a daily
+  // block made fourteen months ago would run out of steps before reaching this
+  // week and silently vanish from the calendar -- and never remind anybody
+  // again. Stepping in civil days (or months) keeps the jump daylight-saving
+  // safe, and landing one period short of the window guarantees no occurrence
+  // that overlaps it is skipped.
+  const periodDays =
+    block.repeat === "daily" ? 1 : block.repeat === "weekly" ? 7 : block.repeat === "fortnightly" ? 14 : 0;
+  if (periodDays > 0) {
+    const behindDays = Math.floor((windowStart.getTime() - start.getTime() - durationMs) / 86_400_000);
+    const skipSteps = Math.floor(behindDays / periodDays) - 1;
+    if (skipSteps > 0) {
+      civil = shiftDays(anchor, skipSteps * periodDays);
+      at = instantForCivil(civil, block.zone);
+      first = false;
+    }
+  } else if (block.repeat === "monthly") {
+    const window = civilParts(windowStart, block.zone);
+    const monthsBehind = (window.year - anchor.year) * 12 + (window.month - anchor.month) - 1;
+    if (monthsBehind > 0) {
+      const total = anchor.month - 1 + monthsBehind;
+      const year = anchor.year + Math.floor(total / 12);
+      const month = (total % 12) + 1;
+      civil = { ...anchor, year, month, day: Math.min(anchorDay, daysInMonth(year, month)) };
+      at = instantForCivil(civil, block.zone);
+      first = false;
+    }
+  }
+
   while (count < MAX_OCCURRENCES) {
     if (at.getTime() >= windowEnd.getTime() + durationMs) break;
     if (until !== null && at.getTime() > until) break;
@@ -230,6 +260,50 @@ export function occurrencesIn(
   }
 
   return found;
+}
+
+/**
+ * The wall-clock date and time an instant reads as in a zone.
+ *
+ * Exported so a form showing a block's start in the viewer's zone uses the same
+ * conversion the engine does. Two copies of timezone arithmetic are two copies
+ * that will disagree at the next daylight-saving change.
+ */
+export function civilAt(iso: string, zone: string): { date: string; time: string } {
+  const civil = civilParts(new Date(iso), zone);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${civil.year}-${pad(civil.month)}-${pad(civil.day)}`,
+    time: `${pad(civil.hour)}:${pad(civil.minute)}`,
+  };
+}
+
+/**
+ * The instant a wall-clock date and time names in a zone, or null when the
+ * input is not a date and a time. The inverse of civilAt, built on the same
+ * two-pass daylight-saving correction the recurrence uses.
+ */
+export function instantFromCivil(date: string, time: string, zone: string): string | null {
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const timeMatch = /^(\d{2}):(\d{2})$/.exec(time);
+  if (dateMatch === null || timeMatch === null) return null;
+  const civil: Civil = {
+    year: Number(dateMatch[1]),
+    month: Number(dateMatch[2]),
+    day: Number(dateMatch[3]),
+    hour: Number(timeMatch[1]),
+    minute: Number(timeMatch[2]),
+    second: 0,
+  };
+  if (civil.month < 1 || civil.month > 12 || civil.day < 1 || civil.day > daysInMonth(civil.year, civil.month)) {
+    return null;
+  }
+  if (civil.hour > 23 || civil.minute > 59) return null;
+  try {
+    return instantForCivil(civil, zone).toISOString();
+  } catch {
+    return null;
+  }
 }
 
 /** Expands many blocks at once, sorted by when they start. */

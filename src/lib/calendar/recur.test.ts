@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { expand, isRepeat, occurrencesIn, type BlockSeed } from "./recur";
+import { civilAt, expand, instantFromCivil, isRepeat, occurrencesIn, type BlockSeed } from "./recur";
 
 function block(overrides: Partial<BlockSeed> = {}): BlockSeed {
   return {
@@ -178,5 +178,54 @@ describe("isRepeat", () => {
     for (const value of ["yearly", "", null, 7, "DAILY"]) {
       expect(isRepeat(value)).toBe(false);
     }
+  });
+});
+
+describe("a block that has been repeating for a long time", () => {
+  it("still appears this week after years of daily repeats", () => {
+    // It used to walk from the first occurrence and give up after 400 steps,
+    // so an old standing block quietly vanished from the calendar.
+    const [from, to] = window("2029-06-04T00:00:00Z", "2029-06-11T00:00:00Z");
+    const found = occurrencesIn(block({ repeat: "daily" }), from, to, "UTC");
+    expect(found).toHaveLength(7);
+    expect(found[0].date).toBe("2029-06-04");
+  });
+
+  it("still appears after years of weekly repeats, on the right weekday", () => {
+    // 2026-03-03 is a Tuesday.
+    const [from, to] = window("2031-01-06T00:00:00Z", "2031-01-13T00:00:00Z");
+    const found = occurrencesIn(block({ repeat: "weekly" }), from, to, "UTC");
+    expect(found).toHaveLength(1);
+    expect(new Date(found[0].startsAt).getUTCDay()).toBe(2);
+  });
+
+  it("still lands a monthly repeat on its day years later", () => {
+    const [from, to] = window("2032-02-01T00:00:00Z", "2032-03-01T00:00:00Z");
+    const found = occurrencesIn(
+      block({ startsAt: "2026-01-31T09:00:00.000Z", endsAt: "2026-01-31T10:00:00.000Z", repeat: "monthly" }),
+      from,
+      to,
+      "UTC",
+    );
+    // 2032 is a leap year, so the 31st clamps to the 29th.
+    expect(found.map((o) => o.date)).toEqual(["2032-02-29"]);
+  });
+});
+
+describe("civilAt and instantFromCivil", () => {
+  it("round-trip a wall-clock time through its instant", () => {
+    const iso = instantFromCivil("2026-07-14", "20:30", "Asia/Ho_Chi_Minh");
+    expect(iso).toBe("2026-07-14T13:30:00.000Z");
+    expect(civilAt(iso as string, "Asia/Ho_Chi_Minh")).toEqual({ date: "2026-07-14", time: "20:30" });
+  });
+
+  it("read the same instant as each person's own clock", () => {
+    expect(civilAt("2026-07-14T13:30:00.000Z", "Europe/London")).toEqual({ date: "2026-07-14", time: "14:30" });
+  });
+
+  it("refuse something that is not a date and a time", () => {
+    expect(instantFromCivil("2026-02-30", "10:00", "UTC")).toBeNull();
+    expect(instantFromCivil("2026-02-10", "25:00", "UTC")).toBeNull();
+    expect(instantFromCivil("tomorrow", "10:00", "UTC")).toBeNull();
   });
 });
