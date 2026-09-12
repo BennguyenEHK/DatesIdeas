@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { usePair } from "@/lib/pair/usePair";
 import { Ambience } from "@/components/Ambience";
 import { Wordmark } from "@/components/Wordmark";
 import { RoomGate } from "@/components/RoomGate";
@@ -16,6 +18,9 @@ export default function Home() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [savedOpen, setSavedOpen] = useState(false);
   const { start, pending, error } = useCreateRoom();
+  // Whether this browser already holds a season ticket, which decides whether
+  // the way out of this page leads to the album or to starting one.
+  const pair = usePair();
 
   // localStorage is a synchronous external store, and it does not change while
   // this page is open. Reading it this way keeps the server render (null) and
@@ -82,6 +87,47 @@ export default function Home() {
             error={error}
           />
         </div>
+
+        {/* The only way to the album and the calendar from here. Without it the
+            whole durable half of the app was reachable only by typing its URL.
+            Nothing renders until the answer is known, so a paired person never
+            sees "Start an album" flash up and vanish. */}
+        {pair.known ? (
+          <nav
+            aria-label="Beyond tonight"
+            className="rise-late flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-sm"
+          >
+            {pair.paired ? (
+              <>
+                <Link
+                  href="/album"
+                  className="text-[var(--lamp)] underline decoration-[var(--lamp)]/40 underline-offset-4"
+                >
+                  Our album
+                </Link>
+                <Link
+                  href="/calendar"
+                  className="text-[var(--lamp)] underline decoration-[var(--lamp)]/40 underline-offset-4"
+                >
+                  Calendar
+                </Link>
+                <Link
+                  href="/snap"
+                  className="text-[var(--lamp)] underline decoration-[var(--lamp)]/40 underline-offset-4"
+                >
+                  Take a snap
+                </Link>
+              </>
+            ) : (
+              <Link
+                href="/us/new"
+                className="text-[var(--mist)] underline decoration-[var(--edge)] underline-offset-4 transition-colors hover:text-[var(--cream)]"
+              >
+                Start an album for the two of you
+              </Link>
+            )}
+          </nav>
+        ) : null}
 
         {sessions.length > 0 && (
           <section className="rise-late flex flex-col gap-4">
