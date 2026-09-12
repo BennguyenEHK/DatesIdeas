@@ -31,6 +31,7 @@ import { RoomControls } from "@/components/RoomControls";
 import { RecordButton } from "@/components/RecordButton";
 import { RecordingReview } from "@/components/RecordingReview";
 import { GameWord } from "@/components/GameWord";
+import { CreateSpace } from "@/components/CreateSpace";
 import { useGameWord } from "@/lib/gameword/useGameWord";
 import { useCreateSpace } from "@/lib/createspace/useCreateSpace";
 import { newRecordingId, putRecording } from "@/lib/recording/store";
@@ -429,6 +430,11 @@ export function RoomClient({ code }: { code: string }) {
     send: sendToPeer,
   });
   const createSpace = useCreateSpace({ send: sendToPeer });
+  // Every drawing item is stamped with the shared clock, not this machine's.
+  // The scene is ordered by that stamp, so two clocks that disagree by a few
+  // hundred milliseconds would stack the same strokes differently on each screen.
+  const clock = peer.clock;
+  const sharedNow = useCallback(() => clock?.now() ?? Date.now(), [clock]);
 
   const { accept: acceptGame, resync: resyncGame } = gameWord;
   const { accept: acceptCanvas, resync: resyncCanvas } = createSpace;
@@ -1506,6 +1512,18 @@ export function RoomClient({ code }: { code: string }) {
                     onStarted={media.started}
                     onError={setFileError}
                   />
+                ) : current === "createspace" ? (
+                  <div className="h-full overflow-auto">
+                    <CreateSpace
+                      identity={myIdentity}
+                      scene={createSpace.scene}
+                      baseItemId={createSpace.baseItemId}
+                      room={code}
+                      sharedNow={sharedNow}
+                      onOp={createSpace.apply}
+                      onBase={createSpace.setBase}
+                    />
+                  </div>
                 ) : current === "gameword" ? (
                   // Scrolls inside the screen rather than overflowing it: the
                   // takeover screen is a fixed 16:9, and a picker or a word chain
