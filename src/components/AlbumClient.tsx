@@ -48,10 +48,7 @@ function kindForType(type: string): AlbumKind | null {
   return null;
 }
 
-type Status =
-  | { state: "loading" }
-  | { state: "ready" }
-  | { state: "failed"; message: string };
+type Status = { state: "loading" } | { state: "ready" } | { state: "failed"; message: string };
 
 type Fetched =
   | { ok: true; items: AlbumItem[]; occasions: Occasion[] }
@@ -124,7 +121,10 @@ export function AlbumClient() {
     () => searchItems(items, occasions, query, timeZone),
     [items, occasions, query, timeZone],
   );
-  const view = useMemo(() => buildReel(visibleItems, occasions, gear, timeZone), [visibleItems, occasions, gear, timeZone]);
+  const view = useMemo(
+    () => buildReel(visibleItems, occasions, gear, timeZone),
+    [visibleItems, occasions, gear, timeZone],
+  );
 
   const current = visibleItems.find((item) => item.id === currentId) ?? visibleItems[0] ?? null;
 
@@ -144,9 +144,7 @@ export function AlbumClient() {
    */
   const love = useCallback(async (item: AlbumItem, loved: boolean) => {
     setItems((previous) =>
-      previous.map((candidate) =>
-        candidate.id === item.id ? { ...candidate, loved } : candidate,
-      ),
+      previous.map((candidate) => (candidate.id === item.id ? { ...candidate, loved } : candidate)),
     );
     try {
       const response = await fetch(`/api/album/${item.id}`, {
@@ -165,20 +163,56 @@ export function AlbumClient() {
     }
   }, []);
 
+  /** Same shape as `love`: shown at once, reverted if the server refuses it. */
   const caption = useCallback(async (item: AlbumItem, next: string | null) => {
-    setItems((previous) => previous.map((candidate) => candidate.id === item.id ? { ...candidate, caption: next } : candidate));
-    try { const response = await fetch(`/api/album/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ caption: next }) }); if (!response.ok) throw new Error("refused"); }
-    catch { setItems((previous) => previous.map((candidate) => candidate.id === item.id ? { ...candidate, caption: item.caption } : candidate)); }
+    setItems((previous) =>
+      previous.map((candidate) =>
+        candidate.id === item.id ? { ...candidate, caption: next } : candidate,
+      ),
+    );
+    try {
+      const response = await fetch(`/api/album/${item.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ caption: next }),
+      });
+      if (!response.ok) throw new Error("refused");
+    } catch {
+      setItems((previous) =>
+        previous.map((candidate) =>
+          candidate.id === item.id ? { ...candidate, caption: item.caption } : candidate,
+        ),
+      );
+    }
   }, []);
 
-  const remove = useCallback(async (item: AlbumItem) => {
-    const position = visibleItems.findIndex((candidate) => candidate.id === item.id);
-    const next = visibleItems[position + 1] ?? visibleItems[position - 1] ?? null;
-    setItems((previous) => previous.filter((candidate) => candidate.id !== item.id));
-    setCurrentId(next?.id ?? null);
-    try { const response = await fetch(`/api/album/${item.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) throw new Error("refused"); }
-    catch { setItems((previous) => { const restored = [...previous]; restored.splice(Math.max(0, position), 0, item); return restored; }); setCurrentId(item.id); }
-  }, [visibleItems]);
+  /**
+   * Deleting moves the projector on to a neighbour first, so the picture never
+   * goes blank while there are memories left to show.
+   */
+  const remove = useCallback(
+    async (item: AlbumItem) => {
+      const position = visibleItems.findIndex((candidate) => candidate.id === item.id);
+      const next = visibleItems[position + 1] ?? visibleItems[position - 1] ?? null;
+      setItems((previous) => previous.filter((candidate) => candidate.id !== item.id));
+      setCurrentId(next?.id ?? null);
+
+      try {
+        const response = await fetch(`/api/album/${item.id}`, {
+          method: "DELETE",
+          credentials: "same-origin",
+        });
+        if (!response.ok) throw new Error("refused");
+      } catch {
+        // Put it back. Where in the array does not matter: the reel sorts by
+        // when things happened, so the restored item returns to its own place.
+        setItems((previous) => [...previous, item]);
+        setCurrentId(item.id);
+      }
+    },
+    [visibleItems],
+  );
 
   const addFiles = useCallback(
     async (files: { blob: Blob; type: string; lastModified: number }[]) => {
@@ -288,15 +322,31 @@ export function AlbumClient() {
       <header className="bar-top flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-[var(--letterbox)] px-5 py-3">
         <Wordmark size="compact" />
         <div className="flex items-center gap-3">
-          <label className="sr-only" htmlFor="album-search">Search the album</label>
-          <input id="album-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search the album" className="h-8 w-36 border border-[var(--edge)] bg-[var(--night)] px-2 font-sans text-xs text-[var(--cream)] placeholder:text-[var(--mist)]" />
-          {query.trim() !== "" ? <span className="font-sans text-[11px] text-[var(--mist)]">{visibleItems.length} of {items.length}</span> : null}
-          <OccasionEditor occasions={occasions} onChange={setOccasions} />
-          {busy !== null ? (
-            <span className="font-sans text-[11px] tracking-wide text-[var(--mist)]">
-              {busy}
+          <label className="sr-only" htmlFor="album-search">
+            Search the album
+          </label>
+          <input
+            id="album-search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search the album"
+            className="h-8 w-36 border border-[var(--edge)] bg-[var(--night)] px-2 font-sans text-xs text-[var(--cream)] placeholder:text-[var(--mist)]"
+          />
+          {query.trim() !== "" ? (
+            <span className="font-sans text-[11px] text-[var(--mist)]">
+              {visibleItems.length} of {items.length}
             </span>
           ) : null}
+          <OccasionEditor occasions={occasions} onChange={setOccasions} />
+          {busy !== null ? (
+            <span className="font-sans text-[11px] tracking-wide text-[var(--mist)]">{busy}</span>
+          ) : null}
+          <Link
+            href="/calendar"
+            className="inline-flex h-8 items-center rounded-full px-3 font-sans text-xs tracking-wide text-[var(--mist)] ring-1 ring-[var(--edge)] transition-colors hover:text-[var(--cream)] hover:ring-[var(--lamp)]/50"
+          >
+            Calendar
+          </Link>
           <NotificationToggle />
           <Link
             href="/snap"
@@ -340,7 +390,14 @@ export function AlbumClient() {
             </button>
           </div>
         ) : (
-          <Projector item={current} timeZone={timeZone} onLove={(i, l) => void love(i, l)} onCaption={(i, value) => void caption(i, value)} onDelete={(item) => void remove(item)} empty={query.trim() !== "" && visibleItems.length === 0 ? "search" : undefined} />
+          <Projector
+            item={current}
+            timeZone={timeZone}
+            onLove={(i, l) => void love(i, l)}
+            onCaption={(i, value) => void caption(i, value)}
+            onDelete={(item) => void remove(item)}
+            empty={query.trim() !== "" && visibleItems.length === 0 ? "search" : undefined}
+          />
         )}
       </main>
 

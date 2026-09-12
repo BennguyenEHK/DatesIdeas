@@ -30,6 +30,9 @@ import { KaraokePanel, type SongLanding } from "@/components/KaraokePanel";
 import { RoomControls } from "@/components/RoomControls";
 import { RecordButton } from "@/components/RecordButton";
 import { RecordingReview } from "@/components/RecordingReview";
+import { GameWord } from "@/components/GameWord";
+import { useGameWord } from "@/lib/gameword/useGameWord";
+import { useCreateSpace } from "@/lib/createspace/useCreateSpace";
 import { newRecordingId, putRecording } from "@/lib/recording/store";
 import { Blackout } from "@/components/Blackout";
 import { useEnding } from "@/lib/room/useEnding";
@@ -206,6 +209,10 @@ export function RoomClient({ code }: { code: string }) {
   // Reaching backwards like the handlers around them: both messages arrive long
   // before the state they land in has been declared.
   const acceptChat = useRef<((m: PeerMessage) => void) | null>(null);
+  // CreateSpace and GameWord. Declared here, filled once their hooks exist,
+  // because onMessage has to be created before the peer connection is.
+  const acceptShared = useRef<((m: PeerMessage) => void) | null>(null);
+  const resyncShared = useRef<(() => void) | null>(null);
   const acceptLive = useRef<((m: PeerMessage) => void) | null>(null);
   const acceptEnding = useRef<((m: PeerMessage) => void) | null>(null);
   const announceSwitches = useRef<(() => void) | null>(null);
@@ -284,6 +291,10 @@ export function RoomClient({ code }: { code: string }) {
         acceptLive.current?.(msg);
         return;
       }
+      if (msg.t === "canvas" || msg.t === "canvas-base" || msg.t === "game" || msg.t === "move") {
+        acceptShared.current?.(msg);
+        return;
+      }
       if (msg.t === "recording") {
         setTheyRecord(msg.on);
         return;
@@ -304,6 +315,10 @@ export function RoomClient({ code }: { code: string }) {
         // this side's devices. Said once, on their arrival, rather than
         // repeated: nothing else here changes it without saying so.
         announceSwitches.current?.();
+        // Same reason, for what they cannot see: a drawing in progress or a game
+        // half played. Their screen starts empty after a reconnect, and both
+        // replays are safe to send even if they already had some of it.
+        resyncShared.current?.();
         return;
       }
       if (
@@ -403,6 +418,30 @@ export function RoomClient({ code }: { code: string }) {
     },
     [sendToPeer],
   );
+
+  // Resolved once, as lazy state. It reads localStorage, so it must not be
+  // recomputed on every render.
+  const [myIdentity] = useState(getIdentity);
+
+  const gameWord = useGameWord({
+    identity: myIdentity,
+    partnerIdentity: theirIdentity,
+    send: sendToPeer,
+  });
+  const createSpace = useCreateSpace({ send: sendToPeer });
+
+  const { accept: acceptGame, resync: resyncGame } = gameWord;
+  const { accept: acceptCanvas, resync: resyncCanvas } = createSpace;
+  useEffect(() => {
+    acceptShared.current = (message: PeerMessage) => {
+      acceptGame(message);
+      acceptCanvas(message);
+    };
+    resyncShared.current = () => {
+      resyncGame();
+      resyncCanvas();
+    };
+  }, [acceptGame, acceptCanvas, resyncGame, resyncCanvas]);
 
   const discardRecording = useCallback(() => {
     setFinishedRecording(null);
@@ -1467,6 +1506,21 @@ export function RoomClient({ code }: { code: string }) {
                     onStarted={media.started}
                     onError={setFileError}
                   />
+                ) : current === "gameword" ? (
+                  // Scrolls inside the screen rather than overflowing it: the
+                  // takeover screen is a fixed 16:9, and a picker or a word chain
+                  // can be taller than that on a phone.
+                  <div className="h-full overflow-auto">
+                    <GameWord
+                      identity={myIdentity}
+                      partnerIdentity={theirIdentity}
+                      game={gameWord.session.game}
+                      error={gameWord.session.error}
+                      onStart={gameWord.start}
+                      onMove={gameWord.move}
+                      onLeave={gameWord.leave}
+                    />
+                  </div>
                 ) : (
                   <ActivityPlaceholder id={current} />
                 )}
