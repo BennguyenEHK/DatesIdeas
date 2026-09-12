@@ -28,6 +28,9 @@ import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel, type SongLanding } from "@/components/KaraokePanel";
 import { RoomControls } from "@/components/RoomControls";
+import { RecordButton } from "@/components/RecordButton";
+import { RecordingReview } from "@/components/RecordingReview";
+import { newRecordingId, putRecording } from "@/lib/recording/store";
 import { Blackout } from "@/components/Blackout";
 import { useEnding } from "@/lib/room/useEnding";
 import { useKaraokeTrack } from "@/lib/karaoke/useKaraokeTrack";
@@ -162,6 +165,17 @@ export function RoomClient({ code }: { code: string }) {
   // anchors: comparing the two identities is the one answer both sides can
   // reach alone and still disagree about in the right direction.
   const [theirIdentity, setTheirIdentity] = useState<string | null>(null);
+  // Whether the OTHER person is recording this call. Theirs to decide; this
+  // side's only to be told, which is what the "recording" message is for.
+  const [theyRecord, setTheyRecord] = useState(false);
+  // A recording this side just stopped, waiting for save, love or discard.
+  const [finishedRecording, setFinishedRecording] = useState<{
+    blob: Blob;
+    mimeType: string;
+    durationMs: number;
+  } | null>(null);
+  const [recordingBusy, setRecordingBusy] = useState<string | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
   // Browsing for the next song. Local on purpose — opening the picker used to
   // clear the video through shared state, which cut the other person off
   // mid-verse just because you went looking for the next track.
@@ -270,6 +284,10 @@ export function RoomClient({ code }: { code: string }) {
         acceptLive.current?.(msg);
         return;
       }
+      if (msg.t === "recording") {
+        setTheyRecord(msg.on);
+        return;
+      }
       if (msg.t === "presence") {
         setTheirSwitches({ mic: msg.mic, cam: msg.cam });
         return;
@@ -358,6 +376,84 @@ export function RoomClient({ code }: { code: string }) {
   );
 
   const peer = usePeerConnection(code, onMessage);
+
+  const sendToPeer = peer.send;
+
+  /*
+   * What the recorder films. The video elements are deliberately null: the
+   * room's elements live inside VideoTile, and reading a ref during render is
+   * not allowed. The mixer plays each stream into a hidden element of its own
+   * when it is not handed one, so passing the streams is enough.
+   */
+  const recordSources = useMemo(
+    () => ({
+      localVideo: null,
+      remoteVideo: null,
+      localStream: peer.localStream,
+      remoteStream: peer.remoteStream,
+    }),
+    [peer.localStream, peer.remoteStream],
+  );
+
+  // Both transitions go to the other person, always. They are on camera and
+  // their screen shows nothing else that could tell them.
+  const onRecordingChange = useCallback(
+    (on: boolean) => {
+      sendToPeer({ t: "recording", on });
+    },
+    [sendToPeer],
+  );
+
+  const discardRecording = useCallback(() => {
+    setFinishedRecording(null);
+    setRecordingBusy(null);
+    setRecordingError(null);
+  }, []);
+
+  /**
+   * Save keeps it on this device; love keeps it AND puts it in the album.
+   *
+   * The overlay stays open on any failure. Closing it would throw away the only
+   * copy, which lives in memory until one of these succeeds.
+   */
+  const keepRecording = useCallback(
+    async (loved: boolean) => {
+      if (finishedRecording === null) return;
+      setRecordingError(null);
+      setRecordingBusy(loved ? "Keeping it in the album…" : "Saving…");
+
+      const stored = await putRecording({
+        id: newRecordingId(),
+        room: code,
+        blob: finishedRecording.blob,
+        mimeType: finishedRecording.mimeType,
+        durationMs: finishedRecording.durationMs,
+        bytes: finishedRecording.blob.size,
+        at: Date.now(),
+        loved,
+      });
+
+      if (loved) {
+        const result = await addToAlbum(finishedRecording.blob, {
+          kind: "recording",
+          contentType: baseMimeType(finishedRecording.mimeType) ?? "video/webm",
+          sourceRoom: code,
+        });
+        if (!result.ok) {
+          setRecordingBusy(null);
+          setRecordingError(result.error ?? "That did not reach the album.");
+          return;
+        }
+      } else if (!stored) {
+        setRecordingBusy(null);
+        setRecordingError("This browser would not keep it here. Love it to put it in the album instead.");
+        return;
+      }
+
+      discardRecording();
+    },
+    [code, finishedRecording, discardRecording],
+  );
   useEffect(() => {
     peerRef.current = peer;
   });
@@ -1173,6 +1269,17 @@ export function RoomClient({ code }: { code: string }) {
   return (
     <>
       <Ambience />
+      {finishedRecording !== null ? (
+        <RecordingReview
+          key={`${finishedRecording.blob.size}-${finishedRecording.durationMs}`}
+          recording={finishedRecording}
+          busy={recordingBusy}
+          error={recordingError}
+          onSave={() => void keepRecording(false)}
+          onLove={() => void keepRecording(true)}
+          onDiscard={discardRecording}
+        />
+      ) : null}
       {/* The room dims when the film runs. Mounted only for the movie, because
           karaoke also has a `playing` transport and nobody wants the lights
           going down every time a song starts. */}
@@ -1180,8 +1287,25 @@ export function RoomClient({ code }: { code: string }) {
       <div className="flex min-h-screen flex-1 flex-col">
         {/* Top letterbox bar */}
         <header className="bar-top flex flex-wrap items-center justify-between gap-x-3 gap-y-2 bg-[var(--letterbox)] px-5 py-3">
-          <Wordmark size="compact" />
+          <div className="flex items-center gap-3">
+            <Wordmark size="compact" />
+            <RecordButton
+              room={code}
+              sources={recordSources}
+              onRecordingChange={onRecordingChange}
+              onFinished={setFinishedRecording}
+            />
+          </div>
           <ActivityBar current={current} onSelect={onSelectActivity} />
+          {theyRecord ? (
+            // Shown to the person being recorded, for as long as it lasts. It
+            // pulses because this is the one state in the room that must not
+            // be missed by somebody looking at the other person's face.
+            <p role="status" className="flex items-center gap-2 font-sans text-xs text-[var(--cream)]">
+              <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-[var(--neon)]" />
+              They are recording this call
+            </p>
+          ) : null}
           {/* The room's own code and the room's own switches share the right
               hand end of the bar, and wrap together rather than apart: they are
               both about this room rather than about the evening in it. */}
