@@ -41,9 +41,12 @@ describe("CalendarClient", () => {
   it("loads calendar blocks and shows their titles in the week", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
-    const fetchMock = vi.fn((_input: RequestInfo | URL) =>
-      Promise.resolve(response(true, { blocks: [block({ title: "Garden dinner" })] })),
-    );
+    // The parameter is kept so the mock keeps fetch's call signature, which is
+    // what lets a test read back the URL it was called with.
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      void input;
+      return Promise.resolve(response(true, { blocks: [block({ title: "Garden dinner" })] }));
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<CalendarClient />);
