@@ -1,6 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { cronAuthorised } from "@/lib/cron/auth";
 import { claimReminder, reminderCandidates } from "@/lib/calendar/blocks";
 import { dueOccurrence, reminderBody } from "@/lib/calendar/remind";
 import { devicesToNotify } from "@/lib/push/devices";
@@ -21,22 +21,6 @@ function queryTag() {
 }
 
 /**
- * Whether the caller holds the cron secret.
- *
- * Vercel sends `Authorization: Bearer <CRON_SECRET>` on its own when that
- * variable is set. Compared in constant time, with both sides padded to one
- * length first, the same way the helper route guards its token.
- */
-function authorised(request: Request, secret: string): boolean {
-  const header = request.headers.get("authorization") ?? "";
-  const supplied = header.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-  const length = Math.max(supplied.length, secret.length, 1);
-  const expected = Buffer.from(secret.padEnd(length, "\0"));
-  const given = Buffer.from(supplied.padEnd(length, "\0"));
-  return timingSafeEqual(expected, given) && supplied.length === secret.length;
-}
-
-/**
  * The reminder sweep.
  *
  * Correct at any frequency: every five minutes on a paid plan, once a day on
@@ -52,7 +36,7 @@ export async function GET(request: Request) {
   if (!secret) {
     return NextResponse.json({ error: "reminders are not set up for this app yet" }, { status: 503 });
   }
-  if (!authorised(request, secret)) {
+  if (!cronAuthorised(request, secret)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

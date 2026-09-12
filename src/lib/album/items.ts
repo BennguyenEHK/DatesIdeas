@@ -232,3 +232,30 @@ export async function deleteItem(sql: QueryTag, pairId: string, id: string): Pro
   return typeof record.object_key === "string" && (typeof record.poster_key === "string" || record.poster_key === null)
     ? { objectKey: record.object_key, posterKey: record.poster_key } : null;
 }
+
+/**
+ * Every object and poster key an album entry uses, across every pair.
+ *
+ * Read by the daily cleanup to decide which album files are unused. It throws
+ * rather than returning an empty set, because an empty set would mark every
+ * photograph in the bucket as unused.
+ */
+export async function albumKeysInUse(sql: QueryTag): Promise<Set<string>> {
+  const rows = await sql`SELECT object_key, poster_key FROM album_items`;
+  if (!Array.isArray(rows)) throw new Error("could not read album entries");
+  const keys = new Set<string>();
+  for (const row of rows) {
+    const record = row as Record<string, unknown>;
+    if (typeof record.object_key === "string") keys.add(record.object_key);
+    if (typeof record.poster_key === "string") keys.add(record.poster_key);
+  }
+  return keys;
+}
+
+/** How many album entries exist, so the cleanup can tell a complete read from a broken one. */
+export async function albumItemCount(sql: QueryTag): Promise<number> {
+  const rows = await sql`SELECT count(*)::int AS n FROM album_items`;
+  const n = Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined)?.n : undefined;
+  if (typeof n !== "number") throw new Error("could not count album entries");
+  return n;
+}

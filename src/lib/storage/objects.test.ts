@@ -103,3 +103,31 @@ describe("presignKeepsake", () => {
     expect(result?.uploadUrl).not.toBe(result?.downloadUrl);
   });
 });
+
+describe("deleteKeys", () => {
+  const config = {
+    endpoint: "https://storage.example.test",
+    region: "auto",
+    bucket: "b",
+    accessKeyId: "id",
+    secretAccessKey: "secret",
+  };
+
+  it("does nothing, and makes no request, for an empty list", async () => {
+    const { deleteKeys } = await import("./objects");
+    expect(await deleteKeys([], config)).toBe(0);
+  });
+
+  it("refuses keys outside the two places this app writes", async () => {
+    // A delete helper that would remove any key it was handed is one bad string
+    // away from emptying the bucket. None of these may even be attempted.
+    const { deleteKeys } = await import("./objects");
+    const refused = ["secrets/x.txt", "keepsakes/../album/x.jpg", "album/pair", "", "keepsakes\\ROOM\\x.png"];
+    expect(await deleteKeys(refused, config)).toBe(0);
+  });
+
+  it("does nothing when storage is not configured", async () => {
+    const { deleteKeys } = await import("./objects");
+    expect(await deleteKeys(["keepsakes/ROOM/strip-a.png"], null)).toBe(0);
+  });
+});

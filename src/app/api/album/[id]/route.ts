@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { deleteItem, updateItem } from "@/lib/album/items";
 import { pairFromRequest } from "@/lib/pair/session";
 import { clampHappenedAt } from "@/lib/album/wire";
+import { deleteKeys } from "@/lib/storage/objects";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,7 +46,13 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   const { id } = await params;
   const deleted = await deleteItem(sql, pair.id, id);
   if (deleted === null) return NextResponse.json({ error: "not found" }, { status: 404 });
-  // Bucket deletion is intentionally separate: object storage cleanup must not
-  // turn a successful authorization-bound database delete into a partial failure.
+
+  // The files go too: the photograph and, for anything that moves, its still.
+  // A failure here never turns the delete into an error -- the entry is already
+  // gone from the album, which is what the person asked for, and the daily
+  // cleanup removes any file left behind once it has had no entry for a day.
+  const keys = [deleted.objectKey, deleted.posterKey].filter((key): key is string => key !== null);
+  await deleteKeys(keys).catch(() => 0);
+
   return NextResponse.json({ ok: true });
 }

@@ -1,6 +1,12 @@
 import "server-only";
 
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 /** How long an upload link stays usable. Short: it is used immediately. */
@@ -43,6 +49,22 @@ export function storageConfig(): StorageConfig | null {
   };
 }
 
+/**
+ * One S3 client for this bucket. Neon uses bucket path segments; virtual-host
+ * URLs would point nowhere, so path style is not optional.
+ */
+function storageClient(config: StorageConfig): S3Client {
+  return new S3Client({
+    endpoint: config.endpoint,
+    region: config.region,
+    forcePathStyle: true,
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+  });
+}
+
 export interface PresignedPair {
   uploadUrl: string;
   downloadUrl: string;
@@ -71,16 +93,7 @@ export async function presignKeepsake(
   if (resolvedConfig === null) return null;
 
   try {
-    // Neon uses bucket path segments; virtual-host URLs would point nowhere.
-    const client = new S3Client({
-      endpoint: resolvedConfig.endpoint,
-      region: resolvedConfig.region,
-      forcePathStyle: true,
-      credentials: {
-        accessKeyId: resolvedConfig.accessKeyId,
-        secretAccessKey: resolvedConfig.secretAccessKey,
-      },
-    });
+    const client = storageClient(resolvedConfig);
 
     const [uploadUrl, downloadUrl] = await Promise.all([
       getSignedUrl(
@@ -128,4 +141,76 @@ export function isKeepsakeKey(key: string): boolean {
   return /^album\/[0-9a-f-]{36}\/(?:strip|clip|photo|video|recording)-[A-Za-z0-9_-]+(?:-poster)?\.[a-z0-9]{2,4}$/.test(
     key,
   );
+}
+
+export interface StoredObject {
+  key: string;
+  /** Null when the bucket did not say, which the cleanup treats as "too new to judge". */
+  lastModified: Date | null;
+}
+
+/**
+ * Every object under a prefix, across as many pages as the bucket returns.
+ *
+ * Throws on failure rather than returning an empty list. An empty list here is
+ * safe -- it deletes nothing -- but a cleanup that silently read nothing would
+ * report success while leaving every file in place.
+ */
+export async function listKeys(
+  prefix: string,
+  config?: StorageConfig | null,
+): Promise<StoredObject[]> {
+  const resolved = config === undefined ? storageConfig() : config;
+  if (resolved === null) return [];
+
+  const client = storageClient(resolved);
+  const found: StoredObject[] = [];
+  let token: string | undefined;
+  do {
+    const page = await client.send(
+      new ListObjectsV2Command({ Bucket: resolved.bucket, Prefix: prefix, ContinuationToken: token }),
+    );
+    for (const object of page.Contents ?? []) {
+      if (object.Key) found.push({ key: object.Key, lastModified: object.LastModified ?? null });
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+  return found;
+}
+
+/**
+ * The only two places this app ever writes. Anything else is refused outright:
+ * a delete helper that would remove any key it was handed is one bad string
+ * away from emptying the bucket.
+ */
+function mayDelete(key: string): boolean {
+  if (key.includes("..") || key.includes("\\")) return false;
+  return /^(?:keepsakes|album)\/[^/]+\/[^/]+$/.test(key);
+}
+
+/**
+ * Deletes objects, a few at a time, and says how many actually went.
+ *
+ * One refused delete does not stop the rest -- a cleanup that gave up on the
+ * first failure would leave the whole folder behind for want of one file.
+ */
+export async function deleteKeys(
+  keys: readonly string[],
+  config?: StorageConfig | null,
+): Promise<number> {
+  const allowed = keys.filter(mayDelete);
+  if (allowed.length === 0) return 0;
+  const resolved = config === undefined ? storageConfig() : config;
+  if (resolved === null) return 0;
+
+  const client = storageClient(resolved);
+  let deleted = 0;
+  for (let index = 0; index < allowed.length; index += 10) {
+    const batch = allowed.slice(index, index + 10);
+    const results = await Promise.allSettled(
+      batch.map((key) => client.send(new DeleteObjectCommand({ Bucket: resolved.bucket, Key: key }))),
+    );
+    deleted += results.filter((result) => result.status === "fulfilled").length;
+  }
+  return deleted;
 }

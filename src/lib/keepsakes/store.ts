@@ -132,3 +132,39 @@ export async function findKeepsake(sql: QueryTag, id: string): Promise<Keepsake 
     contentType: row.content_type,
   };
 }
+
+/**
+ * Codes of every room still open right now.
+ *
+ * The cleanup deletes the booth folder of any room NOT in this set, so a read
+ * that failed quietly and came back empty would delete tonight's strips too.
+ * It therefore throws on anything but a real list of rows.
+ */
+export async function openRoomCodes(sql: QueryTag): Promise<Set<string>> {
+  const rows = await sql`SELECT code FROM couples WHERE expires_at > now()`;
+  if (!Array.isArray(rows)) throw new Error("could not read which rooms are open");
+  const codes = new Set<string>();
+  for (const row of rows) {
+    const code = (row as Record<string, unknown>).code;
+    if (typeof code === "string") codes.add(code);
+  }
+  return codes;
+}
+
+/**
+ * Deletes the share records of every room that has closed.
+ *
+ * Records only. A record may point into the album -- a recording shared by QR
+ * does -- and the album file is never deleted here; only the dead link goes.
+ */
+export async function deleteClosedKeepsakeRows(sql: QueryTag): Promise<number> {
+  const rows = await sql`
+    DELETE FROM keepsakes
+    WHERE NOT EXISTS (
+      SELECT 1 FROM couples
+      WHERE couples.code = keepsakes.room_code AND couples.expires_at > now()
+    )
+    RETURNING id
+  `;
+  return Array.isArray(rows) ? rows.length : 0;
+}

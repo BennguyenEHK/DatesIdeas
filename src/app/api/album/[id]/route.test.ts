@@ -4,7 +4,10 @@ const queries: string[] = [];
 const bindings: unknown[][] = [];
 let results: unknown[][] = [];
 
+const storage = vi.hoisted(() => ({ deleteKeys: vi.fn() }));
+
 vi.mock("server-only", () => ({}));
+vi.mock("@/lib/storage/objects", () => ({ deleteKeys: storage.deleteKeys }));
 vi.mock("@/lib/db", () => ({
   db: () => (strings: TemplateStringsArray, ...values: unknown[]) => {
     queries.push(strings.join("?").replace(/\s+/g, " "));
@@ -38,6 +41,7 @@ beforeEach(() => {
   queries.length = 0;
   bindings.length = 0;
   results = [];
+  storage.deleteKeys.mockReset().mockResolvedValue(1);
 });
 
 describe("PATCH /api/album/[id]", () => {
@@ -111,5 +115,30 @@ describe("DELETE /api/album/[id]", () => {
       headers: { authorization: `Bearer ${TICKET}` },
     });
     expect((await DELETE(request, params("nope"))).status).toBe(404);
+    // Nothing of theirs is touched in the bucket either.
+    expect(storage.deleteKeys).not.toHaveBeenCalled();
+  });
+
+  it("deletes the photograph's file and a video's still along with the entry", async () => {
+    results = [pairRow, [{ object_key: `album/${PAIR}/video-x.mp4`, poster_key: `album/${PAIR}/video-x-poster.jpg` }]];
+    const request = new Request("http://x/api/album/item-1", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${TICKET}` },
+    });
+    expect((await DELETE(request, params("item-1"))).status).toBe(200);
+    expect(storage.deleteKeys).toHaveBeenCalledWith([`album/${PAIR}/video-x.mp4`, `album/${PAIR}/video-x-poster.jpg`]);
+  });
+
+  it("still reports success when the bucket refuses, because the entry is gone", async () => {
+    // The daily cleanup removes a file left behind; failing the request here
+    // would tell somebody their delete did not happen when it did.
+    storage.deleteKeys.mockRejectedValue(new Error("bucket down"));
+    results = [pairRow, [{ object_key: `album/${PAIR}/photo-x.jpg`, poster_key: null }]];
+    const request = new Request("http://x/api/album/item-1", {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${TICKET}` },
+    });
+    expect((await DELETE(request, params("item-1"))).status).toBe(200);
+    expect(storage.deleteKeys).toHaveBeenCalledWith([`album/${PAIR}/photo-x.jpg`]);
   });
 });
