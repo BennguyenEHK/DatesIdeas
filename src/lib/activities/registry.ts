@@ -1,4 +1,4 @@
-export const ACTIVITY_IDS = ["cards", "karaoke", "movie", "photobooth"] as const;
+export const ACTIVITY_IDS = ["cards", "karaoke", "movie", "photobooth", "createspace", "gameword"] as const;
 export type ActivityId = (typeof ACTIVITY_IDS)[number];
 
 /**
@@ -30,6 +30,13 @@ export const ACTIVITIES: readonly ActivityDef[] = [
   // Takeover: the scene the two of you stand in IS the stage, with the strip
   // developing in the column beside it.
   { id: "photobooth", label: "Photo booth", icon: "📸", kind: "takeover", ready: true },
+  // Takeover: the picture being drawn on needs the frame, and the faces stay in
+  // the column beside it so you can watch each other make it.
+  { id: "createspace", label: "CreateSpace", icon: "🎨", kind: "takeover", ready: true },
+  // Takeover, for the board. Appended rather than inserted: activityKey is the
+  // index in ACTIVITY_IDS and breaks swap ties, so reordering would change the
+  // tie-break between two builds of the app talking to each other.
+  { id: "gameword", label: "GameWord", icon: "🎲", kind: "takeover", ready: true },
 ];
 
 export function isActivityId(v: unknown): v is ActivityId {

@@ -47,7 +47,7 @@ describe("naming a day", () => {
         201,
       ),
     );
-    const onChange = openEditor();
+    openEditor();
 
     fillDraft("Birthday", "2026-03-01");
     fireEvent.click(screen.getByLabelText("Repeats every year"));
@@ -92,7 +92,7 @@ describe("naming a day", () => {
 describe("editing a day", () => {
   it("patches by id rather than creating a second one", async () => {
     vi.mocked(fetch).mockResolvedValue(jsonResponse({ ok: true }));
-    openEditor();
+    const onChange = openEditor();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit First date" }));
     fillDraft("Our first evening", "2026-02-14");
@@ -102,6 +102,9 @@ describe("editing a day", () => {
     const [, init] = vi.mocked(fetch).mock.calls[0];
     expect(init?.method).toBe("PATCH");
     expect(JSON.parse(String(init?.body))).toMatchObject({ id: "one", title: "Our first evening" });
+    // Edited in place: still one occasion, not a second one alongside it.
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange.mock.calls[0][0]).toHaveLength(1);
   });
 
   it("loads the existing values into the form so nothing is retyped", () => {

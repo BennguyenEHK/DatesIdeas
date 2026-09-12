@@ -402,3 +402,37 @@ describe("live", () => {
     expect(decode(JSON.stringify({ t: "live", showAt: 9 }))).toBeNull();
   });
 });
+
+describe("messages added for recording, CreateSpace and GameWord", () => {
+  it("decodes the recording signal, which tells the other person they are recorded", () => {
+    // This case was missing for a while and the message was silently dropped.
+    expect(decode(encode({ t: "recording", on: true }))).toEqual({ t: "recording", on: true });
+    expect(decode(JSON.stringify({ t: "recording", on: "yes" }))).toBeNull();
+  });
+
+  it("decodes a drawing operation and refuses a malformed one", () => {
+    const op = {
+      kind: "stroke" as const,
+      stroke: { id: "a", author: "ben", at: 1, ink: "#e8b94a" as const, width: 0.01, points: [[0.1, 0.2]] as [number, number][] },
+    };
+    expect(decode(encode({ t: "canvas", op }))).toEqual({ t: "canvas", op });
+    expect(decode(JSON.stringify({ t: "canvas", op: { kind: "stroke", stroke: { id: "a" } } }))).toBeNull();
+  });
+
+  it("decodes a picture choice, including a blank page", () => {
+    expect(decode(encode({ t: "canvas-base", itemId: "abc" }))).toEqual({ t: "canvas-base", itemId: "abc" });
+    expect(decode(encode({ t: "canvas-base", itemId: null }))).toEqual({ t: "canvas-base", itemId: null });
+  });
+
+  it("decodes a game start and a move, and refuses a board smuggled in", () => {
+    const start = { t: "game" as const, game: "connect4" as const, players: ["ben", "k"] as [string, string], nonce: "n1" };
+    expect(decode(encode(start))).toEqual(start);
+    expect(decode(JSON.stringify({ ...start, players: ["only-one"] }))).toBeNull();
+    expect(decode(encode({ t: "move", nonce: "n1", move: { kind: "place", index: 3 } }))).toEqual({
+      t: "move",
+      nonce: "n1",
+      move: { kind: "place", index: 3 },
+    });
+    expect(decode(JSON.stringify({ t: "move", nonce: "n1", move: { kind: "board", cells: [] } }))).toBeNull();
+  });
+});

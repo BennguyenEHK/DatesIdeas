@@ -2,6 +2,8 @@ import { isMood, type Mood } from "@/lib/cards/types";
 import { isThemeId, type ThemeId } from "@/lib/photo/themes";
 import { SHOT_COUNTS, type ShotCount } from "@/lib/photo/strip";
 import { isActivityId, type ActivityId } from "@/lib/activities/registry";
+import { isCanvasOp, type CanvasOp } from "@/lib/createspace/ops";
+import { isGameId, isGameMove, type GameId, type GameMove } from "@/lib/gameword/games";
 
 export const MEME_IDS = [
   "heart",
@@ -138,7 +140,21 @@ export type PeerMessage =
   // gap is minutes. Without this the sender's play button is live over a song
   // the other person does not have yet.
   | { t: "track-ready"; requestId: string }
-  | { t: "track-error"; requestId: string; message: string };
+  | { t: "track-error"; requestId: string; message: string }
+  // CreateSpace. One drawing operation, applied by both sides to the same
+  // scene. The scene itself never crosses -- only the edits do, and ops.ts is
+  // what guarantees two screens holding the same edits hold the same picture.
+  | { t: "canvas"; op: CanvasOp }
+  // Which picture is being drawn on: an album item both of you can already
+  // fetch, or null for a blank page. An id rather than an image, because both
+  // browsers belong to the same album and a photograph is megabytes.
+  | { t: "canvas-base"; itemId: string | null }
+  // GameWord. A game starting, with the seating decided by whoever started it.
+  // The nonce names this particular game, so a move from the one before cannot
+  // land on the board of the one after.
+  | { t: "game"; game: GameId; players: [string, string]; nonce: string }
+  // One move. Only what the player chose travels; each side computes the board.
+  | { t: "move"; nonce: string; move: GameMove };
 
 /** The longest chat line that will cross, and the longest one anyone may type. */
 export const CHAT_MAX_CHARS = 500;
@@ -230,6 +246,12 @@ export function decode(raw: string): PeerMessage | null {
       return typeof m.mic === "boolean" && typeof m.cam === "boolean"
         ? { t: "presence", mic: m.mic, cam: m.cam }
         : null;
+    case "recording":
+      // Declared in the union long before it had a case here, which meant the
+      // other browser decoded it to null and threw it away: the one message
+      // telling somebody they are being recorded never arrived. A type with no
+      // decoder is invisible to the compiler, so the test pins it instead.
+      return typeof m.on === "boolean" ? { t: "recording", on: m.on } : null;
     case "ending":
       // Null is a real value here -- it is how the countdown is called off --
       // so an absent field and a cancellation must not be confused.
@@ -281,6 +303,30 @@ export function decode(raw: string): PeerMessage | null {
     case "track-error":
       return isStr(m.requestId) && isStr(m.message)
         ? { t: "track-error", requestId: m.requestId, message: m.message }
+        : null;
+    case "canvas":
+      return isCanvasOp(m.op) ? { t: "canvas", op: m.op } : null;
+    case "canvas-base":
+      return m.itemId === null || (isStr(m.itemId) && m.itemId.length <= 40)
+        ? { t: "canvas-base", itemId: m.itemId === null ? null : (m.itemId as string) }
+        : null;
+    case "game":
+      return isGameId(m.game) &&
+        Array.isArray(m.players) &&
+        m.players.length === 2 &&
+        m.players.every((player) => isStr(player) && player.length <= 64) &&
+        isStr(m.nonce) &&
+        m.nonce.length <= 40
+        ? {
+            t: "game",
+            game: m.game,
+            players: [m.players[0] as string, m.players[1] as string],
+            nonce: m.nonce,
+          }
+        : null;
+    case "move":
+      return isStr(m.nonce) && m.nonce.length <= 40 && isGameMove(m.move)
+        ? { t: "move", nonce: m.nonce, move: m.move }
         : null;
     default:
       return null;

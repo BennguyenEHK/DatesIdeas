@@ -30,7 +30,7 @@ describe("activity registry", () => {
   });
 
   it("marks exactly the built activities as ready", () => {
-    // Guards against shipping a bubble that opens an empty stage. All four
+    // Guards against shipping a bubble that opens an empty stage. All six
     // are built now, so this is the test that has to change first if a fifth
     // bubble is ever added ahead of the thing behind it.
     expect(ACTIVITIES.every((a) => a.ready)).toBe(true);
@@ -46,6 +46,8 @@ describe("activity registry", () => {
       "karaoke",
       "movie",
       "photobooth",
+      "createspace",
+      "gameword",
     ]);
     expect(ACTIVITIES.filter((a) => a.kind === "companion").map((a) => a.id)).toEqual([
       "cards",
