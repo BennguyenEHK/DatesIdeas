@@ -40,26 +40,27 @@ describe("keepsake helpers", () => {
     expect(extensionFor("clip", "video/webm")).toBe("webm");
   });
 
-  it("builds a namespaced keepsake key", () => {
-    expect(keepsakeKey("ABC_12", "strip", "png", "deadbeef")).toBe(
-      "keepsakes/ABC_12/strip-deadbeef.png",
+  const TAKEN = new Date("2026-09-13T02:04:17.000Z");
+
+  it("files a keepsake by date, with its room code in the name", () => {
+    // 9:04 pm in Chicago on the 12th is 02:04 UTC on the 13th.
+    expect(keepsakeKey("kw3kdd", "strip", "png", "deadbeef", TAKEN, -300)).toBe(
+      "keepsakes/2026/09/12_21-04-17_strip_KW3KDD_deadbeef.png",
     );
   });
 
   it("rejects an empty room", () => {
-    expect(() => keepsakeKey("", "strip", "png", "token")).toThrow(TypeError);
+    expect(() => keepsakeKey("", "strip", "png", "deadbeef", TAKEN, 0)).toThrow(TypeError);
   });
 
   it("rejects an empty token", () => {
-    expect(() => keepsakeKey("room", "strip", "png", "")).toThrow(TypeError);
+    expect(() => keepsakeKey("ROOM", "strip", "png", "", TAKEN, 0)).toThrow(TypeError);
   });
 
-  it("rejects a slash in a room", () => {
-    expect(() => keepsakeKey("room/other", "strip", "png", "token")).toThrow(TypeError);
-  });
-
-  it("rejects dot-dot in a room", () => {
-    expect(() => keepsakeKey("room..other", "strip", "png", "token")).toThrow(TypeError);
+  it("rejects anything in a room code that could break the name apart", () => {
+    for (const room of ["room/other", "room..other", "ABC_12", "ABC-12"]) {
+      expect(() => keepsakeKey(room, "strip", "png", "deadbeef", TAKEN, 0)).toThrow(TypeError);
+    }
   });
 
   it("creates an eight-byte lowercase hex token", () => {
@@ -188,6 +189,7 @@ describe("keepsake helpers", () => {
         contentType: "video/mp4",
         extension: "mp4",
         sizeBytes: 12,
+        utcOffsetMinutes: -new Date().getTimezoneOffset() + 0,
       }),
     }));
     expect(fetchImpl).toHaveBeenNthCalledWith(2, "https://upload", expect.objectContaining({

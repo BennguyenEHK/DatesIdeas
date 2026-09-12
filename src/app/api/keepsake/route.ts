@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isValidRoomCode } from "@/lib/room/code";
 import { isKeepsakeKey, presignKeepsake } from "@/lib/storage/objects";
+import { utcOffsetMinutes } from "@/lib/storage/datedName";
 import { newShareId, rememberKeepsake } from "@/lib/keepsakes/store";
 import {
   MAX_UPLOAD_MB,
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
     return bad("expected a json body");
   }
 
-  const { room, kind, extension, contentType, sizeBytes } = (body ?? {}) as Record<
+  const { room, kind, extension, contentType, sizeBytes, utcOffsetMinutes: offset } = (body ?? {}) as Record<
     string,
     unknown
   >;
@@ -107,7 +108,7 @@ export async function POST(request: Request) {
   // The key is built HERE, never accepted from the caller. A signed PUT is
   // permission to write to exactly one path, so letting a client name that
   // path would turn this endpoint into write access to the whole bucket.
-  const key = keepsakeKey(code, asKind, extension, randomToken());
+  const key = keepsakeKey(code, asKind, extension, randomToken(4), new Date(), utcOffsetMinutes(offset));
   if (!isKeepsakeKey(key)) return bad("could not name that file");
 
   // Only the upload link is needed here. The download link is minted fresh

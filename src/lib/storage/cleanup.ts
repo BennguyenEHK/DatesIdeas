@@ -7,10 +7,13 @@ import type { StoredObject } from "./objects";
  * bucket or a database. The rules are deliberately narrow, because every one of
  * them deletes something a person made:
  *
- *   1. A closed room's photo booth folder, keepsakes/<ROOM>/, goes entirely.
- *      Its QR links stopped working when the room closed, so nothing can open
- *      those files any more. The folder is found by listing the bucket rather
- *      than by reading share records, so files that never got a record go too.
+ *   1. Every photo booth file from a closed room goes. Its QR links stopped
+ *      working when the room closed, so nothing can open those files any more.
+ *      The room is read from each file's name -- keepsakes/2026/09/
+ *      12_21-04-17_strip_KW3KDD_8e2d4a1b.png -- or, for files saved before they
+ *      were filed by date, from its folder, keepsakes/KW3KDD/. Files are found
+ *      by listing the bucket rather than by reading share records, so files
+ *      that never got a record go too.
  *   2. Share records for closed rooms go. They point at files nobody can reach.
  *      A record that points INTO the album loses only the record: an album file
  *      is never deleted because a room closed.
@@ -35,31 +38,44 @@ export interface CleanupDeps {
   albumItemCount(): Promise<number>;
 }
 
+/**
+ * The room a photo booth file belongs to, or null for anything unrecognised.
+ *
+ * Null means "leave it alone": a file the cleanup cannot place is never deleted.
+ */
+export function keepsakeRoom(key: string): string | null {
+  const dated = /^keepsakes\/\d{4}\/\d{2}\/\d{2}_[0-9-]+_(?:strip|clip)_([A-Z0-9]+)_[a-f0-9]+\.[a-z0-9]+$/.exec(key);
+  if (dated) return dated[1];
+  const legacy = /^keepsakes\/([A-Za-z0-9_-]+)\/[^/]+$/.exec(key);
+  // A four-digit "room" is a year folder, never a room code.
+  return legacy && !/^\d{4}$/.test(legacy[1]) ? legacy[1] : null;
+}
+
 export interface CleanupReport {
-  closedRoomFolders: string[];
+  closedRooms: string[];
   keepsakeFilesDeleted: number;
   keepsakeRowsDeleted: number;
   albumOrphansDeleted: number;
 }
 
 export async function runCleanup(deps: CleanupDeps): Promise<CleanupReport> {
-  // ---- 1. closed rooms' photo booth folders
+  // ---- 1. closed rooms' photo booth files, whichever month folder they are in
   const keepsakeObjects = await deps.listKeys("keepsakes/");
   const byRoom = new Map<string, string[]>();
   for (const object of keepsakeObjects) {
-    const [top, room, file] = object.key.split("/");
-    if (top !== "keepsakes" || !room || !file) continue;
+    const room = keepsakeRoom(object.key);
+    if (room === null) continue;
     const keys = byRoom.get(room) ?? [];
     keys.push(object.key);
     byRoom.set(room, keys);
   }
 
-  let closedRoomFolders: string[] = [];
+  let closedRooms: string[] = [];
   let keepsakeFilesDeleted = 0;
   if (byRoom.size > 0) {
     const open = await deps.openRoomCodes();
-    closedRoomFolders = [...byRoom.keys()].filter((room) => !open.has(room)).sort();
-    const doomed = closedRoomFolders.flatMap((room) => byRoom.get(room) ?? []);
+    closedRooms = [...byRoom.keys()].filter((room) => !open.has(room)).sort();
+    const doomed = closedRooms.flatMap((room) => byRoom.get(room) ?? []);
     keepsakeFilesDeleted = await deps.deleteKeys(doomed);
   }
 
@@ -91,5 +107,5 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupReport> {
     albumOrphansDeleted = await deps.deleteKeys(orphans);
   }
 
-  return { closedRoomFolders, keepsakeFilesDeleted, keepsakeRowsDeleted, albumOrphansDeleted };
+  return { closedRooms, keepsakeFilesDeleted, keepsakeRowsDeleted, albumOrphansDeleted };
 }

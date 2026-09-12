@@ -1,3 +1,5 @@
+import { datedParts, localOffsetMinutes } from "@/lib/storage/datedName";
+
 /** What kind of keepsake is being stored. */
 export type KeepsakeKind = "strip" | "clip";
 
@@ -22,22 +24,32 @@ export function extensionFor(
 }
 
 /**
- * Room and token are checked here because this string becomes a storage path;
- * accepting path punctuation would let a caller escape its room namespace.
+ * `keepsakes/2026/09/12_21-04-17_strip_KW3KDD_8e2d4a1b.png`
+ *
+ * Filed by when it was taken, on the phone's clock. The room code sits in the
+ * name because the daily cleanup reads it there: when a room closes, every file
+ * carrying its code is deleted, whichever month folder it landed in.
+ *
+ * Room and token are checked here because this string becomes a storage path.
+ * Both are letters and digits only, so neither can contain the `_` that
+ * separates the name's parts or any path punctuation.
  */
 export function keepsakeKey(
   room: string,
   kind: KeepsakeKind,
   extension: string,
   token: string,
+  takenAt: Date,
+  utcOffsetMinutes: number,
 ): string {
   if (room.length === 0 || token.length === 0) {
     throw new TypeError("room and token must not be empty");
   }
-  if (!/^[A-Za-z0-9_-]+$/.test(room) || !/^[A-Za-z0-9_-]+$/.test(token)) {
+  if (!/^[A-Za-z0-9]+$/.test(room) || !/^[a-f0-9]+$/.test(token)) {
     throw new TypeError("room and token contain invalid characters");
   }
-  return `keepsakes/${room}/${kind}-${token}.${extension}`;
+  const { folder, stamp } = datedParts(takenAt, utcOffsetMinutes);
+  return `keepsakes/${folder}/${stamp}_${kind}_${room.toUpperCase()}_${token}.${extension}`;
 }
 
 /** A short random token for a storage key. */
@@ -163,6 +175,8 @@ export async function uploadKeepsake(
         contentType,
         extension,
         sizeBytes: blob.size,
+        // Names the file for this phone's evening, not the same instant in UTC.
+        utcOffsetMinutes: localOffsetMinutes(),
       }),
     });
 

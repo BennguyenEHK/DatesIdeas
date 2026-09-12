@@ -10,6 +10,8 @@ import { albumExtension, albumKey, allowsContentType, isAlbumKey, needsPoster, p
 import { isAlbumKind, type AlbumItem, type AlbumKind } from "@/lib/album/types";
 import { clampHappenedAt, type PresignResponse } from "@/lib/album/wire";
 import { presignKeepsake } from "@/lib/storage/objects";
+import { utcOffsetMinutes } from "@/lib/storage/datedName";
+import { receiptMatches, receiptSecret, uploadReceipt } from "@/lib/album/receipt";
 import { devicesToNotify } from "@/lib/push/devices";
 import { sendToDevices, SNAP_PUSH_TTL_SEC } from "@/lib/push/send";
 
@@ -65,14 +67,19 @@ export async function POST(request: Request) {
   const extension = albumExtension(fields.contentType);
   if (extension === null) return bad("invalid content type");
   const happenedAt = clampHappenedAt(body.happenedAt);
-  const objectKey = albumKey(pair.id, fields.kind, extension, randomToken());
+  const secret = receiptSecret();
+  if (secret === null) return unavailable();
+  // Four random bytes, not eight: the name is read by people now, and four
+  // bytes is already one in four billion for two files sharing a second.
+  const objectKey = albumKey(happenedAt, utcOffsetMinutes(body.utcOffsetMinutes), fields.kind, extension, randomToken(4));
   const signed = await presignKeepsake(objectKey, fields.contentType);
   if (signed === null) return unavailable();
   // Typed as the shared contract rather than an inline shape, so a change to
   // wire.ts that this route has not followed fails the build instead of
   // quietly serving a client something it cannot parse.
   const response: PresignResponse = {
-    id: newShareId(), uploadUrl: signed.uploadUrl, happenedAt, objectKey, kind: fields.kind,
+    id: newShareId(), uploadUrl: signed.uploadUrl, happenedAt, objectKey,
+    receipt: uploadReceipt(secret, pair.id, objectKey), kind: fields.kind,
   };
   if (body.withPoster === true && needsPoster(fields.kind)) {
     const poster = await presignKeepsake(posterKeyFor(objectKey), POSTER_CONTENT_TYPE);
@@ -94,9 +101,14 @@ export async function PUT(request: Request) {
   if ((body.sourceRoom !== undefined && body.sourceRoom !== null && typeof body.sourceRoom !== "string") ||
     (body.posterUploaded !== undefined && typeof body.posterUploaded !== "boolean")) return bad("invalid confirmation");
   const room = typeof body.sourceRoom === "string" ? body.sourceRoom : null;
-  // A valid album key alone is not enough: another pair's path must never be
-  // turned into a row this pair can later sign and read.
-  if (!isAlbumKey(body.objectKey) || body.objectKey.split("/")[1] !== pair.id) return bad("invalid object key");
+  // A valid album key alone is not enough: another pair's file must never be
+  // turned into a row this pair can later sign and read. The path no longer
+  // names the pair, so the receipt issued with the key is what proves it.
+  const secret = receiptSecret();
+  if (secret === null) return unavailable();
+  if (!isAlbumKey(body.objectKey) || !receiptMatches(secret, pair.id, body.objectKey, body.receipt)) {
+    return bad("invalid object key");
+  }
   const happenedAt = clampHappenedAt(body.happenedAt);
   const posterKey = body.posterUploaded === true && needsPoster(fields.kind) ? posterKeyFor(body.objectKey) : null;
   const stored = await insertItem(sql, { id: body.id, pairId: pair.id, objectKey: body.objectKey,

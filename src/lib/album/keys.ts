@@ -1,3 +1,4 @@
+import { DATED_PATTERN, datedParts } from "@/lib/storage/datedName";
 import { type AlbumKind, isAlbumKind, moves } from "./types";
 
 /**
@@ -62,31 +63,36 @@ export function withinCap(kind: AlbumKind, bytes: number): boolean {
 }
 
 /**
- * A uuid, checked rather than trusted, because it becomes a path segment.
+ * The random ending: lowercase hex only, so it can never contain the `_` that
+ * separates the name's parts or the `-poster` that marks a still.
  *
- * The pair id comes from an authenticated lookup rather than from the request
- * body, so this should never fail -- which is exactly why it is asserted. A
- * check that only fires when something upstream is already wrong is the one
- * worth keeping.
+ * At least eight characters. Photographs copied off a computer often share one
+ * timestamp to the second, and a batch of them landing on the same name would
+ * silently overwrite each other -- eight hex characters make that a one in four
+ * billion event per pair of files rather than one in sixty-five thousand.
  */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const TOKEN = /^[A-Za-z0-9_-]+$/;
+const TOKEN = /^[a-f0-9]{8,32}$/;
 
+/**
+ * `album/2026/09/12_23-30-00_photo_3f9a0c1e.jpg`
+ *
+ * Filed by when the memory happened, on the uploading phone's clock. Whose it
+ * is is no longer in the path; see `receipt.ts` for how that is still proven.
+ */
 export function albumKey(
-  pairId: string,
+  happenedAt: Date | string,
+  utcOffsetMinutes: number,
   kind: AlbumKind,
   extension: string,
   token: string,
 ): string {
-  if (!UUID.test(pairId)) throw new TypeError("pair id is not a uuid");
   if (!isAlbumKind(kind)) throw new TypeError(`unknown album kind: ${kind}`);
-  if (!TOKEN.test(token) || token.length === 0) {
-    throw new TypeError("token contains invalid characters");
-  }
+  if (!TOKEN.test(token)) throw new TypeError("token contains invalid characters");
   if (!/^[a-z0-9]{2,4}$/.test(extension)) {
     throw new TypeError("extension contains invalid characters");
   }
-  return `album/${pairId}/${kind}-${token}.${extension}`;
+  const { folder, stamp } = datedParts(happenedAt, utcOffsetMinutes);
+  return `album/${folder}/${stamp}_${kind}_${token}.${extension}`;
 }
 
 /** The still that stands in for a moving item. Always beside it, always JPEG. */
@@ -107,6 +113,21 @@ export { moves as needsPoster };
  * defending against.
  */
 export function isAlbumKey(key: string): boolean {
+  if (typeof key !== "string") return false;
+  if (key.includes("..") || key.includes("\\")) return false;
+  return ALBUM_KEY.test(key);
+}
+
+const ALBUM_KEY = new RegExp(
+  `^album\\/${DATED_PATTERN}_(?:strip|clip|photo|video|recording)_[a-f0-9]{8,32}(?:-poster)?\\.[a-z0-9]{2,4}$`,
+);
+
+/**
+ * The shape album files had before they were filed by date:
+ * `album/<pair id>/photo-<token>.jpg`. Never produced any more, but an entry
+ * saved that way still has to be shareable and deletable.
+ */
+export function isLegacyAlbumKey(key: string): boolean {
   if (typeof key !== "string") return false;
   if (key.includes("..") || key.includes("\\")) return false;
   return /^album\/[0-9a-f-]{36}\/(?:strip|clip|photo|video|recording)-[A-Za-z0-9_-]+(?:-poster)?\.[a-z0-9]{2,4}$/.test(

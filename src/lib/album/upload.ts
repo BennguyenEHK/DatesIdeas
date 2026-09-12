@@ -1,3 +1,4 @@
+import { localOffsetMinutes } from "@/lib/storage/datedName";
 import type { AlbumItem, AlbumKind } from "./types";
 import { allowsContentType, MAX_ALBUM_MB, needsPoster, withinCap } from "./keys";
 import type { ConfirmRequest, ConfirmResponse, PresignRequest, PresignResponse } from "./wire";
@@ -34,7 +35,7 @@ function isPresignResponse(value: unknown): value is PresignResponse {
   return (
     typeof value.id === "string" && typeof value.uploadUrl === "string" &&
     typeof value.happenedAt === "string" && typeof value.objectKey === "string" &&
-    typeof value.kind === "string"
+    typeof value.receipt === "string" && typeof value.kind === "string"
   );
 }
 
@@ -132,6 +133,9 @@ export async function addToAlbum(
     happenedAt: at,
     withPoster,
     sourceRoom: options.sourceRoom,
+    // This device's clock at the moment the memory happened, so the file is
+    // named for that evening rather than for the same instant in UTC.
+    utcOffsetMinutes: localOffsetMinutes(at),
   };
 
   try {
@@ -169,6 +173,7 @@ export async function addToAlbum(
     const confirm: ConfirmRequest = {
       id: presignBody.id,
       objectKey: presignBody.objectKey,
+      receipt: presignBody.receipt,
       kind: presignBody.kind,
       contentType: options.contentType,
       sizeBytes: file.size,

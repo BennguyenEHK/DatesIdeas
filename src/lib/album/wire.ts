@@ -24,6 +24,12 @@ export interface PresignRequest {
   withPoster?: boolean;
   /** The evening that produced it, when one did. */
   sourceRoom?: string | null;
+  /**
+   * The uploading device's clock at `happenedAt`, in minutes east of UTC.
+   * Decides the year/month folder and the day-and-time name. Missing or not a
+   * real offset means UTC.
+   */
+  utcOffsetMinutes?: number;
 }
 
 export interface PresignResponse {
@@ -39,13 +45,15 @@ export interface PresignResponse {
    *
    * This travels to the client and returns, which looks like an invitation to
    * tamper and is not one: `confirm` re-checks it with `isAlbumKey` and, more
-   * to the point, checks that its pair segment matches the authenticated pair.
-   * A client can therefore only ever name a path it was already given for its
-   * own album. The alternative -- a server-side table of pending uploads --
-   * would be a second source of truth that needs sweeping when an upload is
-   * abandoned, which is most of them.
+   * to the point, checks `receipt` against the authenticated pair. A client can
+   * therefore only ever name a path it was already given for its own album.
+   * The alternative -- a server-side table of pending uploads -- would be a
+   * second source of truth that needs sweeping when an upload is abandoned,
+   * which is most of them.
    */
   objectKey: string;
+  /** Proof the server issued `objectKey` to this pair. Send it back unchanged. */
+  receipt: string;
   kind: AlbumKind;
 }
 
@@ -63,6 +71,8 @@ export interface ConfirmRequest {
   id: string;
   /** Exactly as `presign` returned it. Re-validated against the caller's pair. */
   objectKey: string;
+  /** Exactly as `presign` returned it. */
+  receipt: string;
   kind: AlbumKind;
   contentType: string;
   sizeBytes: number;

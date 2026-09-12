@@ -59,20 +59,30 @@ describe("storageConfig", () => {
 });
 
 describe("isKeepsakeKey", () => {
-  it("accepts a strip key", () => {
-    expect(isKeepsakeKey("keepsakes/room_1/strip-token-2.png")).toBe(true);
+  it("accepts a strip filed by date", () => {
+    expect(isKeepsakeKey("keepsakes/2026/09/12_21-04-17_strip_KW3KDD_8e2d4a1b.png")).toBe(true);
   });
 
-  it("accepts a clip key", () => {
-    expect(isKeepsakeKey("keepsakes/room-1/clip-token_2.mp4")).toBe(true);
+  it("accepts a clip filed by date", () => {
+    expect(isKeepsakeKey("keepsakes/2026/09/12_21-04-17_clip_KW3KDD_8e2d4a1b.mp4")).toBe(true);
+  });
+
+  it("accepts an album file, which can be shared by QR", () => {
+    expect(isKeepsakeKey("album/2026/09/12_23-30-00_recording_3f9a0c1e.webm")).toBe(true);
+  });
+
+  it("still accepts both layouts from before files were filed by date", () => {
+    expect(isKeepsakeKey("keepsakes/room_1/strip-token-2.png")).toBe(true);
+    expect(isKeepsakeKey("album/11111111-2222-3333-4444-555555555555/photo-abc.jpg")).toBe(true);
   });
 
   it.each([
-    ["an unknown kind", "keepsakes/room/photo-token.png"],
-    ["a traversal segment", "keepsakes/room/strip-..token.png"],
-    ["a backslash", "keepsakes\\room/strip-token.png"],
-    ["a slash inside the room", "keepsakes/room/extra/strip-token.png"],
-    ["no extension", "keepsakes/room/strip-token"],
+    ["an unknown kind", "keepsakes/2026/09/12_21-04-17_photo_KW3KDD_8e2d4a1b.png"],
+    ["no room code", "keepsakes/2026/09/12_21-04-17_strip_8e2d4a1b.png"],
+    ["a traversal segment", "keepsakes/2026/09/../12_21-04-17_strip_KW3KDD_8e2d4a1b.png"],
+    ["a backslash", "keepsakes\\2026/09/12_21-04-17_strip_KW3KDD_8e2d4a1b.png"],
+    ["an extra folder", "keepsakes/2026/09/x/12_21-04-17_strip_KW3KDD_8e2d4a1b.png"],
+    ["no extension", "keepsakes/2026/09/12_21-04-17_strip_KW3KDD_8e2d4a1b"],
     ["an empty string", ""],
   ])("rejects %s", (_reason, key) => {
     expect(isKeepsakeKey(key)).toBe(false);
@@ -122,7 +132,16 @@ describe("deleteKeys", () => {
     // A delete helper that would remove any key it was handed is one bad string
     // away from emptying the bucket. None of these may even be attempted.
     const { deleteKeys } = await import("./objects");
-    const refused = ["secrets/x.txt", "keepsakes/../album/x.jpg", "album/pair", "", "keepsakes\\ROOM\\x.png"];
+    const refused = [
+      "secrets/x.txt",
+      "keepsakes/../album/x.jpg",
+      "album/pair",
+      "album/2026/09",
+      "album/2026/09/x/y.jpg",
+      "secrets/2026/09/x.jpg",
+      "",
+      "keepsakes\\ROOM\\x.png",
+    ];
     expect(await deleteKeys(refused, config)).toBe(0);
   });
 

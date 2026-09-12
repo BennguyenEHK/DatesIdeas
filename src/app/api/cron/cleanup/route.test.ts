@@ -54,7 +54,7 @@ describe("GET /api/cron/cleanup", () => {
 
   it("runs the cleanup and reports what it removed", async () => {
     vi.stubEnv("CRON_SECRET", SECRET);
-    const report = { closedRoomFolders: ["KW3KDD"], keepsakeFilesDeleted: 14, keepsakeRowsDeleted: 10, albumOrphansDeleted: 1 };
+    const report = { closedRooms: ["KW3KDD"], keepsakeFilesDeleted: 14, keepsakeRowsDeleted: 10, albumOrphansDeleted: 1 };
     mocks.runCleanup.mockResolvedValue(report);
     const response = await GET(call(`Bearer ${SECRET}`));
     expect(response.status).toBe(200);

@@ -5,41 +5,44 @@ import {
   albumKey,
   allowsContentType,
   isAlbumKey,
+  isLegacyAlbumKey,
   needsPoster,
   posterKeyFor,
   withinCap,
 } from "./keys";
 
 const PAIR = "11111111-2222-3333-4444-555555555555";
+const AT = "2026-09-13T04:30:00.000Z";
+const CHICAGO = -300;
 
 describe("albumKey", () => {
-  it("puts an item under its own pair", () => {
-    expect(albumKey(PAIR, "photo", "jpg", "abc123")).toBe(
-      `album/${PAIR}/photo-abc123.jpg`,
+  it("files an item by year and month, named by day, time and kind", () => {
+    expect(albumKey(AT, CHICAGO, "photo", "jpg", "3f9a0c1e")).toBe(
+      "album/2026/09/12_23-30-00_photo_3f9a0c1e.jpg",
     );
   });
 
-  it("refuses a pair id that is not a uuid", () => {
-    // The pair id comes from an authenticated lookup, so this should be
-    // impossible -- which is why it is asserted rather than assumed.
-    expect(() => albumKey("../../other", "photo", "jpg", "abc")).toThrow(TypeError);
+  it("files an old memory under the year it happened", () => {
+    expect(albumKey("2024-05-14T19:32:05.000Z", 0, "photo", "jpg", "3f9a0c1e")).toBe(
+      "album/2024/05/14_19-32-05_photo_3f9a0c1e.jpg",
+    );
   });
 
-  it("refuses a token that could escape the namespace", () => {
-    for (const token of ["../evil", "a/b", "a\\b", ""]) {
-      expect(() => albumKey(PAIR, "photo", "jpg", token)).toThrow(TypeError);
+  it("refuses a token that is not lowercase hex of a safe length", () => {
+    for (const token of ["../evil", "a/b", "a\\b", "", "abc", "ABCDEF12", "abcd_ef12", "abcd-ef12"]) {
+      expect(() => albumKey(AT, 0, "photo", "jpg", token)).toThrow(TypeError);
     }
   });
 
   it("refuses an extension that is not one", () => {
     for (const extension of ["", "../", "j/pg", "TOOLONG", "p.g"]) {
-      expect(() => albumKey(PAIR, "photo", extension, "abc")).toThrow(TypeError);
+      expect(() => albumKey(AT, 0, "photo", extension, "3f9a0c1e")).toThrow(TypeError);
     }
   });
 
   it("produces a key the signer will accept", () => {
     for (const kind of ["strip", "clip", "photo", "video", "recording"] as const) {
-      expect(isAlbumKey(albumKey(PAIR, kind, "mp4", "tok_en-1"))).toBe(true);
+      expect(isAlbumKey(albumKey(AT, CHICAGO, kind, "mp4", "3f9a0c1e"))).toBe(true);
     }
   });
 });
@@ -47,16 +50,18 @@ describe("albumKey", () => {
 describe("isAlbumKey", () => {
   it("rejects keys outside the album namespace", () => {
     // The signer's whole job. A key it accepts is a key it will grant write
-    // access to, so anything reaching past album/<pair>/ must be refused.
+    // access to, so anything reaching outside album/<year>/<month>/ is refused.
     for (const key of [
-      "keepsakes/ABCDEF/strip-x.png",
+      "keepsakes/2026/09/12_23-30-00_strip_KW3KDD_3f9a0c1e.png",
       "album/../secret.png",
-      `album/${PAIR}/../../secret.png`,
-      `album/${PAIR}\\photo-x.jpg`,
-      `album/${PAIR}/photo-x.jpg/../../y`,
-      "album//photo-x.jpg",
-      `album/${PAIR}/unknownkind-x.jpg`,
-      `album/${PAIR}/photo-x`,
+      "album/2026/09/../../secret.png",
+      "album/2026/09\\12_23-30-00_photo_3f9a0c1e.jpg",
+      "album/2026/09/12_23-30-00_photo_3f9a0c1e.jpg/../../y",
+      "album/2026/13/12_23-30-00_photo_3f9a0c1e.jpg",
+      "album/2026/09/12_23-30-00_unknownkind_3f9a0c1e.jpg",
+      "album/2026/09/12_23-30-00_photo_3f9a0c1e",
+      "album/2026/09/extra/12_23-30-00_photo_3f9a0c1e.jpg",
+      `album/${PAIR}/photo-abc.jpg`,
       "",
     ]) {
       expect(isAlbumKey(key)).toBe(false);
@@ -64,14 +69,23 @@ describe("isAlbumKey", () => {
   });
 
   it("accepts a poster beside its item", () => {
-    expect(isAlbumKey(`album/${PAIR}/video-abc-poster.jpg`)).toBe(true);
+    expect(isAlbumKey("album/2026/09/12_23-30-00_video_3f9a0c1e-poster.jpg")).toBe(true);
+  });
+});
+
+describe("isLegacyAlbumKey", () => {
+  it("still recognises an entry saved before files were filed by date", () => {
+    expect(isLegacyAlbumKey(`album/${PAIR}/photo-917b7f35374c8770.jpg`)).toBe(true);
+    expect(isLegacyAlbumKey(`album/${PAIR}/video-abc-poster.jpg`)).toBe(true);
+    expect(isLegacyAlbumKey(`album/${PAIR}/../../secret.png`)).toBe(false);
+    expect(isLegacyAlbumKey("album/2026/09/12_23-30-00_photo_3f9a0c1e.jpg")).toBe(false);
   });
 });
 
 describe("posterKeyFor", () => {
   it("sits beside the item it stands for, as a jpeg", () => {
-    const key = albumKey(PAIR, "video", "mp4", "abc");
-    expect(posterKeyFor(key)).toBe(`album/${PAIR}/video-abc-poster.jpg`);
+    const key = albumKey(AT, CHICAGO, "video", "mp4", "3f9a0c1e");
+    expect(posterKeyFor(key)).toBe("album/2026/09/12_23-30-00_video_3f9a0c1e-poster.jpg");
     expect(isAlbumKey(posterKeyFor(key))).toBe(true);
   });
 

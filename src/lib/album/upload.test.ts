@@ -27,6 +27,7 @@ describe("addToAlbum", () => {
           posterUploadUrl: "https://storage.test/poster",
           happenedAt: "2026-09-11T12:00:00.000Z",
           objectKey: "album/pair/video-1.mp4",
+          receipt: "receipt-1",
           kind: "video",
         }), { status: 200 });
       }
@@ -51,8 +52,13 @@ describe("addToAlbum", () => {
     ]);
     expect(new Headers(calls[1]?.init?.headers).get("Content-Type")).toBe("video/mp4");
     expect(new Headers(calls[2]?.init?.headers).get("Content-Type")).toBe("image/jpeg");
+    // The phone's clock at the moment the memory happened decides its folder.
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({
+      utcOffsetMinutes: -new Date("2026-09-11T10:00:00.000Z").getTimezoneOffset() + 0,
+    });
     expect(JSON.parse(String(calls[3]?.init?.body))).toMatchObject({
       objectKey: "album/pair/video-1.mp4",
+      receipt: "receipt-1",
       kind: "video",
       contentType: "video/mp4",
       sizeBytes: 4,
@@ -70,6 +76,7 @@ describe("addToAlbum", () => {
           posterUploadUrl: "https://storage.test/poster",
           happenedAt: "2026-09-11T12:00:00.000Z",
           objectKey: "album/pair/video-1.mp4",
+          receipt: "receipt-1",
           kind: "video",
         }), { status: 200 });
       }
@@ -137,6 +144,7 @@ describe("addToAlbum", () => {
             uploadUrl: "https://storage.test/photo",
             happenedAt: "2026-09-11T12:00:00.000Z",
             objectKey: "album/pair/photo-1.jpg",
+            receipt: "receipt-1",
             kind: "photo",
           }),
           { status: 200 },
@@ -157,6 +165,22 @@ describe("addToAlbum", () => {
 
     expect(puts).toBe(2);
     expect(result.ok).toBe(false);
+  });
+
+  it("treats a presign reply without a receipt as incomplete", async () => {
+    // Without it the confirm would be refused anyway, after a full upload.
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({
+        id: "item-1",
+        uploadUrl: "https://storage.test/photo",
+        happenedAt: "2026-09-11T12:00:00.000Z",
+        objectKey: "album/pair/photo-1.jpg",
+        kind: "photo",
+      }), { status: 200 }),
+    );
+    const result = await addToAlbum(new Blob(["data"]), { kind: "photo", contentType: "image/jpeg", fetchImpl });
+    expect(result).toEqual({ ok: false, error: "the upload link came back incomplete" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a content type the album does not hold, before any network call", async () => {

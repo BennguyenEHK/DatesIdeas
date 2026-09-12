@@ -8,6 +8,8 @@ import {
   S3Client,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { isAlbumKey, isLegacyAlbumKey } from "@/lib/album/keys";
+import { DATED_PATTERN } from "./datedName";
 
 /** How long an upload link stays usable. Short: it is used immediately. */
 export const UPLOAD_URL_TTL_SEC = 300;
@@ -125,22 +127,25 @@ export async function presignKeepsake(
   }
 }
 
+/** `keepsakes/2026/09/12_21-04-17_strip_KW3KDD_8e2d4a1b.png` */
+const KEEPSAKE_KEY = new RegExp(
+  `^keepsakes\\/${DATED_PATTERN}_(?:strip|clip)_[A-Z0-9]+_[a-f0-9]+\\.[a-z0-9]+$`,
+);
+/** Before files were filed by date: `keepsakes/<ROOM>/strip-<token>.png`. */
+const LEGACY_KEEPSAKE_KEY = /^keepsakes\/[A-Za-z0-9_-]+\/(?:strip|clip)-[A-Za-z0-9_-]+\.[a-z0-9]+$/;
+
 /** Whether a key is one this app is allowed to sign for. */
 export function isKeepsakeKey(key: string): boolean {
   // This constrains client input so it cannot turn our signer into bucket-wide access.
   if (key.includes("..") || key.includes("\\")) return false;
-  if (/^keepsakes\/[A-Za-z0-9_-]+\/(?:strip|clip)-[A-Za-z0-9_-]+\.[a-z0-9]+$/.test(key)) {
-    return true;
-  }
+  if (KEEPSAKE_KEY.test(key) || LEGACY_KEEPSAKE_KEY.test(key)) return true;
   // An album object may also be pointed at by a keepsake row.
   //
   // A keepsake is a public, room-lifetime-bounded pointer at one object; it has
   // never cared where that object came from. Allowing an album key here is what
   // lets a recording already saved to the album be shared by QR without
   // uploading the same fifty megabytes a second time.
-  return /^album\/[0-9a-f-]{36}\/(?:strip|clip|photo|video|recording)-[A-Za-z0-9_-]+(?:-poster)?\.[a-z0-9]{2,4}$/.test(
-    key,
-  );
+  return isAlbumKey(key) || isLegacyAlbumKey(key);
 }
 
 export interface StoredObject {
@@ -182,10 +187,13 @@ export async function listKeys(
  * The only two places this app ever writes. Anything else is refused outright:
  * a delete helper that would remove any key it was handed is one bad string
  * away from emptying the bucket.
+ *
+ * Both layouts: `album/2026/09/<file>` now, and `album/<code>/<file>` for
+ * anything saved before files were filed by date.
  */
 function mayDelete(key: string): boolean {
   if (key.includes("..") || key.includes("\\")) return false;
-  return /^(?:keepsakes|album)\/[^/]+\/[^/]+$/.test(key);
+  return /^(?:keepsakes|album)\/(?:\d{4}\/\d{2}\/[^/]+|[^/]+\/[^/]+)$/.test(key);
 }
 
 /**

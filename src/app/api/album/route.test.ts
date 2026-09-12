@@ -15,7 +15,18 @@ vi.mock("@/lib/db", () => ({ db: () => (strings: TemplateStringsArray, ...values
   void values; queries.push(strings.join("?").replace(/\s+/g, " ")); return Promise.resolve(results.shift() ?? []);
 } }));
 vi.mock("@/lib/storage/objects", () => ({ presignKeepsake: presign }));
+vi.mock("@/lib/push/devices", () => ({ devicesToNotify: async () => [] }));
+vi.mock("@/lib/push/send", () => ({ sendToDevices: async () => undefined, SNAP_PUSH_TTL_SEC: 60 }));
+vi.mock("next/server", async (original) => ({
+  ...(await original<typeof import("next/server")>()),
+  // The push after a confirm runs once the response is sent; there is no
+  // request lifecycle here to run it in, and nothing in these tests needs it.
+  after: () => undefined,
+}));
 const { POST, PUT, GET } = await import("./route");
+const { receiptMatches, uploadReceipt } = await import("@/lib/album/receipt");
+
+const SECRET = "test-storage-secret";
 
 const ticket = "abcdefghijklmnopqrstuv";
 const pair = { id: "00000000-0000-0000-0000-000000000000", created_at: new Date() };
@@ -27,6 +38,8 @@ const valid = { kind: "photo", contentType: "image/jpeg", sizeBytes: 100, happen
 beforeEach(() => {
   queries.length = 0;
   results = [];
+  vi.unstubAllEnvs();
+  vi.stubEnv("NEON_STORAGE_SECRET_ACCESS_KEY", SECRET);
   // Reset the behaviour, not just the call log. mockClear leaves the last
   // mockImplementation in place, so a test that makes signing fail would
   // silently poison every test declared after it.
@@ -69,25 +82,60 @@ describe("POST /api/album", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.objectKey).not.toBe("album/not-ours/photo-nope.jpg");
-    expect(body.objectKey).toContain(pair.id);
+    expect(body.objectKey).toMatch(/^album\/2026\/01\/01_00-00-00_photo_[a-f0-9]{8}\.jpg$/);
+  });
+
+  it("files the photograph on the uploading phone's clock", async () => {
+    // Midnight UTC on New Year's Day is still 7 pm on New Year's Eve in New York.
+    results = [[pair]];
+    const response = await POST(request({ ...valid, utcOffsetMinutes: -300 }, { authorization: `Bearer ${ticket}` }));
+    const body = await response.json();
+    expect(body.objectKey).toMatch(/^album\/2025\/12\/31_19-00-00_photo_[a-f0-9]{8}\.jpg$/);
+    // The folder no longer says whose it is, so a receipt comes with it.
+    expect(receiptMatches(SECRET, pair.id, body.objectKey, body.receipt)).toBe(true);
+  });
+
+  it("says storage is not set up rather than handing out an unprovable key", async () => {
+    vi.stubEnv("NEON_STORAGE_SECRET_ACCESS_KEY", "");
+    results = [[pair]];
+    expect((await POST(request(valid, { authorization: `Bearer ${ticket}` }))).status).toBe(503);
+    expect(presign).not.toHaveBeenCalled();
   });
 });
 
 describe("PUT /api/album", () => {
-  const confirmation = { id: "abcdefghij", ...valid, objectKey: "album/00000000-0000-0000-0000-000000000000/photo-token.jpg" };
+  const objectKey = "album/2026/01/01_00-00-00_photo_3f9a0c1e.jpg";
+  const confirmation = { id: "abcdefghij", ...valid, objectKey, receipt: "" };
 
   it("refuses a malformed object key", async () => {
     results = [[pair]];
-    const response = await PUT(request({ ...confirmation, objectKey: "not-an-album-key" }, { authorization: `Bearer ${ticket}` }));
+    const receipt = uploadReceipt(SECRET, pair.id, "not-an-album-key");
+    const response = await PUT(request({ ...confirmation, objectKey: "not-an-album-key", receipt }, { authorization: `Bearer ${ticket}` }));
     expect(response.status).toBe(400);
     expect(queries).toHaveLength(1);
   });
 
-  it("refuses an otherwise valid key belonging to another pair", async () => {
+  it("refuses a valid key confirmed without a receipt", async () => {
     results = [[pair]];
-    const response = await PUT(request({ ...confirmation, objectKey: "album/11111111-1111-1111-1111-111111111111/photo-token.jpg" }, { authorization: `Bearer ${ticket}` }));
+    const response = await PUT(request(confirmation, { authorization: `Bearer ${ticket}` }));
     expect(response.status).toBe(400);
     expect(queries).toHaveLength(1);
+  });
+
+  it("refuses a key whose receipt was issued to another pair", async () => {
+    results = [[pair]];
+    const receipt = uploadReceipt(SECRET, "11111111-1111-1111-1111-111111111111", objectKey);
+    const response = await PUT(request({ ...confirmation, receipt }, { authorization: `Bearer ${ticket}` }));
+    expect(response.status).toBe(400);
+    expect(queries).toHaveLength(1);
+  });
+
+  it("records a key confirmed with this pair's own receipt", async () => {
+    results = [[pair], [{ id: "abcdefghij" }]];
+    const receipt = uploadReceipt(SECRET, pair.id, objectKey);
+    const response = await PUT(request({ ...confirmation, receipt }, { authorization: `Bearer ${ticket}` }));
+    expect(response.status).toBe(200);
+    expect(queries.some((query) => query.includes("INSERT INTO album_items"))).toBe(true);
   });
 });
 

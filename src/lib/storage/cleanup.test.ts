@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ORPHAN_GRACE_MS, runCleanup, type CleanupDeps } from "./cleanup";
+import { ORPHAN_GRACE_MS, keepsakeRoom, runCleanup, type CleanupDeps } from "./cleanup";
 
 const NOW = new Date("2026-09-13T09:00:00.000Z");
 const old = new Date(NOW.getTime() - ORPHAN_GRACE_MS - 60_000);
@@ -26,30 +26,62 @@ function deps(overrides: Partial<CleanupDeps> & { bucket?: Record<string, Date |
   return { deps: { ...base, ...overrides }, deleted };
 }
 
-describe("closed rooms' photo booth folders", () => {
-  it("deletes every file in a closed room's folder", async () => {
+describe("keepsakeRoom", () => {
+  it("reads the room from a file filed by date", () => {
+    expect(keepsakeRoom("keepsakes/2026/09/12_21-04-17_strip_KW3KDD_8e2d4a1b.png")).toBe("KW3KDD");
+  });
+
+  it("reads the room from a folder saved before files were filed by date", () => {
+    expect(keepsakeRoom("keepsakes/KW3KDD/strip-a.png")).toBe("KW3KDD");
+  });
+
+  it("places nothing it does not recognise, so nothing unknown is deleted", () => {
+    for (const key of ["keepsakes/2026/09/notes.txt", "keepsakes/2026/x.png", "album/2026/09/a.jpg", "keepsakes/"]) {
+      expect(keepsakeRoom(key)).toBeNull();
+    }
+  });
+});
+
+describe("closed rooms' photo booth files", () => {
+  it("deletes every file from a closed room, across month folders", async () => {
+    // A room open over midnight on the last of the month leaves strips in two
+    // month folders. Both belong to it and both go.
     const { deps: d, deleted } = deps({
       bucket: {
-        "keepsakes/KW3KDD/strip-a.png": old,
-        "keepsakes/KW3KDD/clip-a.mp4": old,
+        "keepsakes/2026/08/31_23-50-00_strip_KW3KDD_aaaaaaaa.png": old,
+        "keepsakes/2026/09/01_00-10-00_clip_KW3KDD_bbbbbbbb.mp4": old,
+        "keepsakes/KW3KDD/strip-legacy.png": old,
       },
     });
     const report = await runCleanup(d);
-    expect(deleted.sort()).toEqual(["keepsakes/KW3KDD/clip-a.mp4", "keepsakes/KW3KDD/strip-a.png"]);
-    expect(report.closedRoomFolders).toEqual(["KW3KDD"]);
-    expect(report.keepsakeFilesDeleted).toBe(2);
+    expect(deleted.sort()).toEqual([
+      "keepsakes/2026/08/31_23-50-00_strip_KW3KDD_aaaaaaaa.png",
+      "keepsakes/2026/09/01_00-10-00_clip_KW3KDD_bbbbbbbb.mp4",
+      "keepsakes/KW3KDD/strip-legacy.png",
+    ]);
+    expect(report.closedRooms).toEqual(["KW3KDD"]);
+    expect(report.keepsakeFilesDeleted).toBe(3);
   });
 
   it("leaves a room that is still open alone, however old its files are", async () => {
     // Its QR links still work tonight. Deleting them would break a link
     // somebody may be about to scan.
     const { deps: d, deleted } = deps({
-      bucket: { "keepsakes/OPEN12/strip-a.png": old, "keepsakes/SHUT34/strip-b.png": fresh },
+      bucket: {
+        "keepsakes/2026/09/12_20-00-00_strip_OPEN12_aaaaaaaa.png": old,
+        "keepsakes/2026/09/12_20-00-00_strip_SHUT34_bbbbbbbb.png": fresh,
+      },
       openRoomCodes: async () => new Set(["OPEN12"]),
     });
     const report = await runCleanup(d);
-    expect(deleted).toEqual(["keepsakes/SHUT34/strip-b.png"]);
-    expect(report.closedRoomFolders).toEqual(["SHUT34"]);
+    expect(deleted).toEqual(["keepsakes/2026/09/12_20-00-00_strip_SHUT34_bbbbbbbb.png"]);
+    expect(report.closedRooms).toEqual(["SHUT34"]);
+  });
+
+  it("never deletes a file it cannot place in a room", async () => {
+    const { deps: d, deleted } = deps({ bucket: { "keepsakes/2026/09/mystery.png": old } });
+    await runCleanup(d);
+    expect(deleted).toEqual([]);
   });
 
   it("does not ask which rooms are open when there are no booth files at all", async () => {
@@ -76,10 +108,15 @@ describe("closed rooms' photo booth folders", () => {
 
 describe("album files no entry uses", () => {
   it("deletes one that has been stuck for more than a day", async () => {
-    const { deps: d, deleted } = deps({ bucket: { "album/pair-1/photo-stuck.jpg": old } });
+    const { deps: d, deleted } = deps({
+      bucket: {
+        "album/pair-1/photo-stuck.jpg": old,
+        "album/2026/09/12_18-02-41_photo_3f9a0c1e.jpg": old,
+      },
+    });
     const report = await runCleanup(d);
-    expect(deleted).toEqual(["album/pair-1/photo-stuck.jpg"]);
-    expect(report.albumOrphansDeleted).toBe(1);
+    expect(deleted.sort()).toEqual(["album/2026/09/12_18-02-41_photo_3f9a0c1e.jpg", "album/pair-1/photo-stuck.jpg"]);
+    expect(report.albumOrphansDeleted).toBe(2);
   });
 
   it("spares one less than a day old, which may be an upload still in progress", async () => {
