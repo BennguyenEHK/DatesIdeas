@@ -24,7 +24,7 @@ type Props = {
 
 function Picker({ partnerIdentity, onStart }: Pick<Props, "partnerIdentity" | "onStart">) {
   const [showMinecraft, setShowMinecraft] = useState(false);
-  if (showMinecraft) return <MinecraftLauncher />;
+  if (showMinecraft) return <MinecraftLauncher onBack={() => setShowMinecraft(false)} />;
   return (
     <section
       className="border border-[var(--edge)] bg-[var(--letterbox)] p-5 sm:p-7"

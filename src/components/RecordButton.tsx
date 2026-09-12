@@ -126,8 +126,14 @@ export function RecordButton({
           <span className="ml-1 text-[0.65rem]">Can’t record here</span>
         ) : null}
       </button>
+      {/* Its own named tab, never this one. Leaving the room's page unloads it,
+          which ends the call for both people -- so a link that navigated here
+          would hang up on somebody to show a list of recordings. The name
+          means pressing it again brings that same tab forward instead of
+          opening another. */}
       <Link
         href={`/recordings/${encodeURIComponent(room)}`}
+        target="festibooth-cutting-room"
         aria-label={
           count === 0 ? "View recordings" : `View ${count} recordings`
         }

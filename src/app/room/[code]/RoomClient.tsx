@@ -27,6 +27,7 @@ import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel, type SongLanding } from "@/components/KaraokePanel";
+import Link from "next/link";
 import { RoomControls } from "@/components/RoomControls";
 import { RecordButton } from "@/components/RecordButton";
 import { RecordingReview } from "@/components/RecordingReview";
@@ -1340,6 +1341,27 @@ export function RoomClient({ code }: { code: string }) {
               onRecordingChange={onRecordingChange}
               onFinished={setFinishedRecording}
             />
+            {paired ? (
+              // The album is a place you visit, not an activity: an activity
+              // switches BOTH screens, and a quick look at a photograph should
+              // not pull the other person onto it. So it is its own mark -- a
+              // plain outline, unlike the lit bubbles -- and it opens in its own
+              // tab, because leaving this page would end the call. Hidden on a
+              // device with no season ticket, where it could only lead to a
+              // page saying so.
+              <Link
+                href="/album"
+                target="festibooth-album"
+                aria-label="Open our album"
+                title="Our album"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--mist)] ring-1 ring-[var(--edge)] transition-colors hover:text-[var(--cream)] hover:ring-[var(--lamp)]"
+              >
+                <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.7">
+                  <rect x="3" y="6" width="18" height="12" rx="1" />
+                  <path d="M3 9h18M3 15h18M7 6v3M11 6v3M15 6v3M19 6v3M7 15v3M11 15v3M15 15v3M19 15v3" />
+                </svg>
+              </Link>
+            ) : null}
           </div>
           <ActivityBar current={current} onSelect={onSelectActivity} />
           {theyRecord ? (

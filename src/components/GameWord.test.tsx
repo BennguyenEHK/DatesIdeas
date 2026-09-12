@@ -43,3 +43,17 @@ describe("GameWord", () => {
     expect(props.onMove).toHaveBeenCalledWith({ kind: "resign" });
   });
 });
+
+describe("the Minecraft launcher inside GameWord", () => {
+  it("comes back to the game menu instead of trapping you in the launcher", () => {
+    const props = callbacks();
+    render(<GameWord {...props} identity="me" partnerIdentity="them" game={null} error={null} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Open Minecraft launcher" }));
+    expect(screen.getByLabelText("Minecraft launcher")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to games" }));
+    expect(screen.getByLabelText("Choose a game")).toBeTruthy();
+    expect(screen.queryByLabelText("Minecraft launcher")).toBeNull();
+  });
+});

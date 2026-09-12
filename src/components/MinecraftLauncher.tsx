@@ -13,7 +13,7 @@ function savedAddress(): string {
   }
 }
 
-export function MinecraftLauncher(): ReactElement {
+export function MinecraftLauncher({ onBack }: { onBack?: () => void } = {}): ReactElement {
   const [rawAddress, setRawAddress] = useState(savedAddress);
   const [message, setMessage] = useState("");
   const address = parseServerAddress(rawAddress);
@@ -40,6 +40,17 @@ export function MinecraftLauncher(): ReactElement {
       className="border border-[var(--lamp)] bg-[var(--dusk)] p-5 sm:p-6"
       aria-label="Minecraft launcher"
     >
+      {/* The launcher replaces the game menu entirely, so without this the only
+          way back to the games was to close the whole activity. */}
+      {onBack ? (
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-4 font-sans text-sm text-[var(--mist)] underline decoration-[var(--edge)] underline-offset-4 transition-colors hover:text-[var(--cream)]"
+        >
+          Back to games
+        </button>
+      ) : null}
       <h2 className="font-[family-name:var(--font-display)] text-3xl text-[var(--dress)]">
         Minecraft together
       </h2>

@@ -98,5 +98,9 @@ describe("RecordButton", () => {
     expect(
       screen.getByLabelText("View recordings").getAttribute("href"),
     ).toBe("/recordings/room%20name");
+    // Its own tab. Navigating this one away from the room would end the call.
+    expect(screen.getByLabelText("View recordings").getAttribute("target")).toBe(
+      "festibooth-cutting-room",
+    );
   });
 });
