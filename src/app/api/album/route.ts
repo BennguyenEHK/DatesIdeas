@@ -6,7 +6,7 @@ import { pairFromRequest } from "@/lib/pair/session";
 import { linkRoomToPair } from "@/lib/pair/store";
 import { isValidRoomCode } from "@/lib/room/code";
 import { insertItem, listItems, listOccasions, type AlbumItemRow } from "@/lib/album/items";
-import { albumExtension, albumKey, allowsContentType, isAlbumKey, needsPoster, posterKeyFor, POSTER_CONTENT_TYPE, withinCap } from "@/lib/album/keys";
+import { acceptsPoster, albumExtension, albumKey, allowsContentType, isAlbumKey, posterKeyFor, POSTER_CONTENT_TYPE, withinCap } from "@/lib/album/keys";
 import { isAlbumKind, type AlbumItem, type AlbumKind } from "@/lib/album/types";
 import { clampHappenedAt, type PresignResponse } from "@/lib/album/wire";
 import { presignKeepsake } from "@/lib/storage/objects";
@@ -81,7 +81,7 @@ export async function POST(request: Request) {
     id: newShareId(), uploadUrl: signed.uploadUrl, happenedAt, objectKey,
     receipt: uploadReceipt(secret, pair.id, objectKey), kind: fields.kind,
   };
-  if (body.withPoster === true && needsPoster(fields.kind)) {
+  if (body.withPoster === true && acceptsPoster(fields.kind)) {
     const poster = await presignKeepsake(posterKeyFor(objectKey), POSTER_CONTENT_TYPE);
     if (poster === null) return unavailable();
     response.posterUploadUrl = poster.uploadUrl;
@@ -110,7 +110,7 @@ export async function PUT(request: Request) {
     return bad("invalid object key");
   }
   const happenedAt = clampHappenedAt(body.happenedAt);
-  const posterKey = body.posterUploaded === true && needsPoster(fields.kind) ? posterKeyFor(body.objectKey) : null;
+  const posterKey = body.posterUploaded === true && acceptsPoster(fields.kind) ? posterKeyFor(body.objectKey) : null;
   const stored = await insertItem(sql, { id: body.id, pairId: pair.id, objectKey: body.objectKey,
     posterKey, kind: fields.kind, contentType: fields.contentType, bytes: fields.sizeBytes,
     happenedAt, sourceRoom: room });

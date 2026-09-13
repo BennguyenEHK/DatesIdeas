@@ -29,6 +29,75 @@ function waitForEvent(
   });
 }
 
+function imageLoaded(image: HTMLImageElement): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    image.addEventListener("load", () => resolve(), { once: true });
+    image.addEventListener("error", () => reject(new Error("image decode failed")), { once: true });
+  });
+}
+
+/**
+ * Make a small JPEG still from a photograph. Unsupported formats and browsers
+ * without canvas support are deliberately harmless: the original can still
+ * be uploaded and displayed.
+ */
+export async function stillFromImage(
+  file: Blob,
+  options?: { document?: Document },
+): Promise<Blob | null> {
+  const documentRef = options?.document ?? globalThis.document;
+  let objectUrl: string | null = null;
+  let bitmap: ImageBitmap | null = null;
+
+  try {
+    if (documentRef === undefined) return null;
+
+    let width: number;
+    let height: number;
+    let source: CanvasImageSource;
+    if (typeof globalThis.createImageBitmap === "function") {
+      bitmap = await globalThis.createImageBitmap(file);
+      width = bitmap.width;
+      height = bitmap.height;
+      source = bitmap;
+    } else {
+      objectUrl = URL.createObjectURL(file);
+      const image = documentRef.createElement("img");
+      const loaded = imageLoaded(image);
+      image.src = objectUrl;
+      await loaded;
+      width = image.naturalWidth;
+      height = image.naturalHeight;
+      source = image;
+    }
+
+    if (width <= 0 || height <= 0) return null;
+    if (file.type.toLowerCase() === "image/jpeg" &&
+      width <= POSTER_MAX_EDGE && height <= POSTER_MAX_EDGE) return null;
+
+    const scale = Math.min(1, POSTER_MAX_EDGE / Math.max(width, height));
+    const targetWidth = Math.max(1, Math.round(width * scale));
+    const targetHeight = Math.max(1, Math.round(height * scale));
+    const canvas = documentRef.createElement("canvas");
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const context = canvas.getContext("2d");
+    if (context === null) return null;
+    context.drawImage(source, 0, 0, targetWidth, targetHeight);
+
+    return await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, "image/jpeg", POSTER_QUALITY);
+    });
+  } catch {
+    return null;
+  } finally {
+    if (bitmap !== null) {
+      try { bitmap.close(); } catch { /* A partial bitmap may already be closed. */ }
+    }
+    if (objectUrl !== null) URL.revokeObjectURL(objectUrl);
+  }
+}
+
 /**
  * A poster is deliberately best-effort: an unsupported codec should leave an
  * upload usable, rather than make the memory disappear with the failed decode.

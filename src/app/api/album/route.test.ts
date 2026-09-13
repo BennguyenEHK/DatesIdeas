@@ -52,6 +52,13 @@ beforeEach(() => {
 });
 
 describe("POST /api/album", () => {
+  it("signs a poster upload for a photograph", async () => {
+    results = [[pair]];
+    const response = await POST(request({ ...valid, withPoster: true }, { authorization: `Bearer ${ticket}` }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).posterUploadUrl).toContain("-poster.jpg");
+  });
+
   it("returns 401 with neither a cookie nor bearer", async () => {
     expect((await POST(request(valid))).status).toBe(401);
     expect(queries).toHaveLength(0);
@@ -136,6 +143,15 @@ describe("PUT /api/album", () => {
     const response = await PUT(request({ ...confirmation, receipt }, { authorization: `Bearer ${ticket}` }));
     expect(response.status).toBe(200);
     expect(queries.some((query) => query.includes("INSERT INTO album_items"))).toBe(true);
+  });
+
+  it("records a poster key for a photograph with an uploaded still", async () => {
+    results = [[pair], [{ id: "abcdefghij" }]];
+    const receipt = uploadReceipt(SECRET, pair.id, objectKey);
+    const response = await PUT(request({ ...confirmation, receipt, posterUploaded: true }, { authorization: `Bearer ${ticket}` }));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.item.posterUrl).toContain("-poster.jpg");
   });
 });
 

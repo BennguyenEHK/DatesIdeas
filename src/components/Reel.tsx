@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { ReelStack } from "@/components/ReelStack";
 import { frameIndexFor } from "@/lib/album/timeline";
 import { GEARS, type Frame, type Gear, type ReelView } from "@/lib/album/types";
 
@@ -130,6 +131,7 @@ export function Reel({
         aria-orientation="horizontal"
         tabIndex={0}
         onKeyDown={onKeyDown}
+        onScroll={() => window.dispatchEvent(new Event("reel-stack-close"))}
         className={`reel-track px-4 ${threading ? "reel-thread" : ""}`}
       >
         {view.frames.map((frame, index) => (
@@ -141,6 +143,7 @@ export function Reel({
             sign={view.marks.find((m) => m.frameIndex === index) ?? null}
             selected={index === currentIndex}
             onSelect={onSelect}
+            stacked={gear !== "frames" && frame.count > 1}
           />
         ))}
       </div>
@@ -180,6 +183,7 @@ function ReelPiece({
   sign,
   selected,
   onSelect,
+  stacked,
 }: {
   frame: Frame;
   index: number;
@@ -187,6 +191,7 @@ function ReelPiece({
   sign: ReelView["marks"][number] | null;
   selected: boolean;
   onSelect: (itemId: string) => void;
+  stacked: boolean;
 }) {
   const still = frame.item.posterUrl ?? frame.item.url;
 
@@ -212,7 +217,10 @@ function ReelPiece({
           </span>
         ) : null}
 
-        <button
+        {stacked ? (
+          <ReelStack frame={frame} index={index} selected={selected} onSelect={onSelect} />
+        ) : (
+          <button
           type="button"
           role="option"
           aria-selected={selected}
@@ -249,7 +257,8 @@ function ReelPiece({
               {frame.count}
             </span>
           ) : null}
-        </button>
+          </button>
+        )}
       </div>
     </>
   );

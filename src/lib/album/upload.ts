@@ -1,6 +1,7 @@
 import { localOffsetMinutes } from "@/lib/storage/datedName";
-import type { AlbumItem, AlbumKind } from "./types";
-import { allowsContentType, MAX_ALBUM_MB, needsPoster, withinCap } from "./keys";
+import { moves, type AlbumItem, type AlbumKind } from "./types";
+import { allowsContentType, acceptsPoster, MAX_ALBUM_MB, withinCap } from "./keys";
+import { stillFromImage } from "./poster";
 import type { ConfirmRequest, ConfirmResponse, PresignRequest, PresignResponse } from "./wire";
 
 export interface AlbumUploadResult {
@@ -125,7 +126,17 @@ export async function addToAlbum(
 
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const at = happenedAt(options.happenedAt);
-  const withPoster = needsPoster(options.kind) && options.poster !== null && options.poster !== undefined;
+  let poster = options.poster;
+  if (poster === undefined && !moves(options.kind) && globalThis.document !== undefined) {
+    try {
+      poster = await stillFromImage(file);
+    } catch {
+      // Still generation is a convenience; an unsupported image must not stop
+      // the original from being uploaded.
+      poster = null;
+    }
+  }
+  const withPoster = poster !== null && poster !== undefined && acceptsPoster(options.kind);
   const request: PresignRequest = {
     kind: options.kind,
     contentType: options.contentType,
@@ -155,12 +166,12 @@ export async function addToAlbum(
     if (!uploadResponse.ok) return { ok: false, error: "the upload was refused" };
 
     let posterUploaded = false;
-    if (options.poster !== null && options.poster !== undefined && presignBody.posterUploadUrl !== undefined) {
+    if (poster !== null && poster !== undefined && presignBody.posterUploadUrl !== undefined) {
       try {
         const posterResponse = await fetchImpl(presignBody.posterUploadUrl, {
           method: "PUT",
           headers: { "Content-Type": "image/jpeg" },
-          body: options.poster,
+          body: poster,
           signal: options.signal,
         });
         posterUploaded = posterResponse.ok;

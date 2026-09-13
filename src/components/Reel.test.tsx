@@ -40,6 +40,13 @@ const ITEMS = [
   item("a", "2025-12-30T12:00:00Z"),
 ];
 
+const GROUPED_ITEMS = [
+  item("three", "2026-02-05T12:00:00Z"),
+  item("two", "2026-02-05T11:00:00Z"),
+  item("one", "2026-02-05T10:00:00Z"),
+  item("single", "2026-02-04T12:00:00Z"),
+];
+
 function renderReel(
   overrides: {
     current?: string | null;
@@ -75,6 +82,33 @@ describe("Reel", () => {
   it("says how many memories a grouped frame stands for", () => {
     renderReel({ gear: "months" });
     expect(screen.getByRole("option", { name: "2026-02-01, 3 memories" })).toBeTruthy();
+  });
+
+  it("uses stacks only for grouped day and month frames", () => {
+    const onSelect = vi.fn();
+    const onGear = vi.fn();
+    const { rerender } = render(
+      <Reel
+        view={buildReel(GROUPED_ITEMS, [], "days", ZONE)}
+        currentItemId="three"
+        gear="days"
+        onSelect={onSelect}
+        onGear={onGear}
+      />,
+    );
+    expect(document.querySelectorAll("[data-reel-stack]")).toHaveLength(1);
+
+    rerender(
+      <Reel
+        view={buildReel(GROUPED_ITEMS, [], "frames", ZONE)}
+        currentItemId="three"
+        gear="frames"
+        onSelect={onSelect}
+        onGear={onGear}
+      />,
+    );
+    expect(screen.queryByRole("option", { name: "2026-02-05, 3 memories" })).toBeNull();
+    expect(document.querySelectorAll("[data-reel-stack]")).toHaveLength(0);
   });
 
   it("selects the frame that was clicked", () => {

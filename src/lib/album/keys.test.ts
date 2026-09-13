@@ -6,7 +6,7 @@ import {
   allowsContentType,
   isAlbumKey,
   isLegacyAlbumKey,
-  needsPoster,
+  acceptsPoster,
   posterKeyFor,
   withinCap,
 } from "./keys";
@@ -94,13 +94,11 @@ describe("posterKeyFor", () => {
   });
 });
 
-describe("needsPoster", () => {
-  it("is true for everything that moves and false for a photograph", () => {
-    expect(needsPoster("video")).toBe(true);
-    expect(needsPoster("clip")).toBe(true);
-    expect(needsPoster("recording")).toBe(true);
-    expect(needsPoster("photo")).toBe(false);
-    expect(needsPoster("strip")).toBe(false);
+describe("acceptsPoster", () => {
+  it("is true for every album kind", () => {
+    for (const kind of ["video", "clip", "recording", "photo", "strip"] as const) {
+      expect(acceptsPoster(kind)).toBe(true);
+    }
   });
 });
 

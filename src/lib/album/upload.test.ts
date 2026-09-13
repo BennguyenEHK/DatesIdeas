@@ -1,5 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { stillFromImage } from "./poster";
 import { addToAlbum } from "./upload";
+
+vi.mock("./poster", () => ({ stillFromImage: vi.fn() }));
+
+beforeEach(() => {
+  vi.mocked(stillFromImage).mockReset();
+  vi.unstubAllGlobals();
+});
 
 const item = {
   id: "item-1",
@@ -16,6 +24,55 @@ const item = {
 };
 
 describe("addToAlbum", () => {
+  it("uploads a generated still for a photo", async () => {
+    const poster = new Blob(["still"], { type: "image/jpeg" });
+    vi.mocked(stillFromImage).mockResolvedValue(poster);
+    vi.stubGlobal("document", {});
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      calls.push({ url: String(input), init });
+      if (calls.length === 1) return new Response(JSON.stringify({
+        id: "item-1", uploadUrl: "https://storage.test/photo",
+        posterUploadUrl: "https://storage.test/poster", happenedAt: "2026-09-11T12:00:00.000Z",
+        objectKey: "album/pair/photo-1.jpg", receipt: "receipt-1", kind: "photo",
+      }));
+      if (calls.length === 4) return new Response(JSON.stringify({ item: { ...item, kind: "photo", contentType: "image/jpeg" } }));
+      return new Response(null, { status: 200 });
+    });
+
+    const result = await addToAlbum(new Blob(["photo"], { type: "image/jpeg" }), {
+      kind: "photo", contentType: "image/jpeg", fetchImpl,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls.map((call) => call.url)).toEqual([
+      "/api/album", "https://storage.test/photo", "https://storage.test/poster", "/api/album",
+    ]);
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ withPoster: true });
+    expect(JSON.parse(String(calls[3]?.init?.body))).toMatchObject({ posterUploaded: true });
+  });
+
+  it("confirms without a poster when photo still generation fails", async () => {
+    vi.mocked(stillFromImage).mockResolvedValue(null);
+    vi.stubGlobal("document", {});
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      if (init?.method === "POST") return new Response(JSON.stringify({
+        id: "item-1", uploadUrl: "https://storage.test/photo", happenedAt: "2026-09-11T12:00:00.000Z",
+        objectKey: "album/pair/photo-1.jpg", receipt: "receipt-1", kind: "photo",
+      }));
+      if (init?.method === "PUT" && String(input) === "/api/album") {
+        return new Response(JSON.stringify({ item: { ...item, kind: "photo", contentType: "image/jpeg" } }));
+      }
+      return new Response(null, { status: 200 });
+    });
+
+    await addToAlbum(new Blob(["photo"], { type: "image/jpeg" }), {
+      kind: "photo", contentType: "image/jpeg", fetchImpl,
+    });
+    expect(JSON.parse(String(fetchImpl.mock.calls[0]?.[1]?.body))).toMatchObject({ withPoster: false });
+    expect(JSON.parse(String(fetchImpl.mock.calls.at(-1)?.[1]?.body))).toMatchObject({ posterUploaded: false });
+  });
+
   it("presigns, uploads the original and poster, then confirms in order", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {

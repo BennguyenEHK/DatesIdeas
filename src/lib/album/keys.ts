@@ -1,5 +1,5 @@
 import { DATED_PATTERN, datedParts } from "@/lib/storage/datedName";
-import { type AlbumKind, isAlbumKind, moves } from "./types";
+import { type AlbumKind, isAlbumKind } from "./types";
 
 /**
  * Storage paths for album objects, and the rule for what this app will sign.
@@ -101,8 +101,20 @@ export function posterKeyFor(objectKey: string): string {
   return `${objectKey.replace(/\.[a-z0-9]+$/, "")}-poster.jpg`;
 }
 
-/** Whether a poster is expected for this kind at all. */
-export { moves as needsPoster };
+/**
+ * Whether this kind accepts a poster. Moving kinds need one to be seen at all;
+ * still kinds get one so the reel can load a small file.
+ */
+export function acceptsPoster(kind: AlbumKind): boolean {
+  switch (kind) {
+    case "strip":
+    case "photo":
+    case "clip":
+    case "video":
+    case "recording":
+      return true;
+  }
+}
 
 /**
  * Whether a key is one this app is allowed to sign for.
