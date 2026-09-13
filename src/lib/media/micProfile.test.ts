@@ -4,6 +4,8 @@ import {
   SPEECH_AUDIO,
   HEADPHONE_AUDIO,
   SPEAKER_AUDIO,
+  HEADPHONE_NOISY_AUDIO,
+  SPEAKER_NOISY_AUDIO,
   singingProfile,
 } from "./micProfile";
 
@@ -33,18 +35,17 @@ describe("audio profiles", () => {
     expect(SPEECH_AUDIO.echoCancellation).toBe(true);
   });
 
-  it("frees the voice from speech processing in every singing mode", () => {
-    // Noise suppression treats a held note as noise and takes its highs with
-    // it; automatic gain pumps across it. A noisy room is handled after
-    // capture by the voice chain instead, so neither comes back on for it.
+  it("frees the voice from speech processing in quiet singing modes", () => {
+    // With no room noise to overcome, noise suppression and gain only treat
+    // sustained music as noise or pump across a held note.
     for (const profile of [HEADPHONE_AUDIO, SPEAKER_AUDIO]) {
       expect(profile.noiseSuppression).toBe(false);
       expect(profile.autoGainControl).toBe(false);
     }
   });
 
-  it("selects the headphones profile", () => {
-    expect(singingProfile("headphones")).toBe(HEADPHONE_AUDIO);
+  it("selects the headphones quiet profile", () => {
+    expect(singingProfile("headphones", false)).toBe(HEADPHONE_AUDIO);
     expect(HEADPHONE_AUDIO).toEqual({
       channelCount: { ideal: 1 },
       sampleRate: { ideal: 48000 },
@@ -55,13 +56,41 @@ describe("audio profiles", () => {
     });
   });
 
-  it("selects the speakers profile", () => {
-    expect(singingProfile("speakers")).toBe(SPEAKER_AUDIO);
+  it("selects the headphones noisy profile", () => {
+    expect(singingProfile("headphones", true)).toBe(HEADPHONE_NOISY_AUDIO);
+    expect(HEADPHONE_NOISY_AUDIO.autoGainControl).toBe(false);
+    expect(HEADPHONE_NOISY_AUDIO.noiseSuppression).toBe(true);
+    expect(HEADPHONE_NOISY_AUDIO).toEqual({
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
+      echoCancellation: false,
+      noiseSuppression: true,
+      autoGainControl: false,
+      voiceIsolation: false,
+    });
+  });
+
+  it("selects the speakers quiet profile", () => {
+    expect(singingProfile("speakers", false)).toBe(SPEAKER_AUDIO);
     expect(SPEAKER_AUDIO).toEqual({
       channelCount: { ideal: 1 },
       sampleRate: { ideal: 48000 },
       echoCancellation: true,
       noiseSuppression: false,
+      autoGainControl: false,
+      voiceIsolation: false,
+    });
+  });
+
+  it("selects the speakers noisy profile", () => {
+    expect(singingProfile("speakers", true)).toBe(SPEAKER_NOISY_AUDIO);
+    expect(SPEAKER_NOISY_AUDIO.autoGainControl).toBe(false);
+    expect(SPEAKER_NOISY_AUDIO.noiseSuppression).toBe(true);
+    expect(SPEAKER_NOISY_AUDIO).toEqual({
+      channelCount: { ideal: 1 },
+      sampleRate: { ideal: 48000 },
+      echoCancellation: true,
+      noiseSuppression: true,
       autoGainControl: false,
       voiceIsolation: false,
     });
@@ -73,7 +102,12 @@ describe("audio profiles", () => {
     // 44100 on the machine these reports come from -- and the canceller then
     // has to resample one clock into the other and chase the drift between
     // them. The person on speakers is the one who pays for that.
-    for (const profile of [HEADPHONE_AUDIO, SPEAKER_AUDIO]) {
+    for (const profile of [
+      HEADPHONE_AUDIO,
+      HEADPHONE_NOISY_AUDIO,
+      SPEAKER_AUDIO,
+      SPEAKER_NOISY_AUDIO,
+    ]) {
       expect(profile.channelCount).toEqual({ ideal: 1 });
       expect(profile.sampleRate).toEqual({ ideal: 48000 });
     }
@@ -112,7 +146,7 @@ describe("tuneMicrophone", () => {
 
   it("returns to speech when no mode is set", async () => {
     const { stream, applied } = fakeStream();
-    await tuneMicrophone(stream, null);
+    await tuneMicrophone(stream, null, true);
     expect(applied).toEqual([SPEECH_AUDIO]);
   });
 

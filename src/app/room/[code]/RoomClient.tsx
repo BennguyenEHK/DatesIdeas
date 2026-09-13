@@ -1187,14 +1187,6 @@ export function RoomClient({ code }: { code: string }) {
       level: describeLevel(level),
       dropouts: level.gates,
       voiceIsolation: mic.settings?.voiceIsolation ?? null,
-      // Says whether the worklet actually loaded. Filters alone mean the gate
-      // and limiter are missing, which changes what an echo report means.
-      chain:
-        mic.style === null
-          ? "none (talking)"
-          : mic.dynamics
-            ? mic.style
-            : `${mic.style} (no worklet)`,
     };
   }, [mic, singing]);
 
