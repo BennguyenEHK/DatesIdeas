@@ -205,10 +205,11 @@ function AudioSwitch({
  * Whether the room is loud, which is a separate question from where the song
  * is playing and cannot be folded into it.
  *
- * Singing normally wants every microphone process off. In a loud room that is
- * the wrong call: with noise suppression off, echo cancellation has to pick a
- * voice out of a room full of competing sound, cannot do it cleanly, and
- * clamps down — which is heard as a thin, gated, "filtered" voice.
+ * The browser's own noise suppressor stays off either way: it treats a held
+ * note as noise and takes the top of the voice with it. A noisy room instead
+ * gets this app's voice chain (voiceStyles.ts) -- rumble cut, presence lifted,
+ * the room gated out between phrases -- none of which touches a note while it
+ * is being sung.
  */
 function NoisyToggle({
   noisy,

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { singingProfile, SPEECH_AUDIO, type AudioMode } from "./micProfile";
+import { buildVoiceChain, type VoiceChain } from "./voiceChain";
+import { voiceStyle, type VoiceStyle } from "./voiceStyles";
 import type { MicSettings } from "./micState";
 import {
   openMic,
@@ -11,31 +13,6 @@ import {
   type MicSource,
   type OpenedMic,
 } from "./micSwap";
-import {
-  boostMic,
-  ECHO_SAFE_MAKEUP_GAIN_DB,
-  MAKEUP_GAIN_DB,
-  type BoostedMic,
-} from "./micGain";
-
-/**
- * How much makeup gain this profile can safely take.
- *
- * Echo cancellation is only ever asked for when the song is coming out of
- * loudspeakers, so the flag doubles as the answer to "can this microphone hear
- * a speaker?". When it can, the compressor is sitting in front of a
- * cancellation residual containing the other person's voice, and lifting a
- * quiet residual is exactly what a compressor does best.
- *
- * Keyed on the flag rather than on the mode name so the two cannot drift
- * apart: any future profile that turns cancellation on gets the safe gain
- * without anyone having to remember this rule.
- */
-function makeupGainFor(profile: MediaTrackConstraints): number {
-  return profile.echoCancellation === true
-    ? ECHO_SAFE_MAKEUP_GAIN_DB
-    : MAKEUP_GAIN_DB;
-}
 
 /**
  * Releases a microphone this hook opened, and the processing stage on top of
@@ -45,8 +22,8 @@ function makeupGainFor(profile: MediaTrackConstraints): number {
  * what stops one of the six places that release a microphone from forgetting
  * the graph attached to it and leaving an audio context alive for the evening.
  */
-function release(opened: OpenedMic | null, boost: BoostedMic | null): void {
-  boost?.close();
+function release(opened: OpenedMic | null, chain: VoiceChain | null): void {
+  chain?.close();
   stopMic(opened);
 }
 
@@ -59,6 +36,8 @@ export interface MicProfileState {
   error: string | null;
   /** The track now being sent, so the level meter can follow it. */
   track: MediaStreamTrack | null;
+  style: VoiceStyle | null;
+  dynamics: boolean;
 }
 
 const EMPTY_STATE: MicProfileState = {
@@ -66,6 +45,8 @@ const EMPTY_STATE: MicProfileState = {
   unmet: [],
   error: null,
   track: null,
+  style: null,
+  dynamics: false,
 };
 
 /**
@@ -121,8 +102,9 @@ export function useMicProfile(args: {
   source?: MicSource | null;
 }): MicProfileState {
   const [state, setState] = useState<MicProfileState>(EMPTY_STATE);
-  const profile = args.mode === null ? SPEECH_AUDIO : singingProfile(args.mode, args.noisy);
-  const profileKey = args.mode === null ? ORIGINAL_MIC : JSON.stringify(profile);
+  const style = args.mode === null ? null : voiceStyle(args.mode, args.noisy);
+  const profile = args.mode === null ? SPEECH_AUDIO : singingProfile(args.mode);
+  const profileKey = args.mode === null ? ORIGINAL_MIC : JSON.stringify({ profile, style });
   const original = args.original ?? null;
   const source =
     args.source === undefined
@@ -134,7 +116,7 @@ export function useMicProfile(args: {
   // These sit above the effects that write them. The React Compiler rejects a
   // ref first written inside a closure declared above its declaration.
   const openedRef = useRef<OpenedMic | null>(null);
-  const boostRef = useRef<BoostedMic | null>(null);
+  const chainRef = useRef<VoiceChain | null>(null);
   const profileKeyRef = useRef<string | null>(null);
   const senderRef = useRef<AudioSenderLike | null>(null);
   const requestRef = useRef(0);
@@ -153,9 +135,9 @@ export function useMicProfile(args: {
       // its right to join the call, so it can only release its own device.
       mountedRef.current = false;
       requestRef.current += 1;
-      release(openedRef.current, boostRef.current);
+      release(openedRef.current, chainRef.current);
       openedRef.current = null;
-      boostRef.current = null;
+      chainRef.current = null;
       profileKeyRef.current = null;
       senderRef.current = null;
     };
@@ -180,9 +162,9 @@ export function useMicProfile(args: {
     if (args.sender === null) {
       // The sender has left the call, so this hook's replacement is no longer
       // useful. Never stop the original track, which this hook did not open.
-      release(openedRef.current, boostRef.current);
+      release(openedRef.current, chainRef.current);
       openedRef.current = null;
-      boostRef.current = null;
+      chainRef.current = null;
       profileKeyRef.current = null;
       senderRef.current = null;
       queueMicrotask(() => {
@@ -203,7 +185,7 @@ export function useMicProfile(args: {
 
     if (profileKey === ORIGINAL_MIC) {
       const previous = openedRef.current;
-      const previousBoost = boostRef.current;
+      const previousChain = chainRef.current;
 
       // Nothing of this hook's is on the call, so the original is already what
       // the sender is carrying. Record the state and open no device at all.
@@ -235,10 +217,10 @@ export function useMicProfile(args: {
         // Only once the original is carrying the call again, for the same
         // reason the singing swap stops the old one last.
         openedRef.current = null;
-        boostRef.current = null;
+        chainRef.current = null;
         profileKeyRef.current = ORIGINAL_MIC;
         senderRef.current = sender;
-        release(previous, previousBoost);
+        release(previous, previousChain);
         setState(EMPTY_STATE);
       };
 
@@ -271,32 +253,23 @@ export function useMicProfile(args: {
         return;
       }
 
-      // Puts back the loudness that switching automatic gain control off cost.
-      //
-      // That switch is why the high notes stopped cutting out, and it is not
-      // coming back on. What it also took was about 14dB of level -- measured,
-      // a session peak of 0.50 falling to 0.10 -- which arrives at the other
-      // end as a voice buried under their own backing track. A slow compressor
-      // and a fixed makeup gain restore the level without restoring the fast
-      // envelope-chasing that made a held note swell and breathe.
-      //
-      // A browser that cannot build the graph returns null and the raw
-      // microphone goes on the call unchanged, because quiet karaoke is a
-      // disappointment and no microphone at all is a ruined evening.
-      //
-      // How much lift is safe depends on the profile: a microphone that also
-      // has to hear a loudspeaker gets much less, because the compressor would
-      // otherwise favour the echo over the voice.
-      const boost = boostMic(next.track, undefined, makeupGainFor(profile));
-      const outgoing = boost === null ? next.track : boost.track;
+      // The worklet owns every decibel of makeup and the limiter that makes it
+      // safe. Without it, keep the raw microphone instead of adding gain that
+      // could clip or lift a speaker echo residual.
+      const chain = await buildVoiceChain(next.track, style as VoiceStyle);
+      if (requestRef.current !== request || !mountedRef.current) {
+        release(next, chain);
+        return;
+      }
+      const outgoing = chain === null ? next.track : chain.track;
 
       const swapped = await swapMicTrack(sender, outgoing);
       if (requestRef.current !== request || !mountedRef.current) {
-        release(next, boost);
+        release(next, chain);
         return;
       }
       if (!swapped) {
-        release(next, boost);
+        release(next, chain);
         setState((current) => ({ ...current, error: "replace failed" }));
         return;
       }
@@ -311,14 +284,14 @@ export function useMicProfile(args: {
       next.track.enabled = enabledRef.current;
 
       const previous = openedRef.current;
-      const previousBoost = boostRef.current;
+      const previousChain = chainRef.current;
       openedRef.current = next;
-      boostRef.current = boost;
+      chainRef.current = chain;
       profileKeyRef.current = profileKey;
       senderRef.current = sender;
       // Stop only after replacement. The sender then has a live track for the
       // whole handoff, and a device that needs the old handle stays available.
-      release(previous, previousBoost);
+      release(previous, previousChain);
       setState({
         settings: next.settings,
         unmet: next.unmet,
@@ -328,11 +301,13 @@ export function useMicProfile(args: {
         // the reason this matters: it decides whose music moves by comparing
         // against 0.06, and a raw 0.10 peak sits far too close to that line.
         track: outgoing,
+        style,
+        dynamics: chain?.dynamics ?? false,
       });
     };
 
     void replace();
-  }, [args.sender, original, profile, profileKey, source]);
+  }, [args.sender, original, profile, profileKey, source, style]);
 
   return state;
 }

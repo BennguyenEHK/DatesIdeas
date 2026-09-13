@@ -1,10 +1,17 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useMicProfile } from "./useMicProfile";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AudioMode } from "./micProfile";
-import { dbToGain, ECHO_SAFE_MAKEUP_GAIN_DB, MAKEUP_GAIN_DB } from "./micGain";
 import type { AudioSenderLike, MicSource } from "./micSwap";
+import type { VoiceChain } from "./voiceChain";
+import type { VoiceStyle } from "./voiceStyles";
+
+// The graph itself is tested in voiceChain.test.ts. Here only its contract
+// matters: what the hook asks for, what it sends, and what it releases.
+const chainMock = vi.hoisted(() => ({ buildVoiceChain: vi.fn() }));
+vi.mock("./voiceChain", () => chainMock);
+
+import { useMicProfile } from "./useMicProfile";
 
 function fakeTrack(settings: Record<string, unknown> = {}) {
   const stop = vi.fn();
@@ -39,44 +46,26 @@ function fakeSender() {
   return { sender, replaceTrack };
 }
 
-/**
- * Enough Web Audio for the real boost stage to build a graph, so the hook is
- * tested on the path that actually reaches a call rather than the jsdom path
- * where boostMic declines and hands the raw track straight back.
- */
-function stubWebAudio(processed: MediaStreamTrack) {
-  const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
-  const close = vi.fn(() => Promise.resolve());
-  const gain = { ...node(), gain: { value: 0 } };
-  vi.stubGlobal("MediaStream", class {});
-  vi.stubGlobal(
-    "AudioContext",
-    class {
-      state = "running";
-      createMediaStreamSource = () => node();
-      createDynamicsCompressor = () => ({
-        ...node(),
-        threshold: { value: 0 },
-        knee: { value: 0 },
-        ratio: { value: 0 },
-        attack: { value: 0 },
-        release: { value: 0 },
-      });
-      createGain = () => gain;
-      createMediaStreamDestination = () => ({
-        stream: { getAudioTracks: () => [processed] } as MediaStream,
-      });
-      close = close;
-    },
-  );
-  return { close, gain };
+function fakeChain(
+  track: MediaStreamTrack,
+  style: VoiceStyle = "open",
+  dynamics = true,
+): VoiceChain & { close: ReturnType<typeof vi.fn<() => void>> } {
+  return { track, style, dynamics, close: vi.fn<() => void>() };
 }
 
+beforeEach(() => {
+  // By default no graph can be built, which is the raw-microphone path.
+  chainMock.buildVoiceChain.mockResolvedValue(null);
+});
+
 // In afterEach rather than at the end of each test body: a failing assertion
-// throws before any trailing cleanup runs, and a stubbed AudioContext left
-// behind then changes the behaviour of every test after it -- which turns one
-// real failure into a page of unrelated ones.
-afterEach(() => vi.unstubAllGlobals());
+// throws before any trailing cleanup runs, and a mock left configured then
+// changes the behaviour of every test after it.
+afterEach(() => {
+  vi.unstubAllGlobals();
+  chainMock.buildVoiceChain.mockReset();
+});
 
 describe("useMicProfile", () => {
   it("does not open a microphone before there is an audio sender", () => {
@@ -92,6 +81,8 @@ describe("useMicProfile", () => {
       unmet: [],
       error: null,
       track: null,
+      style: null,
+      dynamics: false,
     });
   });
 
@@ -151,6 +142,7 @@ describe("useMicProfile", () => {
     await Promise.resolve();
     expect(source.getUserMedia).not.toHaveBeenCalled();
     expect(replaceTrack).not.toHaveBeenCalled();
+    expect(chainMock.buildVoiceChain).not.toHaveBeenCalled();
   });
 
   it("hands the call's own microphone back when the singing ends", async () => {
@@ -201,7 +193,7 @@ describe("useMicProfile", () => {
     // behind a control that says it is off.
     const captured = fakeTrack();
     const processed = fakeTrack();
-    stubWebAudio(processed);
+    chainMock.buildVoiceChain.mockResolvedValue(fakeChain(processed));
     const source = fakeSource([captured]);
     const { sender, replaceTrack } = fakeSender();
 
@@ -216,13 +208,17 @@ describe("useMicProfile", () => {
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(processed));
+    expect(chainMock.buildVoiceChain).toHaveBeenCalledWith(captured, "open");
     expect(result.current.track).toBe(processed);
+    expect(result.current.style).toBe("open");
+    expect(result.current.dynamics).toBe(true);
     expect(captured.enabled).toBe(false);
   });
 
   it("closes the processing graph when the singing ends", async () => {
     const captured = fakeTrack();
-    const { close } = stubWebAudio(fakeTrack());
+    const chain = fakeChain(fakeTrack());
+    chainMock.buildVoiceChain.mockResolvedValue(chain);
     const source = fakeSource([captured]);
     const { sender, replaceTrack } = fakeSender();
     const original = fakeTrack();
@@ -237,28 +233,13 @@ describe("useMicProfile", () => {
     rerender({ mode: null });
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(original));
-    expect(close).toHaveBeenCalled();
+    expect(chain.close).toHaveBeenCalledOnce();
     expect(captured.stop).toHaveBeenCalledOnce();
   });
 
-  it("lifts a headphone microphone by the full makeup gain", async () => {
-    const { gain } = stubWebAudio(fakeTrack());
-    const source = fakeSource([fakeTrack()]);
-    const { sender, replaceTrack } = fakeSender();
-
-    renderHook(() =>
-      useMicProfile({ sender, mode: "headphones", noisy: false, source }),
-    );
-
-    await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
-    expect(gain.gain.value).toBeCloseTo(dbToGain(MAKEUP_GAIN_DB), 5);
-  });
-
-  it("holds a speaker microphone down to the echo-safe gain", async () => {
-    // Speakers mean echo cancellation is on, which means the compressor is
-    // sitting in front of a residual carrying the other person's voice back.
-    const { gain } = stubWebAudio(fakeTrack());
-    const source = fakeSource([fakeTrack()]);
+  it("shapes speakers in a quiet room with the echo gate", async () => {
+    const captured = fakeTrack();
+    const source = fakeSource([captured]);
     const { sender, replaceTrack } = fakeSender();
 
     renderHook(() =>
@@ -266,26 +247,38 @@ describe("useMicProfile", () => {
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
-    expect(gain.gain.value).toBeCloseTo(dbToGain(ECHO_SAFE_MAKEUP_GAIN_DB), 5);
+    expect(chainMock.buildVoiceChain).toHaveBeenCalledWith(captured, "open-speakers");
   });
 
-  it("holds a noisy speaker microphone down too, because cancellation is still on", async () => {
-    const { gain } = stubWebAudio(fakeTrack());
-    const source = fakeSource([fakeTrack()]);
+  it("shapes a noisy room the same way on either output", async () => {
+    const headphones = fakeTrack();
+    const speakers = fakeTrack();
+    const source = fakeSource([headphones, speakers]);
     const { sender, replaceTrack } = fakeSender();
-
-    renderHook(() =>
-      useMicProfile({ sender, mode: "speakers", noisy: true, source }),
+    const { rerender } = renderHook(
+      ({ mode }) => useMicProfile({ sender, mode, noisy: true, source }),
+      { initialProps: { mode: "headphones" as AudioMode } },
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
-    expect(gain.gain.value).toBeCloseTo(dbToGain(ECHO_SAFE_MAKEUP_GAIN_DB), 5);
+    rerender({ mode: "speakers" });
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(2));
+    expect(chainMock.buildVoiceChain).toHaveBeenNthCalledWith(1, headphones, "clean");
+    expect(chainMock.buildVoiceChain).toHaveBeenNthCalledWith(2, speakers, "clean");
   });
 
-  it("reopens when room noise resolves to a different profile", async () => {
-    const source = fakeSource([fakeTrack(), fakeTrack()]);
+  it("rebuilds when only the room changes, though the device profile is the same", async () => {
+    // Quiet and noisy now ask the device for identical constraints. The style
+    // is what differs, so the key has to include it or the switch does nothing.
+    const first = fakeTrack();
+    const second = fakeTrack();
+    const firstChain = fakeChain(fakeTrack());
+    chainMock.buildVoiceChain
+      .mockResolvedValueOnce(firstChain)
+      .mockResolvedValueOnce(fakeChain(fakeTrack(), "clean"));
+    const source = fakeSource([first, second]);
     const { sender, replaceTrack } = fakeSender();
-    const { rerender } = renderHook(
+    const { result, rerender } = renderHook(
       ({ noisy }) => useMicProfile({ sender, mode: "headphones", noisy, source }),
       { initialProps: { noisy: false } },
     );
@@ -293,6 +286,48 @@ describe("useMicProfile", () => {
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
     rerender({ noisy: true });
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(2));
+    expect(chainMock.buildVoiceChain).toHaveBeenLastCalledWith(second, "clean");
+    expect(result.current.style).toBe("clean");
+    expect(firstChain.close).toHaveBeenCalledOnce();
+    expect(first.stop).toHaveBeenCalledOnce();
+  });
+
+  it("sends the raw microphone when no chain can be built", async () => {
+    const captured = fakeTrack();
+    const source = fakeSource([captured]);
+    const { sender, replaceTrack } = fakeSender();
+
+    const { result } = renderHook(() =>
+      useMicProfile({ sender, mode: "speakers", noisy: false, source }),
+    );
+
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(captured));
+    expect(result.current.track).toBe(captured);
+    expect(result.current.style).toBe("open-speakers");
+    expect(result.current.dynamics).toBe(false);
+  });
+
+  it("releases a chain that finishes building after a newer request", async () => {
+    const stale = fakeTrack();
+    const staleChain = fakeChain(fakeTrack());
+    let finish: (chain: VoiceChain) => void = () => undefined;
+    chainMock.buildVoiceChain
+      .mockImplementationOnce(() => new Promise<VoiceChain>((resolve) => (finish = resolve)))
+      .mockResolvedValue(null);
+    const source = fakeSource([stale, fakeTrack()]);
+    const { sender, replaceTrack } = fakeSender();
+    const { rerender } = renderHook(
+      ({ noisy }) => useMicProfile({ sender, mode: "headphones", noisy, source }),
+      { initialProps: { noisy: false } },
+    );
+
+    await waitFor(() => expect(chainMock.buildVoiceChain).toHaveBeenCalledTimes(1));
+    rerender({ noisy: true });
+    await act(async () => finish(staleChain));
+
+    await waitFor(() => expect(staleChain.close).toHaveBeenCalledOnce());
+    expect(stale.stop).toHaveBeenCalledOnce();
+    expect(replaceTrack).not.toHaveBeenCalledWith(staleChain.track);
   });
 
   it("keeps the working microphone when opening the replacement fails", async () => {
@@ -318,15 +353,18 @@ describe("useMicProfile", () => {
 
   it("releases the microphone it opened on unmount", async () => {
     const track = fakeTrack();
+    const chain = fakeChain(fakeTrack());
+    chainMock.buildVoiceChain.mockResolvedValue(chain);
     const source = fakeSource([track]);
     const { sender, replaceTrack } = fakeSender();
     const { unmount } = renderHook(() =>
       useMicProfile({ sender, mode: "headphones", noisy: false, source }),
     );
 
-    await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(track));
+    await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(chain.track));
     unmount();
     expect(track.stop).toHaveBeenCalledOnce();
+    expect(chain.close).toHaveBeenCalledOnce();
   });
 
   it("stops an outdated microphone that finishes opening after a newer request", async () => {

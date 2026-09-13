@@ -83,6 +83,12 @@ export interface MicReport {
   dropouts: number;
   /** The operating system's own voice isolation, where the browser reports it. */
   voiceIsolation: boolean | null;
+  /**
+   * Which voice chain shapes the microphone after capture, e.g. "clean" or
+   * "open-speakers (no worklet)". Optional so reports built before the chain
+   * existed still format.
+   */
+  chain?: string;
 }
 
 export interface ReportInput {
@@ -349,6 +355,7 @@ export function formatReport(input: ReportInput): string {
         : input.mic.unmet.join(", ")
     }`,
     `Constraint error: ${input.mic?.error ?? "none"}`,
+    `Voice chain: ${input.mic === null ? "not opened" : (input.mic.chain ?? "none")}`,
     `Input level: ${input.mic === null ? "not opened" : input.mic.level}`,
   ];
 
