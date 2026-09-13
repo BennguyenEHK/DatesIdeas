@@ -40,19 +40,44 @@ function nextWeek(start: Date, days: number): Date {
 
 export function CalendarClient({
   viewerZone: initialViewerZone,
+  week,
+  onWeekChange,
+  revision,
+  onChanged,
+  compact = false,
+  onUnpaired,
 }: {
   viewerZone?: string;
+  /** A shared week position. Null leaves this calendar locally controlled. */
+  week?: string | null;
+  /** Reports a week move made in this browser, never a received week. */
+  onWeekChange?: (startIso: string) => void;
+  /** Reloads the calendar after the other person has changed it. */
+  revision?: number;
+  /** Reports a server-accepted create, edit, or delete. */
+  onChanged?: () => void;
+  /** Packs the controls into the in-call projection. */
+  compact?: boolean;
+  /** Lets an embedded calendar explain a missing season ticket. */
+  onUnpaired?: () => void;
 }) {
   const [viewerZone] = useState(
     () => initialViewerZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
   );
-  const [shown, setShown] = useState(() => weekStart(new Date(), viewerZone));
+  const [localShown, setLocalShown] = useState(() => weekStart(new Date(), viewerZone));
   const [todayDate] = useState(() => civilDate(new Date().toISOString(), viewerZone));
   const [companionZone, setCompanionZone] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<TimeBlock[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [editor, setEditor] = useState<Editor>(null);
 
+  // Memoised on the string, not recomputed each render: a fresh Date every
+  // render would change `until`, then `load`, and the load effect would fire on
+  // every render -- a request loop for as long as the calendar is open together.
+  const shown = useMemo(
+    () => (week === undefined || week === null ? localShown : weekStart(new Date(week), viewerZone)),
+    [localShown, viewerZone, week],
+  );
   const until = useMemo(() => nextWeek(shown, 38).toISOString(), [shown]);
   const occurrences = useMemo(
     () => expand(blocks, shown, nextWeek(shown, 7), viewerZone),
@@ -80,6 +105,10 @@ export function CalendarClient({
         `/api/calendar?until=${encodeURIComponent(until)}`,
         { credentials: "same-origin" },
       );
+      if (response.status === 401) {
+        onUnpaired?.();
+        throw new Error("unpaired");
+      }
       if (!response.ok) {
         throw new Error("refused");
       }
@@ -89,14 +118,24 @@ export function CalendarClient({
     } catch {
       setStatus("failed");
     }
-  }, [until]);
+  }, [onUnpaired, until]);
 
   useEffect(() => {
     const request = window.setTimeout(() => {
       void load();
     }, 0);
     return () => window.clearTimeout(request);
-  }, [load]);
+  }, [load, revision]);
+
+  const moveWeek = useCallback(
+    (next: Date) => {
+      if (week === undefined || week === null) {
+        setLocalShown(next);
+      }
+      onWeekChange?.(next.toISOString());
+    },
+    [onWeekChange, week],
+  );
 
   const save = useCallback(
     async (draft: BlockDraft, id: string | null): Promise<string | null> => {
@@ -124,6 +163,7 @@ export function CalendarClient({
             ),
           );
           setEditor(null);
+          onChanged?.();
           return null;
         } catch (error) {
           setBlocks((previous) =>
@@ -155,6 +195,7 @@ export function CalendarClient({
           throw new Error(failure);
         }
         setEditor(null);
+        onChanged?.();
         return null;
       } catch (error) {
         setBlocks((previous) =>
@@ -165,7 +206,7 @@ export function CalendarClient({
           : "The calendar could not be saved.";
       }
     },
-    [blocks],
+    [blocks, onChanged],
   );
 
   const remove = useCallback(
@@ -185,6 +226,7 @@ export function CalendarClient({
           throw new Error(failure);
         }
         setEditor(null);
+        onChanged?.();
         return null;
       } catch (error) {
         setBlocks((previous) => [...previous, original]);
@@ -193,17 +235,24 @@ export function CalendarClient({
           : "The calendar could not be saved.";
       }
     },
-    [blocks],
+    [blocks, onChanged],
   );
 
   return (
-    <div className="flex h-dvh flex-col bg-[var(--night)]">
+    <div className={`flex min-h-0 flex-col bg-[var(--night)] ${compact ? "h-full" : "h-dvh"}`}>
       <header
-        className="bar-top flex flex-wrap items-center justify-between gap-3 bg-[var(--letterbox)] px-5 py-3"
+        className={`${compact ? "flex" : "bar-top flex"} flex-wrap items-center justify-between gap-2
+          bg-[var(--letterbox)] ${compact
+            ? "border-b border-[var(--edge)] px-3 py-2"
+            : "px-5 py-3"}`}
       >
-        <Wordmark size="compact" />
+        {compact ? (
+          <p className="font-display text-lg tracking-wide text-[var(--cream)]">Shared table</p>
+        ) : (
+          <Wordmark size="compact" />
+        )}
         <div className="flex flex-wrap items-center gap-2 font-sans text-xs text-[var(--mist)]">
-          <span>{viewerZone}</span>
+          <span className={compact ? "hidden sm:inline" : undefined}>{viewerZone}</span>
           <label className="sr-only" htmlFor="companion-zone">
             Second timezone
           </label>
@@ -215,7 +264,8 @@ export function CalendarClient({
                 event.target.value === "" ? null : event.target.value,
               )
             }
-            className="h-8 border border-[var(--edge)] bg-[var(--night)] px-2 text-[var(--cream)]"
+            className={`${compact ? "h-7 max-w-36" : "h-8"} border border-[var(--edge)]
+              bg-[var(--night)] px-2 text-[var(--cream)]`}
           >
             <option value="">Show their timezone</option>
             {Intl.supportedValuesOf("timeZone").map((zone) => (
@@ -232,27 +282,35 @@ export function CalendarClient({
                 initial: { date: civilDate(shown.toISOString(), viewerZone), hour: 9 },
               })
             }
-            className="h-8 px-3 text-[var(--lamp)] ring-1 ring-[var(--lamp)]/50"
+            className={`${compact ? "h-7 px-2" : "h-8 px-3"} text-[var(--lamp)] ring-1
+              ring-[var(--lamp)]/50`}
           >
             Add time
           </button>
         </div>
       </header>
-      <main className="min-h-0 flex-1 px-3 py-3">
-        <div className="mb-3 flex items-center justify-between gap-3">
+      <main className={`${compact ? "px-2 py-2" : "px-3 py-3"} min-h-0 flex-1`}>
+        <div className={`${compact ? "mb-2" : "mb-3"} flex items-center justify-between gap-2`}>
           <button
             type="button"
-            onClick={() => setShown((current) => nextWeek(current, -7))}
+            onClick={() => moveWeek(nextWeek(shown, -7))}
             className="font-sans text-sm text-[var(--mist)]"
           >
             Previous week
           </button>
-          <p className="font-display text-xl text-[var(--cream)]">
+          <p className={`${compact ? "text-base" : "text-xl"} font-display text-[var(--cream)]`}>
             Your shared week
           </p>
           <button
             type="button"
-            onClick={() => setShown((current) => nextWeek(current, 7))}
+            onClick={() => moveWeek(weekStart(new Date(), viewerZone))}
+            className="font-sans text-xs text-[var(--lamp)]"
+          >
+            This week
+          </button>
+          <button
+            type="button"
+            onClick={() => moveWeek(nextWeek(shown, 7))}
             className="font-sans text-sm text-[var(--mist)]"
           >
             Next week
@@ -292,7 +350,10 @@ export function CalendarClient({
           />
         ) : null}
       </main>
-      <footer className="bar-bottom bg-[var(--letterbox)] px-5 py-3 font-sans text-xs text-[var(--mist)]">
+      <footer
+        className={`${compact ? "border-t border-[var(--edge)] px-3 py-2" : "bar-bottom px-5 py-3"}
+          bg-[var(--letterbox)] font-sans text-xs text-[var(--mist)]`}
+      >
         {companionZone === null
           ? "Choose their timezone to keep both clocks in view."
           : `Their clock: ${companionZone}`}

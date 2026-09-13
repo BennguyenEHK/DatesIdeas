@@ -86,6 +86,99 @@ describe("CalendarClient", () => {
     ).toBeTruthy();
   });
 
+  it("reports a locally chosen next week", async () => {
+    const onWeekChange = vi.fn();
+    const fetchMock = vi.fn(() => Promise.resolve(response(true, { blocks: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <CalendarClient
+        viewerZone="UTC"
+        week="2026-07-13T00:00:00.000Z"
+        onWeekChange={onWeekChange}
+      />,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Next week" }));
+
+    expect(onWeekChange).toHaveBeenCalledWith("2026-07-20T00:00:00.000Z");
+  });
+
+  it("loads a shared week once, not on every render", async () => {
+    // The shared week arrives as a string. Turning it into a fresh Date on each
+    // render re-created the load request each time and fetched in a loop.
+    const fetchMock = vi.fn(() => Promise.resolve(response(true, { blocks: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CalendarClient viewerZone="UTC" week="2026-07-13T00:00:00.000Z" />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a received week without reporting it back", async () => {
+    const onWeekChange = vi.fn();
+    const fetchMock = vi.fn(() => Promise.resolve(response(true, { blocks: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(
+      <CalendarClient
+        viewerZone="UTC"
+        week="2026-07-13T00:00:00.000Z"
+        onWeekChange={onWeekChange}
+      />,
+    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    view.rerender(
+      <CalendarClient
+        viewerZone="UTC"
+        week="2026-07-20T00:00:00.000Z"
+        onWeekChange={onWeekChange}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /add a block on mon 20/i })).toBeTruthy();
+    expect(onWeekChange).not.toHaveBeenCalled();
+  });
+
+  it("reloads blocks when the shared revision changes", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(response(true, { blocks: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const view = render(<CalendarClient viewerZone="UTC" revision={0} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    view.rerender(<CalendarClient viewerZone="UTC" revision={1} />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("reports only a server-accepted save", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => "temporary" });
+    const onChanged = vi.fn();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === "POST"
+        ? Promise.resolve(response(true, { id: "saved" }))
+        : Promise.resolve(response(true, { blocks: [] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CalendarClient onChanged={onChanged} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Add time" }));
+    fireEvent.change(screen.getByLabelText("Title"), {
+      target: { value: "Moonlit tea" },
+    });
+    fireEvent.submit(
+      screen.getByRole("button", { name: "Save this time" }).closest("form")!,
+    );
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
   it("shows the companion's local time alongside the viewer's", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
@@ -120,7 +213,9 @@ describe("CalendarClient", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await openCalendar(fetchMock);
+    const onChanged = vi.fn();
+    render(<CalendarClient onChanged={onChanged} />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: "Add time" }));
     fireEvent.change(screen.getByLabelText("Title"), {
       target: { value: "Moonlit tea" },
@@ -142,5 +237,6 @@ describe("CalendarClient", () => {
     expect(
       screen.queryByRole("button", { name: /edit moonlit tea/i }),
     ).toBeNull();
+    expect(onChanged).not.toHaveBeenCalled();
   });
 });
