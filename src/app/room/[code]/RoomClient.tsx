@@ -27,12 +27,14 @@ import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel, type SongLanding } from "@/components/KaraokePanel";
-import Link from "next/link";
 import { RoomControls } from "@/components/RoomControls";
 import { RecordButton } from "@/components/RecordButton";
 import { RecordingReview } from "@/components/RecordingReview";
 import { GameWord } from "@/components/GameWord";
 import { CreateSpace } from "@/components/CreateSpace";
+import { RoomAlbum } from "@/components/RoomAlbum";
+import { RoomCalendar } from "@/components/RoomCalendar";
+import { useTogether } from "@/lib/together/useTogether";
 import { useGameWord } from "@/lib/gameword/useGameWord";
 import { useCreateSpace } from "@/lib/createspace/useCreateSpace";
 import { newRecordingId, putRecording } from "@/lib/recording/store";
@@ -111,6 +113,15 @@ const ACK_WAIT_MS = 120_000;
  * room would be locked out of its own transport for the rest of the evening.
  */
 const LOAD_WAIT_MS = 120_000;
+
+/** The album and calendar marks beside the wordmark: an outline, lit while open. */
+function topMarkClass(open: boolean): string {
+  const base =
+    "inline-flex h-8 w-8 items-center justify-center rounded-full ring-1 transition-colors";
+  return open
+    ? `${base} bg-[var(--lamp)]/20 text-[var(--cream)] ring-[var(--lamp)]/80`
+    : `${base} text-[var(--mist)] ring-[var(--edge)] hover:text-[var(--cream)] hover:ring-[var(--lamp)]`;
+}
 
 export function RoomClient({ code }: { code: string }) {
   // One queue per tile: yours lands on your face, theirs on theirs.
@@ -293,7 +304,16 @@ export function RoomClient({ code }: { code: string }) {
         acceptLive.current?.(msg);
         return;
       }
-      if (msg.t === "canvas" || msg.t === "canvas-base" || msg.t === "game" || msg.t === "move") {
+      if (
+        msg.t === "canvas" ||
+        msg.t === "canvas-base" ||
+        msg.t === "game" ||
+        msg.t === "move" ||
+        msg.t === "album-view" ||
+        msg.t === "album-changed" ||
+        msg.t === "calendar-week" ||
+        msg.t === "calendar-changed"
+      ) {
         acceptShared.current?.(msg);
         return;
       }
@@ -431,6 +451,8 @@ export function RoomClient({ code }: { code: string }) {
     send: sendToPeer,
   });
   const createSpace = useCreateSpace({ send: sendToPeer });
+  const together = useTogether({ send: sendToPeer });
+  const { accept: acceptTogether, resync: resyncTogether } = together;
   // Every drawing item is stamped with the shared clock, not this machine's.
   // The scene is ordered by that stamp, so two clocks that disagree by a few
   // hundred milliseconds would stack the same strokes differently on each screen.
@@ -443,12 +465,14 @@ export function RoomClient({ code }: { code: string }) {
     acceptShared.current = (message: PeerMessage) => {
       acceptGame(message);
       acceptCanvas(message);
+      acceptTogether(message);
     };
     resyncShared.current = () => {
       resyncGame();
       resyncCanvas();
+      resyncTogether();
     };
-  }, [acceptGame, acceptCanvas, resyncGame, resyncCanvas]);
+  }, [acceptGame, acceptCanvas, resyncGame, resyncCanvas, acceptTogether, resyncTogether]);
 
   const discardRecording = useCallback(() => {
     setFinishedRecording(null);
@@ -1342,25 +1366,42 @@ export function RoomClient({ code }: { code: string }) {
               onFinished={setFinishedRecording}
             />
             {paired ? (
-              // The album is a place you visit, not an activity: an activity
-              // switches BOTH screens, and a quick look at a photograph should
-              // not pull the other person onto it. So it is its own mark -- a
-              // plain outline, unlike the lit bubbles -- and it opens in its own
-              // tab, because leaving this page would end the call. Hidden on a
-              // device with no season ticket, where it could only lead to a
-              // page saying so.
-              <Link
-                href="/album"
-                target="festibooth-album"
-                aria-label="Open our album"
-                title="Our album"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-full text-[var(--mist)] ring-1 ring-[var(--edge)] transition-colors hover:text-[var(--cream)] hover:ring-[var(--lamp)]"
-              >
-                <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.7">
-                  <rect x="3" y="6" width="18" height="12" rx="1" />
-                  <path d="M3 9h18M3 15h18M7 6v3M11 6v3M15 6v3M19 6v3M7 15v3M11 15v3M15 15v3M19 15v3" />
-                </svg>
-              </Link>
+              // The album and the calendar, looked at together. Their own
+              // marks -- plain outlines, unlike the lit bubbles -- because they
+              // are the two of you rather than something to do tonight. Pressing
+              // one opens it on both screens with your faces beside it, the way
+              // an activity does, and pressing it again goes back to the call.
+              // Hidden on a device with no season ticket, where neither could
+              // load anything.
+              <>
+                <button
+                  type="button"
+                  onClick={() => onSelectActivity(current === "album" ? null : "album")}
+                  aria-pressed={current === "album"}
+                  aria-label={current === "album" ? "Close our album" : "Open our album together"}
+                  title={current === "album" ? "Close our album" : "Our album"}
+                  className={topMarkClass(current === "album")}
+                >
+                  <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.7">
+                    <rect x="3" y="6" width="18" height="12" rx="1" />
+                    <path d="M3 9h18M3 15h18M7 6v3M11 6v3M15 6v3M19 6v3M7 15v3M11 15v3M15 15v3M19 15v3" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSelectActivity(current === "calendar" ? null : "calendar")}
+                  aria-pressed={current === "calendar"}
+                  aria-label={current === "calendar" ? "Close our calendar" : "Open our calendar together"}
+                  title={current === "calendar" ? "Close our calendar" : "Our calendar"}
+                  className={topMarkClass(current === "calendar")}
+                >
+                  <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.7">
+                    <rect x="3.5" y="5" width="17" height="15" rx="2" />
+                    <path d="M3.5 10h17M8 3v4M16 3v4" />
+                    <path d="M8 14h2M12 14h2M16 14h0.01M8 17h2M12 17h2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </>
             ) : null}
           </div>
           <ActivityBar current={current} onSelect={onSelectActivity} />
@@ -1559,6 +1600,26 @@ export function RoomClient({ code }: { code: string }) {
                       onStart={gameWord.start}
                       onMove={gameWord.move}
                       onLeave={gameWord.leave}
+                    />
+                  </div>
+                ) : current === "album" ? (
+                  <div className="h-full overflow-hidden">
+                    <RoomAlbum
+                      view={together.albumView}
+                      revision={together.albumRevision}
+                      onView={together.showAlbum}
+                      onChanged={together.albumChanged}
+                      onClose={() => onSelectActivity(null)}
+                    />
+                  </div>
+                ) : current === "calendar" ? (
+                  <div className="h-full overflow-hidden">
+                    <RoomCalendar
+                      week={together.calendarWeek}
+                      revision={together.calendarRevision}
+                      onWeek={together.showWeek}
+                      onChanged={together.calendarChanged}
+                      onClose={() => onSelectActivity(null)}
                     />
                   </div>
                 ) : (

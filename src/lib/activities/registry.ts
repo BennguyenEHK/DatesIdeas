@@ -1,4 +1,13 @@
-export const ACTIVITY_IDS = ["cards", "karaoke", "movie", "photobooth", "createspace", "gameword"] as const;
+export const ACTIVITY_IDS = [
+  "cards",
+  "karaoke",
+  "movie",
+  "photobooth",
+  "createspace",
+  "gameword",
+  "album",
+  "calendar",
+] as const;
 export type ActivityId = (typeof ACTIVITY_IDS)[number];
 
 /**
@@ -19,6 +28,11 @@ export interface ActivityDef {
   kind: ActivityKind;
   /** False until the activity itself exists. The bubble shows, dimmed. */
   ready: boolean;
+  /**
+   * False for an activity opened from its own mark in the top bar rather than
+   * from the row of bubbles. Missing means true.
+   */
+  bubble?: boolean;
 }
 
 export const ACTIVITIES: readonly ActivityDef[] = [
@@ -37,6 +51,11 @@ export const ACTIVITIES: readonly ActivityDef[] = [
   // index in ACTIVITY_IDS and breaks swap ties, so reordering would change the
   // tie-break between two builds of the app talking to each other.
   { id: "gameword", label: "GameWord", icon: "🎲", kind: "takeover", ready: true },
+  // Takeover, both of them, so the two of you look through the album or plan
+  // the week with your faces in the column beside it. Opened from their own
+  // marks beside the wordmark, where they have always lived, not from bubbles.
+  { id: "album", label: "Our album", icon: "📖", kind: "takeover", ready: true, bubble: false },
+  { id: "calendar", label: "Our calendar", icon: "📅", kind: "takeover", ready: true, bubble: false },
 ];
 
 export function isActivityId(v: unknown): v is ActivityId {

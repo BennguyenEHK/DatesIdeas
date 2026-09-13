@@ -48,10 +48,17 @@ describe("activity registry", () => {
       "photobooth",
       "createspace",
       "gameword",
+      "album",
+      "calendar",
     ]);
     expect(ACTIVITIES.filter((a) => a.kind === "companion").map((a) => a.id)).toEqual([
       "cards",
     ]);
+  });
+
+  it("keeps the album and calendar out of the bubbles, and everything else in", () => {
+    // Those two open from their own marks beside the wordmark.
+    expect(ACTIVITIES.filter((a) => a.bubble === false).map((a) => a.id)).toEqual(["album", "calendar"]);
   });
 
   it("recognises known ids and rejects anything else", () => {

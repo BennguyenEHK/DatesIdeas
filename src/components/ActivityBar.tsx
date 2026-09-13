@@ -61,7 +61,7 @@ export function ActivityBar({
         aria-label="Activities"
         className={expanded ? "flex items-center gap-1.5" : "hidden"}
       >
-        {ACTIVITIES.map((activityDef) => {
+        {ACTIVITIES.filter((activityDef) => activityDef.bubble !== false).map((activityDef) => {
           const selected = activityDef.id === current;
           return (
             <button

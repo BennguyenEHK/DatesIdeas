@@ -3,6 +3,7 @@ import { isThemeId, type ThemeId } from "@/lib/photo/themes";
 import { SHOT_COUNTS, type ShotCount } from "@/lib/photo/strip";
 import { isActivityId, type ActivityId } from "@/lib/activities/registry";
 import { isCanvasOp, type CanvasOp } from "@/lib/createspace/ops";
+import { GEARS, type Gear } from "@/lib/album/types";
 import { isGameId, isGameMove, type GameId, type GameMove } from "@/lib/gameword/games";
 
 export const MEME_IDS = [
@@ -154,7 +155,18 @@ export type PeerMessage =
   // land on the board of the one after.
   | { t: "game"; game: GameId; players: [string, string]; nonce: string }
   // One move. Only what the player chose travels; each side computes the board.
-  | { t: "move"; nonce: string; move: GameMove };
+  | { t: "move"; nonce: string; move: GameMove }
+  // The album, open in the call. Which photograph and which view is showing --
+  // an id, never the picture: both browsers hold the same season ticket and
+  // load the album themselves.
+  | { t: "album-view"; itemId: string | null; gear: Gear }
+  // Something in the album changed on the sender's screen (added, captioned,
+  // loved, deleted). The receiver reloads rather than being sent the change.
+  | { t: "album-changed" }
+  // The calendar, open in the call. The week showing, as the instant it starts.
+  | { t: "calendar-week"; start: string }
+  // A time block was added, edited or deleted. The receiver reloads.
+  | { t: "calendar-changed" };
 
 /** The longest chat line that will cross, and the longest one anyone may type. */
 export const CHAT_MAX_CHARS = 500;
@@ -328,6 +340,19 @@ export function decode(raw: string): PeerMessage | null {
       return isStr(m.nonce) && m.nonce.length <= 40 && isGameMove(m.move)
         ? { t: "move", nonce: m.nonce, move: m.move }
         : null;
+    case "album-view":
+      return (m.itemId === null || (isStr(m.itemId) && m.itemId.length > 0 && m.itemId.length <= 40)) &&
+        (GEARS as readonly unknown[]).includes(m.gear)
+        ? { t: "album-view", itemId: m.itemId === null ? null : (m.itemId as string), gear: m.gear as Gear }
+        : null;
+    case "album-changed":
+      return { t: "album-changed" };
+    case "calendar-week":
+      return isStr(m.start) && m.start.length <= 40 && Number.isFinite(Date.parse(m.start))
+        ? { t: "calendar-week", start: m.start }
+        : null;
+    case "calendar-changed":
+      return { t: "calendar-changed" };
     default:
       return null;
   }
