@@ -29,6 +29,25 @@ describe("album and calendar messages", () => {
     expect(decode(JSON.stringify({ t: "calendar-week", start: 5 }))).toBeNull();
   });
 
+  it("decodes a film playing, paused and closed", () => {
+    const playing = { t: "film" as const, film: { day: "2026-09-12", anchorMs: 1000, pausedAtMs: null }, sentAt: 5 };
+    const paused = { t: "film" as const, film: { day: "2026-09-12", anchorMs: 1000, pausedAtMs: 3500 }, sentAt: 6 };
+    const closed = { t: "film" as const, film: null, sentAt: 7 };
+    expect(decode(encode(playing))).toEqual(playing);
+    expect(decode(encode(paused))).toEqual(paused);
+    expect(decode(encode(closed))).toEqual(closed);
+  });
+
+  it("refuses a film with a malformed day, time or stamp", () => {
+    const film = { day: "2026-09-12", anchorMs: 1000, pausedAtMs: null };
+    expect(decode(JSON.stringify({ t: "film", film, sentAt: "now" }))).toBeNull();
+    expect(decode(JSON.stringify({ t: "film", film: { ...film, day: "12/09/2026" }, sentAt: 1 }))).toBeNull();
+    expect(decode(JSON.stringify({ t: "film", film: { ...film, anchorMs: "x" }, sentAt: 1 }))).toBeNull();
+    expect(decode(JSON.stringify({ t: "film", film: { ...film, pausedAtMs: -1 }, sentAt: 1 }))).toBeNull();
+    expect(decode(JSON.stringify({ t: "film", film: [1, 2], sentAt: 1 }))).toBeNull();
+    expect(decode(JSON.stringify({ t: "film", sentAt: 1 }))).toBeNull();
+  });
+
   it("decodes the two change notices", () => {
     expect(decode(encode({ t: "album-changed" }))).toEqual({ t: "album-changed" });
     expect(decode(encode({ t: "calendar-changed" }))).toEqual({ t: "calendar-changed" });

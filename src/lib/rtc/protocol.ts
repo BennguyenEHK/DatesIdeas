@@ -4,6 +4,7 @@ import { SHOT_COUNTS, type ShotCount } from "@/lib/photo/strip";
 import { isActivityId, type ActivityId } from "@/lib/activities/registry";
 import { isCanvasOp, type CanvasOp } from "@/lib/createspace/ops";
 import { GEARS, type Gear } from "@/lib/album/types";
+import type { FilmState } from "@/lib/album/film";
 import { isGameId, isGameMove, type GameId, type GameMove } from "@/lib/gameword/games";
 
 export const MEME_IDS = [
@@ -166,7 +167,10 @@ export type PeerMessage =
   // The calendar, open in the call. The week showing, as the instant it starts.
   | { t: "calendar-week"; start: string }
   // A time block was added, edited or deleted. The receiver reloads.
-  | { t: "calendar-changed" };
+  | { t: "calendar-changed" }
+  // Play the day, in the call. The whole film state, null when it closes, and
+  // the shared-clock instant it was set so the later of two changes wins.
+  | { t: "film"; film: FilmState | null; sentAt: number };
 
 /** The longest chat line that will cross, and the longest one anyone may type. */
 export const CHAT_MAX_CHARS = 500;
@@ -353,6 +357,22 @@ export function decode(raw: string): PeerMessage | null {
         : null;
     case "calendar-changed":
       return { t: "calendar-changed" };
+    case "film": {
+      if (!isNum(m.sentAt)) return null;
+      if (m.film === null) return { t: "film", film: null, sentAt: m.sentAt };
+      if (typeof m.film !== "object" || m.film === undefined || Array.isArray(m.film)) return null;
+      const film = m.film as Record<string, unknown>;
+      return isStr(film.day) &&
+        /^\d{4}-\d{2}-\d{2}$/.test(film.day) &&
+        isNum(film.anchorMs) &&
+        (film.pausedAtMs === null || (isNum(film.pausedAtMs) && film.pausedAtMs >= 0))
+        ? {
+            t: "film",
+            film: { day: film.day, anchorMs: film.anchorMs, pausedAtMs: film.pausedAtMs as number | null },
+            sentAt: m.sentAt,
+          }
+        : null;
+    }
     default:
       return null;
   }

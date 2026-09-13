@@ -312,7 +312,8 @@ export function RoomClient({ code }: { code: string }) {
         msg.t === "album-view" ||
         msg.t === "album-changed" ||
         msg.t === "calendar-week" ||
-        msg.t === "calendar-changed"
+        msg.t === "calendar-changed" ||
+        msg.t === "film"
       ) {
         acceptShared.current?.(msg);
         return;

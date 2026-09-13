@@ -48,6 +48,9 @@ next-env.d.ts
 
 # dispatch worker logs
 .claude/dispatch-runs/
+
+# Design mockups from brainstorming sessions. Scratch work, not the app.
+/.superpowers/
 *.stackdump
 
 # Screenshots dropped in the project root while reporting a bug. They are

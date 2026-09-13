@@ -54,6 +54,55 @@ describe("useTogether", () => {
     ]);
   });
 
+  it("starts a film here and sends it with the shared clock's stamp", () => {
+    const sent: PeerMessage[] = [];
+    const hook = renderHook(() =>
+      useTogether({ send: (message) => void sent.push(message), now: () => 5000 }),
+    );
+    const film = { day: "2026-09-12", anchorMs: 5300, pausedAtMs: null };
+    act(() => hook.result.current.setFilm(film));
+    expect(hook.result.current.film).toEqual(film);
+    expect(sent).toEqual([{ t: "film", film, sentAt: 5000 }]);
+  });
+
+  it("keeps the later of two film changes, whichever order they arrive in", () => {
+    const { hook, sent } = setup();
+    const paused = { day: "2026-09-12", anchorMs: 0, pausedAtMs: 4000 };
+    const playing = { day: "2026-09-12", anchorMs: 0, pausedAtMs: null };
+    act(() => hook.result.current.accept({ t: "film", film: paused, sentAt: 200 }));
+    act(() => hook.result.current.accept({ t: "film", film: playing, sentAt: 100 }));
+    expect(hook.result.current.film).toEqual(paused);
+    act(() => hook.result.current.accept({ t: "film", film: null, sentAt: 300 }));
+    expect(hook.result.current.film).toBeNull();
+    expect(sent).toEqual([]);
+  });
+
+  it("settles a tie the same way on both screens", () => {
+    // Both people press at the same shared instant: each keeps the larger state,
+    // so the two screens agree instead of swapping.
+    const a = { day: "2026-09-12", anchorMs: 0, pausedAtMs: 1000 };
+    const b = { day: "2026-09-12", anchorMs: 0, pausedAtMs: 2000 };
+    const one = renderHook(() => useTogether({ send: () => undefined, now: () => 50 }));
+    const two = renderHook(() => useTogether({ send: () => undefined, now: () => 50 }));
+    act(() => one.result.current.setFilm(a));
+    act(() => two.result.current.setFilm(b));
+    act(() => one.result.current.accept({ t: "film", film: b, sentAt: 50 }));
+    act(() => two.result.current.accept({ t: "film", film: a, sentAt: 50 }));
+    expect(one.result.current.film).toEqual(two.result.current.film);
+  });
+
+  it("tells a rejoining screen what is playing", () => {
+    const sent: PeerMessage[] = [];
+    const hook = renderHook(() =>
+      useTogether({ send: (message) => void sent.push(message), now: () => 900 }),
+    );
+    const film = { day: "2026-09-12", anchorMs: 1000, pausedAtMs: null };
+    act(() => hook.result.current.setFilm(film));
+    sent.length = 0;
+    act(() => hook.result.current.resync());
+    expect(sent).toContainEqual({ t: "film", film, sentAt: 900 });
+  });
+
   it("ignores messages that are not about the album or the calendar", () => {
     const { hook } = setup();
     act(() => hook.result.current.accept({ t: "canvas-base", itemId: "x" }));
