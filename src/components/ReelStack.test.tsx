@@ -53,7 +53,9 @@ describe("ReelStack", () => {
     render(<ReelStack frame={frame(12)} index={0} selected={false} onSelect={onSelect} />);
 
     fireEvent.click(screen.getByRole("option"));
-    expect(document.body.querySelectorAll("[data-reel-fan-first], [aria-label$='more memories']")).toHaveLength(2);
+    expect(
+      document.body.querySelectorAll("[data-reel-fan-first], [aria-label$='more memories']"),
+    ).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: /2026-02-05/ })).toHaveLength(7);
     expect(screen.getByRole("button", { name: "2026-02-05, 6 more memories" })).toBeTruthy();
 
@@ -88,7 +90,9 @@ describe("ReelStack", () => {
     stack.focus();
     fireEvent.keyDown(stack, { key: "Enter" });
     vi.runAllTimers();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "2026-02-05, memory 1" }));
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "2026-02-05, memory 1" }),
+    );
 
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("button", { name: "2026-02-05, memory 1" })).toBeNull();

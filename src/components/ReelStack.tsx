@@ -44,11 +44,14 @@ export function ReelStack({
     }
   }, []);
 
-  const close = useCallback((returnFocus = false) => {
-    clearHoverTimer();
-    setAnchor(null);
-    if (returnFocus) stackRef.current?.focus();
-  }, [clearHoverTimer]);
+  const close = useCallback(
+    (returnFocus = false) => {
+      clearHoverTimer();
+      setAnchor(null);
+      if (returnFocus) stackRef.current?.focus();
+    },
+    [clearHoverTimer],
+  );
 
   // When the fan last opened. Selecting a stack scrolls the reel to centre it,
   // and that scroll arrives just after the fan opens; it must move the fan with
@@ -106,7 +109,8 @@ export function ReelStack({
     const closeForOutsideClick = (event: MouseEvent) => {
       if (anchor === null) return;
       const target = event.target as Node;
-      if (!stackRef.current?.contains(target) && !document.getElementById(fanId)?.contains(target)) close();
+      if (!stackRef.current?.contains(target) && !document.getElementById(fanId)?.contains(target))
+        close();
     };
     const closeForEscape = (event: KeyboardEvent) => {
       if (anchor !== null && event.key === "Escape") close(true);
@@ -116,11 +120,14 @@ export function ReelStack({
     };
     const moveFanFocus = (event: KeyboardEvent) => {
       if (anchor === null || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
-      const cards = Array.from(document.querySelectorAll<HTMLButtonElement>(`[data-reel-fan-card="${fanId}"]`));
+      const cards = Array.from(
+        document.querySelectorAll<HTMLButtonElement>(`[data-reel-fan-card="${fanId}"]`),
+      );
       const at = cards.indexOf(document.activeElement as HTMLButtonElement);
       if (at < 0) return;
       event.preventDefault();
-      const next = event.key === "ArrowRight" ? Math.min(cards.length - 1, at + 1) : Math.max(0, at - 1);
+      const next =
+        event.key === "ArrowRight" ? Math.min(cards.length - 1, at + 1) : Math.max(0, at - 1);
       cards[next]?.focus();
     };
 
@@ -167,7 +174,13 @@ export function ReelStack({
             }}
           >
             {/* eslint-disable-next-line @next/next/no-img-element -- signed storage URL on an unknown host. */}
-            <img src={still} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+            <img
+              src={still}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="h-full w-full object-cover"
+            />
           </div>
         );
       })}
@@ -225,7 +238,8 @@ export function ReelStack({
               onPointerLeave={scheduleClose}
             >
               {fan.map((card, slot) => {
-                const item = card.kind === "print" ? frame.items[card.index] : frame.items[FAN_MAX - 1];
+                const item =
+                  card.kind === "print" ? frame.items[card.index] : frame.items[FAN_MAX - 1];
                 if (item === undefined) return null;
                 const still = item.posterUrl ?? item.url;
                 return (
@@ -255,7 +269,9 @@ export function ReelStack({
                     // +y: fanLayout's outer cards sit LOWER than the middle one,
                     // so the spread arcs like a hand of cards, not a bowl.
                     animate={{ opacity: 1, x: card.x, y: card.y, rotate: card.rotateDeg }}
-                    transition={reduceMotion ? { duration: 0 } : { duration: 0.3, delay: slot * 0.035 }}
+                    transition={
+                      reduceMotion ? { duration: 0 } : { duration: 0.3, delay: slot * 0.035 }
+                    }
                     onClick={() => {
                       onSelect(item.id);
                       close();
@@ -264,7 +280,13 @@ export function ReelStack({
                     {card.kind === "print" ? (
                       <>
                         {/* eslint-disable-next-line @next/next/no-img-element -- signed storage URL on an unknown host. */}
-                        <img src={still} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                        <img
+                          src={still}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          className="h-full w-full object-cover"
+                        />
                       </>
                     ) : (
                       <span className="flex h-full items-center justify-center bg-[var(--dusk)] font-display text-2xl text-[var(--lamp)]">

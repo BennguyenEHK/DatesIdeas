@@ -452,7 +452,11 @@ export function RoomClient({ code }: { code: string }) {
     send: sendToPeer,
   });
   const createSpace = useCreateSpace({ send: sendToPeer });
-  const together = useTogether({ send: sendToPeer });
+  // The film of a day is anchored to the peers' shared clock, so both screens
+  // compute the same moment of it from the same state.
+  const peerClock = peer.clock;
+  const togetherNow = useCallback(() => peerClock?.now() ?? Date.now(), [peerClock]);
+  const together = useTogether({ send: sendToPeer, now: togetherNow });
   const { accept: acceptTogether, resync: resyncTogether } = together;
   // Every drawing item is stamped with the shared clock, not this machine's.
   // The scene is ordered by that stamp, so two clocks that disagree by a few
@@ -1606,6 +1610,10 @@ export function RoomClient({ code }: { code: string }) {
                 ) : current === "album" ? (
                   <div className="h-full overflow-hidden">
                     <RoomAlbum
+                      film={together.film}
+                      onFilm={together.setFilm}
+                      now={togetherNow}
+                      filmLeadMs={peerClock?.leadTime() ?? 0}
                       view={together.albumView}
                       revision={together.albumRevision}
                       onView={together.showAlbum}

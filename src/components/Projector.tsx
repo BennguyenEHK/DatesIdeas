@@ -42,6 +42,8 @@ export function Projector({
   onLove,
   onCaption,
   onDelete,
+  onPlayDay,
+  dayCount,
   empty,
 }: {
   item: AlbumItem | null;
@@ -49,6 +51,8 @@ export function Projector({
   onLove: (item: AlbumItem, loved: boolean) => void;
   onCaption: (item: AlbumItem, caption: string | null) => void;
   onDelete: (item: AlbumItem) => void;
+  onPlayDay?: () => void;
+  dayCount?: number;
   empty?: "search";
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -163,6 +167,15 @@ export function Projector({
         >
           <span aria-hidden>{item.loved ? "♥" : "♡"}</span>
         </button>
+        {onPlayDay !== undefined && (dayCount ?? 0) >= 2 ? (
+          <button
+            type="button"
+            onClick={onPlayDay}
+            className="text-[var(--mist)] underline underline-offset-4 hover:text-[var(--cream)]"
+          >
+            ▶ Play this day
+          </button>
+        ) : null}
         {confirmingDelete ? (
           <span className="flex items-center gap-2">
             <span>This cannot be undone.</span>

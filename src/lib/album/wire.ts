@@ -20,7 +20,10 @@ export interface PresignRequest {
    * trusting it, because a wrong clock here silently misfiles a photograph.
    */
   happenedAt: string;
-  /** True when the item moves and a poster will follow. */
+  /**
+   * True when a small JPEG still will follow: a video's first frame, or a
+   * photograph shrunk so the reel loads a small file instead of the original.
+   */
   withPoster?: boolean;
   /** The evening that produced it, when one did. */
   sourceRoom?: string | null;

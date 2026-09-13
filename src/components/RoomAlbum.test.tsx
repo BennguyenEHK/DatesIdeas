@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RoomAlbum } from "./RoomAlbum";
 import type { AlbumItem } from "@/lib/album/types";
+import { civilDate } from "@/lib/album/occasions";
 
 const ITEMS: AlbumItem[] = [
   {
@@ -139,6 +140,70 @@ describe("RoomAlbum", () => {
     await screen.findByAltText("Newest memory");
     fireEvent.keyDown(screen.getByRole("region", { name: "Shared album" }), { key: "ArrowRight" });
     expect(onView).toHaveBeenCalledWith({ itemId: "older", gear: "frames" });
+  });
+
+  it("draws a day with several memories as a stack in the days gear", async () => {
+    const sameDay = {
+      ...ITEMS[1],
+      id: "older-2",
+      caption: "Also that day",
+      happenedAt: "2026-02-01T15:00:00Z",
+    };
+    fetchMock.mockResolvedValue(response(200, [...ITEMS, sameDay]));
+    const { onView } = renderAlbum({ view: { itemId: "newest", gear: "days" } });
+    await screen.findByAltText("Newest memory");
+    const stack = screen.getByRole("option", { name: /2 memories/ });
+    fireEvent.click(stack);
+    // The top of the stack is the newest memory of that day.
+    expect(onView).toHaveBeenCalledWith({ itemId: "older-2", gear: "days" });
+  });
+
+  it("starts the day's film for both screens, anchored ahead on the shared clock", async () => {
+    const sameDay = {
+      ...ITEMS[1],
+      id: "older-2",
+      caption: "Also that day",
+      happenedAt: "2026-02-01T15:00:00Z",
+    };
+    fetchMock.mockResolvedValue(response(200, [...ITEMS, sameDay]));
+    const onFilm = vi.fn();
+    renderAlbum({ onFilm, now: () => 10_000, filmLeadMs: 300 });
+    await screen.findByAltText("Older memory");
+    fireEvent.click(screen.getByRole("button", { name: "▶ Play this day" }));
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(onFilm).toHaveBeenCalledWith({
+      day: civilDate("2026-02-01T12:00:00Z", zone),
+      anchorMs: 10_300,
+      pausedAtMs: null,
+    });
+  });
+
+  it("offers no film for a day with a single memory", async () => {
+    renderAlbum({ onFilm: vi.fn() });
+    await screen.findByAltText("Older memory");
+    expect(screen.queryByRole("button", { name: "▶ Play this day" })).toBeNull();
+  });
+
+  it("plays a shared film inside the album and closes it for both screens", async () => {
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => undefined);
+    const sameDay = {
+      ...ITEMS[1],
+      id: "older-2",
+      caption: "Also that day",
+      happenedAt: "2026-02-01T15:00:00Z",
+    };
+    fetchMock.mockResolvedValue(response(200, [...ITEMS, sameDay]));
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const onFilm = vi.fn();
+    renderAlbum({
+      film: { day: civilDate("2026-02-01T12:00:00Z", zone), anchorMs: 0, pausedAtMs: 0 },
+      onFilm,
+      now: () => 0,
+    });
+    expect(await screen.findByRole("dialog", { name: "Play the day" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "CLOSE" }));
+    expect(onFilm).toHaveBeenCalledWith(null);
   });
 
   it("keeps the call available when this device is not paired", async () => {

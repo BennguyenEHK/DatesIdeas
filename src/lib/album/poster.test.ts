@@ -44,9 +44,12 @@ describe("stillFromImage", () => {
   });
 
   it("returns null when decoding rejects", async () => {
-    vi.stubGlobal("createImageBitmap", vi.fn(async () => {
-      throw new Error("unsupported HEIC");
-    }));
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => {
+        throw new Error("unsupported HEIC");
+      }),
+    );
     const result = await stillFromImage(new Blob(["photo"]), {
       document: imageDocument({} as HTMLCanvasElement),
     });
@@ -55,8 +58,10 @@ describe("stillFromImage", () => {
 
   it("returns null for an already-small JPEG", async () => {
     const close = vi.fn();
-    vi.stubGlobal("createImageBitmap", vi.fn(async () =>
-      ({ width: 640, height: 320, close } as unknown as ImageBitmap)));
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async () => ({ width: 640, height: 320, close }) as unknown as ImageBitmap),
+    );
     const canvas = { getContext: vi.fn() } as unknown as HTMLCanvasElement;
     const result = await stillFromImage(new Blob(["jpeg"], { type: "image/jpeg" }), {
       document: imageDocument(canvas),
@@ -70,13 +75,24 @@ describe("stillFromImage", () => {
 describe("posterFromVideo", () => {
   it("draws a scaled frame and releases the object URL", async () => {
     const video = Object.assign(new EventTarget(), {
-      muted: false, preload: "", playsInline: false, src: "", duration: 12,
-      currentTime: 0, videoWidth: 1920, videoHeight: 1080, remove: vi.fn(),
+      muted: false,
+      preload: "",
+      playsInline: false,
+      src: "",
+      duration: 12,
+      currentTime: 0,
+      videoWidth: 1920,
+      videoHeight: 1080,
+      remove: vi.fn(),
     }) as unknown as HTMLVideoElement;
     const context = { drawImage: vi.fn() } as unknown as CanvasRenderingContext2D;
     const canvas = {
-      width: 0, height: 0, getContext: vi.fn(() => context),
-      toBlob: vi.fn((callback: BlobCallback) => callback(new Blob(["poster"], { type: "image/jpeg" }))),
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => context),
+      toBlob: vi.fn((callback: BlobCallback) =>
+        callback(new Blob(["poster"], { type: "image/jpeg" })),
+      ),
     } as unknown as HTMLCanvasElement;
     const originalCreateElement = document.createElement.bind(document);
     vi.spyOn(document, "createElement").mockImplementation((tagName) => {
@@ -106,7 +122,11 @@ describe("posterFromVideo", () => {
 
   it("returns null and still cleans up when decoding fails", async () => {
     const video = Object.assign(new EventTarget(), {
-      muted: false, preload: "", playsInline: false, duration: 0, remove: vi.fn(),
+      muted: false,
+      preload: "",
+      playsInline: false,
+      duration: 0,
+      remove: vi.fn(),
     }) as unknown as HTMLVideoElement;
     const originalCreateElement = document.createElement.bind(document);
     vi.spyOn(document, "createElement").mockImplementation((tagName) => {
