@@ -19,7 +19,7 @@ export interface StripLayout {
   caption: Rect;
 }
 
-export const SHOT_COUNTS = [2, 4] as const;
+export const SHOT_COUNTS = [1, 2, 3, 4] as const;
 export type ShotCount = (typeof SHOT_COUNTS)[number];
 
 export const STRIP_WIDTH = 1080;
@@ -37,9 +37,13 @@ function requirePositiveFinite(value: number, name: string): void {
 }
 
 function requireShotCount(shots: number): asserts shots is ShotCount {
-  if (shots !== 2 && shots !== 4) {
-    throw new TypeError("shots must be 2 or 4");
+  if (!isShotCount(shots)) {
+    throw new TypeError("shots must be 1, 2, 3 or 4");
   }
+}
+
+export function isShotCount(value: unknown): value is ShotCount {
+  return typeof value === "number" && (SHOT_COUNTS as readonly number[]).includes(value);
 }
 
 /**

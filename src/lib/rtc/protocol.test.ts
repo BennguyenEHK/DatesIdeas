@@ -210,7 +210,7 @@ describe("starting a photo booth sitting", () => {
   });
 
   it("refuses a shot count the strip cannot lay out", () => {
-    expect(decode(JSON.stringify({ ...shot, shots: 3 }))).toBeNull();
+    expect(decode(JSON.stringify({ ...shot, shots: 5 }))).toBeNull();
     expect(decode(JSON.stringify({ ...shot, shots: 0 }))).toBeNull();
   });
 

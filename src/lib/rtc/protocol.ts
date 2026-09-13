@@ -6,6 +6,9 @@ import { isCanvasOp, type CanvasOp } from "@/lib/createspace/ops";
 import { GEARS, type Gear } from "@/lib/album/types";
 import type { FilmState } from "@/lib/album/film";
 import { isGameId, isGameMove, type GameId, type GameMove } from "@/lib/gameword/games";
+import { isWebGameId, type WebGameId } from "@/lib/gameword/webGames";
+import { isCreateSession, type CreateSession } from "@/lib/createspace/session";
+import { isLookId } from "@/lib/looks/types";
 
 export const MEME_IDS = [
   "heart",
@@ -69,7 +72,10 @@ export type PeerMessage =
   // derive the identical countdown and the identical flashes from it, and each
   // builds the strip from the two video feeds it already has. No picture ever
   // crosses the connection.
-  | { t: "photo"; themeId: ThemeId; shots: ShotCount; startAt: number }
+  //
+  // `lookId` names a look the pair designed in CreateSpace; both sides load it
+  // from their shared album storage. Absent or null means the built-in theme.
+  | { t: "photo"; themeId: ThemeId; shots: ShotCount; startAt: number; lookId?: string | null }
   // Whether someone is singing into this side's microphone right now.
   //
   // Delaying your music to catch up with their voice only ever works for the
@@ -151,6 +157,15 @@ export type PeerMessage =
   // fetch, or null for a blank page. An id rather than an image, because both
   // browsers belong to the same album and a photograph is megabytes.
   | { t: "canvas-base"; itemId: string | null }
+  // Which CreateSpace workshop is open and the strip's non-mark settings. The
+  // whole session every time; the later `at` wins (session.ts).
+  | { t: "canvas-session"; session: CreateSession }
+  // Save pressed while editing a booth strip. Each side draws the shared marks
+  // over its OWN copy of the strip and hands it back to the booth; the strip
+  // itself never crosses.
+  | { t: "canvas-finish"; nonce: string }
+  // A web game opened (or closed, null) in GameWord, for both screens.
+  | { t: "webgame"; id: WebGameId | null; sentAt: number }
   // GameWord. A game starting, with the seating decided by whoever started it.
   // The nonce names this particular game, so a move from the one before cannot
   // land on the board of the one after.
@@ -248,12 +263,14 @@ export function decode(raw: string): PeerMessage | null {
       return isThemeId(m.themeId) &&
         isNum(m.shots) &&
         (SHOT_COUNTS as readonly number[]).includes(m.shots) &&
-        isNum(m.startAt)
+        isNum(m.startAt) &&
+        (m.lookId === undefined || m.lookId === null || isLookId(m.lookId))
         ? {
             t: "photo",
             themeId: m.themeId,
             shots: m.shots as ShotCount,
             startAt: m.startAt,
+            lookId: (m.lookId as string | null | undefined) ?? null,
           }
         : null;
     case "singing":
@@ -325,6 +342,16 @@ export function decode(raw: string): PeerMessage | null {
     case "canvas-base":
       return m.itemId === null || (isStr(m.itemId) && m.itemId.length <= 40)
         ? { t: "canvas-base", itemId: m.itemId === null ? null : (m.itemId as string) }
+        : null;
+    case "canvas-session":
+      return isCreateSession(m.session) ? { t: "canvas-session", session: m.session } : null;
+    case "canvas-finish":
+      return isStr(m.nonce) && m.nonce.length > 0 && m.nonce.length <= 40
+        ? { t: "canvas-finish", nonce: m.nonce }
+        : null;
+    case "webgame":
+      return (m.id === null || isWebGameId(m.id)) && isNum(m.sentAt)
+        ? { t: "webgame", id: m.id as WebGameId | null, sentAt: m.sentAt }
         : null;
     case "game":
       return isGameId(m.game) &&

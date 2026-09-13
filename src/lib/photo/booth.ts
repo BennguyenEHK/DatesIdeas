@@ -1,4 +1,4 @@
-import type { ShotCount } from "./strip";
+import { isShotCount, type ShotCount } from "./strip";
 
 export const LEAD_MS = 7000;
 /**
@@ -21,8 +21,8 @@ export type BoothStep =
   | { at: number; kind: "reveal" };
 
 function requireShotCount(shots: number): asserts shots is ShotCount {
-  if (shots !== 2 && shots !== 4) {
-    throw new TypeError("shots must be 2 or 4");
+  if (!isShotCount(shots)) {
+    throw new TypeError("shots must be 1, 2, 3 or 4");
   }
 }
 
