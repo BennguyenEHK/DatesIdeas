@@ -140,6 +140,12 @@ describe("the microphone findings", () => {
     );
   });
 
+  it("reports the room detection alongside the input level", () => {
+    expect(formatReport({ ...base, mic: mic({ room: "auto, noisy, voice 12 dB above the room" }) })).toContain(
+      "Room: auto, noisy, voice 12 dB above the room",
+    );
+  });
+
   it("stays quiet when the microphone did exactly as it was told", () => {
     const out = formatReport({ ...base, mic: mic() });
     expect(out).toContain("Requested but refused: nothing");

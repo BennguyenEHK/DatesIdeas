@@ -79,7 +79,9 @@ export function KaraokePanel(props: {
   audioAuto: boolean;
   onChooseAudio: (mode: AudioMode) => void;
   noisy: boolean;
+  noisyAuto: boolean;
   onNoisy: (noisy: boolean) => void;
+  onNoisyAuto: () => void;
   onLoad: (videoId: string) => void;
   /** Everything about singing to a file you own rather than to YouTube. */
   track: TrackChoice;
@@ -110,7 +112,9 @@ export function KaraokePanel(props: {
     audioAuto,
     onChooseAudio,
     noisy,
+    noisyAuto,
     onNoisy,
+    onNoisyAuto,
     onLoad,
     track,
     helper,
@@ -150,7 +154,9 @@ export function KaraokePanel(props: {
           audioAuto={audioAuto}
           onChooseAudio={onChooseAudio}
           noisy={noisy}
+          noisyAuto={noisyAuto}
           onNoisy={onNoisy}
+          onNoisyAuto={onNoisyAuto}
           musicVolume={musicVolume}
           onMusicVolume={onMusicVolume}
           turn={turn}
@@ -202,30 +208,53 @@ function AudioSwitch({
 }
 
 /**
- * Whether the room is loud, which is a separate question from where the song
- * is playing and cannot be folded into it.
+ * Whether the room is loud. Detection is the normal answer: while the song is
+ * stopped, the microphone's background is compared with the voice, and a room
+ * the voice barely rises above switches to noisy for the rest of the session.
+ * Choosing a value takes over until "Auto" hands it back to detection.
  *
- * Singing normally wants every microphone process off. In a loud room that is
- * the wrong call: with noise suppression off, echo cancellation has to pick a
- * voice out of a room full of competing sound, cannot do it cleanly, and
- * clamps down — which is heard as a thin, gated, "filtered" voice.
+ * Noisy only ever gets detected, never un-detected, within one session: noisy
+ * mode turns noise suppression on, which hides the very room being measured.
  */
 function NoisyToggle({
   noisy,
+  noisyAuto,
   onNoisy,
+  onNoisyAuto,
 }: {
   noisy: boolean;
+  noisyAuto: boolean;
   onNoisy: (noisy: boolean) => void;
+  onNoisyAuto: () => void;
 }) {
   return (
-    <button
-      type="button"
-      onClick={() => onNoisy(!noisy)}
-      title={noisy ? "Switch to quiet room" : "Switch to noisy room"}
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1 tracking-wide text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
-    >
-      {noisy ? "Noisy room" : "Quiet room"}
-    </button>
+    <span className="inline-flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        onClick={() => onNoisy(!noisy)}
+        title={
+          noisyAuto
+            ? "Detected from how loud the room is; choosing overrides it"
+            : noisy
+              ? "Switch to quiet room"
+              : "Switch to noisy room"
+        }
+        className="inline-flex items-center gap-1.5 rounded-[2px] px-2 py-1 tracking-wide text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
+      >
+        {noisy ? "Noisy room" : "Quiet room"}
+        {noisyAuto ? " (auto)" : ""}
+      </button>
+      {!noisyAuto ? (
+        <button
+          type="button"
+          onClick={onNoisyAuto}
+          aria-label="Detect the room automatically"
+          className="inline-flex items-center rounded-[2px] px-2 py-1 tracking-wide text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
+        >
+          Auto
+        </button>
+      ) : null}
+    </span>
   );
 }
 
@@ -656,7 +685,9 @@ function Transport({
   audioAuto,
   onChooseAudio,
   noisy,
+  noisyAuto,
   onNoisy,
+  onNoisyAuto,
   musicVolume,
   onMusicVolume,
   turn,
@@ -678,7 +709,9 @@ function Transport({
   audioAuto: boolean;
   onChooseAudio: (mode: AudioMode) => void;
   noisy: boolean;
+  noisyAuto: boolean;
   onNoisy: (noisy: boolean) => void;
+  onNoisyAuto: () => void;
   musicVolume: number;
   onMusicVolume: (percent: number) => void;
   turn: SingingTurn;
@@ -774,15 +807,21 @@ function Transport({
 
         <AudioSwitch audioMode={audioMode} audioAuto={audioAuto} onChoose={onChooseAudio} />
 
-        <NoisyToggle noisy={noisy} onNoisy={onNoisy} />
+        <NoisyToggle
+          noisy={noisy}
+          noisyAuto={noisyAuto}
+          onNoisy={onNoisy}
+          onNoisyAuto={onNoisyAuto}
+        />
 
         {audioMode === "speakers" ? (
           <p
             role="note"
             className="min-w-0 max-w-full flex-[1_1_16rem] text-[0.65rem] leading-tight text-[var(--mist)]"
           >
-            On speakers your mic sends their voice and room back to them —
-            keep the volume down, or use headphones.
+            {noisy
+              ? "On speakers your mic sends their voice and room back to them — keep the volume down, or use headphones."
+              : "On speakers in a quiet room they may hear their own voice back — use headphones, or switch to Noisy room."}
           </p>
         ) : null}
       </div>

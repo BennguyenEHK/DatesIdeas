@@ -72,6 +72,30 @@ describe("useSingingTurn", () => {
     expect(send).toHaveBeenLastCalledWith({ t: "singing", on: false });
   });
 
+  it("passes every RMS reading to the current sample observer without rebuilding audio", () => {
+    const first = vi.fn<(rms: number) => void>();
+    const second = vi.fn<(rms: number) => void>();
+    const audioContext = vi.fn(function FakeAudioContextSpy() {
+      return new FakeAudioContext();
+    });
+    vi.stubGlobal("AudioContext", audioContext);
+    const send = vi.fn<(m: PeerMessage) => void>();
+    const { rerender } = renderHook(
+      ({ onSample }) => useSingingTurn({ stream, send, enabled: true, onSample }),
+      { initialProps: { onSample: first } },
+    );
+
+    frame.fill(208);
+    act(() => void vi.advanceTimersByTime(SINGING_SAMPLE_MS));
+    expect(first).toHaveBeenCalledWith(expect.any(Number));
+    expect(audioContext).toHaveBeenCalledTimes(1);
+
+    rerender({ onSample: second });
+    act(() => void vi.advanceTimersByTime(SINGING_SAMPLE_MS));
+    expect(second).toHaveBeenCalledWith(expect.any(Number));
+    expect(audioContext).toHaveBeenCalledTimes(1);
+  });
+
   it("releases the peer on unmount and when disabled", () => {
     const send = vi.fn<(m: PeerMessage) => void>();
     const { rerender, unmount } = renderHook(

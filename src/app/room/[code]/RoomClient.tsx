@@ -64,6 +64,7 @@ import { describeLevel } from "@/lib/media/inputLevel";
 import type { MicReport } from "@/lib/rtc/diagnostics";
 import { useOutputMode } from "@/lib/media/outputDevice";
 import { useSingingTurn } from "@/lib/media/useSingingTurn";
+import { useRoomNoise } from "@/lib/media/useRoomNoise";
 import {
   duetRoleFor,
   measuredLatencyMs,
@@ -161,17 +162,17 @@ export function RoomClient({ code }: { code: string }) {
   // Twenty-five is the level a duet actually sits on top of; the slider is
   // right there for anyone who wants the room louder.
   const [musicVolume, setMusicVolume] = useState(25);
-  // Whether this room is loud. A separate question from where the song is
-  // playing: in a noisy room the microphone processing that ruins singing is
-  // the same processing keeping the singing audible at all.
-  //
-  // Remembered, because it describes the room somebody sits in rather than
-  // anything about tonight. Starting fresh at false every reload is why a
-  // person in a genuinely loud room could spend an evening on the profile
-  // built for a silent one, sending their whole room down the call. Device
-  // local like every other switch here: it configures this microphone, so
-  // sharing it would let one person retune the other's.
-  const [noisy, setNoisy] = usePersistentToggle("datesidea.noisy-room", false);
+  // A manual room answer, used only after someone overrides automatic detection.
+  // It remains device-local because it configures this microphone, not theirs.
+  const [noisyChoice, setNoisyChoice] = usePersistentToggle(
+    "datesidea.noisy-room",
+    false,
+  );
+  // Detect by default; a manual choice stays local and can be returned to auto.
+  const [noisyAuto, setNoisyAuto] = usePersistentToggle(
+    "datesidea.noisy-room-auto",
+    true,
+  );
   // What the other person last said about their own microphone and camera.
   // Assumed on until they say otherwise: a peer on a build that never sends
   // this should look like somebody whose devices are working, not like
@@ -1034,6 +1035,12 @@ export function RoomClient({ code }: { code: string }) {
   // a question standing between someone and the song is a worse way to get it.
   const audio = useOutputMode(karaoke);
 
+  const room = useRoomNoise({
+    active: karaoke && noisyAuto,
+    listening: !media.playing && peer.micOn,
+  });
+  const noisy = noisyAuto ? room.noisy : noisyChoice;
+
   // Retune the live microphone to match how the song is being heard, and how
   // loud the room is. On speakers echo cancellation stays on, since it is the
   // only thing stopping the microphone sending back a second copy of the song;
@@ -1095,6 +1102,7 @@ export function RoomClient({ code }: { code: string }) {
     stream: micStream,
     send: peer.send,
     enabled: karaoke,
+    onSample: room.observe,
   });
   useEffect(() => {
     acceptSinging.current = singing.accept;
@@ -1185,10 +1193,17 @@ export function RoomClient({ code }: { code: string }) {
       unmet: mic.unmet,
       error: mic.error,
       level: describeLevel(level),
+      room: noisyAuto
+        ? `auto, ${noisy ? "noisy" : "quiet"}${
+            room.reading?.snrDb != null
+              ? `, voice ${Math.round(room.reading.snrDb)} dB above the room`
+              : ", not measured yet"
+          }`
+        : `manual, ${noisy ? "noisy" : "quiet"}`,
       dropouts: level.gates,
       voiceIsolation: mic.settings?.voiceIsolation ?? null,
     };
-  }, [mic, singing]);
+  }, [mic, noisy, noisyAuto, room.reading, singing]);
 
   const turn = singingTurn(singing.mine, singing.theirs);
   // Which part this side plays when BOTH of you are singing. `turn` cannot
@@ -1307,18 +1322,18 @@ export function RoomClient({ code }: { code: string }) {
   // Asked once on arrival for the countdown, and again the moment signalling
   // reports the room gone — that second answer is what separates "this evening
   // has ended" from "there is no such code", which need different replies.
-  const [room, setRoom] = useState<RoomInfo | null>(null);
+  const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   useEffect(() => {
     let cancelled = false;
     void fetchRoomStatus(code).then((info) => {
-      if (!cancelled) setRoom(info);
+      if (!cancelled) setRoomInfo(info);
     });
     return () => {
       cancelled = true;
     };
   }, [code, peer.roomClosed]);
 
-  const left = room?.expiresAt ? remainingMs(room.expiresAt) : 0;
+  const left = roomInfo?.expiresAt ? remainingMs(roomInfo.expiresAt) : 0;
   const closesIn = left > 0 ? formatRemaining(left) : null;
 
   if (peer.roomClosed) {
@@ -1326,7 +1341,7 @@ export function RoomClient({ code }: { code: string }) {
       <RoomClosed
         // Until the second answer arrives, "expired" is the likelier of the
         // two and the gentler thing to be told.
-        status={room?.status === "missing" ? "missing" : "expired"}
+        status={roomInfo?.status === "missing" ? "missing" : "expired"}
         code={code}
         onStart={() => void newRoom.start()}
         pending={newRoom.pending}
@@ -1752,7 +1767,12 @@ export function RoomClient({ code }: { code: string }) {
                     audioAuto={audio.auto}
                     onChooseAudio={audio.choose}
                     noisy={noisy}
-                    onNoisy={setNoisy}
+                    noisyAuto={noisyAuto}
+                    onNoisy={(next) => {
+                      setNoisyAuto(false);
+                      setNoisyChoice(next);
+                    }}
+                    onNoisyAuto={() => setNoisyAuto(true)}
                     videoError={videoError}
                     musicVolume={musicVolume}
                     onMusicVolume={setMusicVolume}

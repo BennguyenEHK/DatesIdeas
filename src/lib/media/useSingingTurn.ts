@@ -48,6 +48,8 @@ export function useSingingTurn(args: {
   stream: MediaStream | null;
   send: (m: PeerMessage) => void;
   enabled: boolean;
+  /** Receives every raw microphone RMS reading without affecting the graph. */
+  onSample?: (rms: number) => void;
 }): SingingTurnState {
   const [mine, setMine] = useState(false);
   const [theirs, setTheirs] = useState(false);
@@ -58,10 +60,15 @@ export function useSingingTurn(args: {
   const watchRef = useRef<LevelWatch>(EMPTY_WATCH);
   const quietSinceRef = useRef<number | null>(null);
   const sendRef = useRef(args.send);
+  const onSampleRef = useRef(args.onSample);
 
   useEffect(() => {
     sendRef.current = args.send;
   }, [args.send]);
+
+  useEffect(() => {
+    onSampleRef.current = args.onSample;
+  }, [args.onSample]);
 
   const reportMine = useCallback((on: boolean) => {
     if (mineRef.current === on) return;
@@ -136,6 +143,7 @@ export function useSingingTurn(args: {
           // Folded in before any of the turn logic, so a reading that never
           // clears the singing threshold still counts towards the evidence.
           watchRef.current = observeLevel(watchRef.current, rms);
+          onSampleRef.current?.(rms);
 
           if (!mineRef.current) {
             if (rms >= SINGING_ON_RMS) {

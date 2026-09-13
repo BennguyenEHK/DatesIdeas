@@ -11,7 +11,9 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
     audioAuto: false,
     onChooseAudio: vi.fn(),
     noisy: false,
+    noisyAuto: false,
     onNoisy: vi.fn(),
+    onNoisyAuto: vi.fn(),
     onLoad: vi.fn(),
     track: {
       ready: false,
@@ -48,11 +50,32 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
 }
 
 describe("transport-first karaoke controls", () => {
-  it("warns that speakers send the other person's room back through the mic", () => {
-    setup({ audioMode: "speakers" });
+  it("warns that speakers send the other person's room back through the mic in a noisy room", () => {
+    setup({ audioMode: "speakers", noisy: true });
     expect(screen.getByRole("note").textContent).toMatch(
       /sends their voice and room back to them .* keep the volume down, or use headphones/i,
     );
+  });
+
+  it("warns that speakers can echo a quiet room", () => {
+    setup({ audioMode: "speakers", noisy: false });
+    expect(screen.getByRole("note").textContent).toMatch(
+      /quiet room they may hear their own voice back/i,
+    );
+  });
+
+  it("shows automatic room detection and lets choosing override it", () => {
+    const p = setup({ noisy: false, noisyAuto: true });
+    const toggle = screen.getByRole("button", { name: /quiet room \(auto\)/i });
+    fireEvent.click(toggle);
+    expect(p.onNoisy).toHaveBeenCalledWith(true);
+    expect(screen.queryByRole("button", { name: /detect the room automatically/i })).toBeNull();
+  });
+
+  it("offers automatic detection after a manual room choice", () => {
+    const p = setup({ noisy: true, noisyAuto: false });
+    fireEvent.click(screen.getByRole("button", { name: /detect the room automatically/i }));
+    expect(p.onNoisyAuto).toHaveBeenCalledTimes(1);
   });
 
   it("does not show the speaker warning with headphones", () => {

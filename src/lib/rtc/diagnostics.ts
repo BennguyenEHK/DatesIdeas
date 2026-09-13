@@ -79,6 +79,8 @@ export interface MicReport {
   device: string;
   /** The running input-level picture. */
   level: string;
+  /** Whether the room was detected or chosen as noisy or quiet. */
+  room?: string;
   /** How many times a clear voice collapsed straight into silence. */
   dropouts: number;
   /** The operating system's own voice isolation, where the browser reports it. */
@@ -350,6 +352,7 @@ export function formatReport(input: ReportInput): string {
     }`,
     `Constraint error: ${input.mic?.error ?? "none"}`,
     `Input level: ${input.mic === null ? "not opened" : input.mic.level}`,
+    `Room: ${input.mic === null ? "not opened" : (input.mic.room ?? "unknown")}`,
   ];
 
   if (topology === null) lines.push("VERDICT: no route selected yet.");
