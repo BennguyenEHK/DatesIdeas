@@ -45,6 +45,24 @@ const input = { stop: vi.fn() } as unknown as MediaStreamTrack;
 afterEach(() => vi.unstubAllGlobals());
 
 describe("buildVoiceChain", () => {
+  it("gives speakers in a noisy room the rumble cut but no presence peak", async () => {
+    // A peak is the frequency a feedback loop between two speakers rings at.
+    vi.stubGlobal("MediaStream", class {});
+    const fake = fakeContext([{} as MediaStreamTrack]);
+    const worklet = node();
+    await buildVoiceChain(input, "clean-speakers", {
+      makeContext: () => fake.context,
+      makeWorkletNode: () => worklet,
+    });
+    const made = (
+      fake.context.createBiquadFilter as ReturnType<typeof vi.fn>
+    ).mock.results.map((entry) => entry.value);
+
+    expect(made).toHaveLength(1);
+    expect(made[0]).toMatchObject({ type: "highpass", frequency: { value: 90 } });
+    expect(made[0].connect).toHaveBeenCalledWith(worklet);
+  });
+
   it("orders clean filters and dynamics with their specified parameters", async () => {
     vi.stubGlobal("MediaStream", class {});
     const fake = fakeContext([{} as MediaStreamTrack]);

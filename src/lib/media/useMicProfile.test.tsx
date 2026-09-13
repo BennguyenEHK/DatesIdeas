@@ -250,7 +250,7 @@ describe("useMicProfile", () => {
     expect(chainMock.buildVoiceChain).toHaveBeenCalledWith(captured, "open-speakers");
   });
 
-  it("shapes a noisy room the same way on either output", async () => {
+  it("shapes a noisy room without any lift when the song is on speakers", async () => {
     const headphones = fakeTrack();
     const speakers = fakeTrack();
     const source = fakeSource([headphones, speakers]);
@@ -264,7 +264,11 @@ describe("useMicProfile", () => {
     rerender({ mode: "speakers" });
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(2));
     expect(chainMock.buildVoiceChain).toHaveBeenNthCalledWith(1, headphones, "clean");
-    expect(chainMock.buildVoiceChain).toHaveBeenNthCalledWith(2, speakers, "clean");
+    expect(chainMock.buildVoiceChain).toHaveBeenNthCalledWith(
+      2,
+      speakers,
+      "clean-speakers",
+    );
   });
 
   it("rebuilds when only the room changes, though the device profile is the same", async () => {

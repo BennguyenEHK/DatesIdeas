@@ -207,9 +207,10 @@ function AudioSwitch({
  *
  * The browser's own noise suppressor stays off either way: it treats a held
  * note as noise and takes the top of the voice with it. A noisy room instead
- * gets this app's voice chain (voiceStyles.ts) -- rumble cut, presence lifted,
- * the room gated out between phrases -- none of which touches a note while it
- * is being sung.
+ * gets this app's voice chain (voiceStyles.ts) -- rumble cut, the room gated
+ * out between phrases, the level held steady -- none of which touches a note
+ * while it is being sung. On speakers it never lifts anything, because two
+ * people on speakers are a feedback loop.
  */
 function NoisyToggle({
   noisy,
