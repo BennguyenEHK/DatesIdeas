@@ -35,7 +35,6 @@ import { CreateSpace } from "@/components/CreateSpace";
 import { RoomAlbum } from "@/components/RoomAlbum";
 import { RoomCalendar } from "@/components/RoomCalendar";
 import { useTogether } from "@/lib/together/useTogether";
-import { useGameWord } from "@/lib/gameword/useGameWord";
 import { useCreateSpace } from "@/lib/createspace/useCreateSpace";
 import { composeOverStrip } from "@/lib/createspace/compose";
 import type { Scene } from "@/lib/createspace/ops";
@@ -314,7 +313,6 @@ export function RoomClient({ code }: { code: string }) {
         msg.t === "canvas-base" ||
         msg.t === "canvas-session" ||
         msg.t === "canvas-finish" ||
-        msg.t === "webgame" ||
         msg.t === "album-view" ||
         msg.t === "album-changed" ||
         msg.t === "calendar-week" ||
@@ -451,11 +449,10 @@ export function RoomClient({ code }: { code: string }) {
   // recomputed on every render.
   const [myIdentity] = useState(getIdentity);
 
-  // The album view and the web game settle on the later of two changes, so
-  // both are stamped with the peers' shared clock rather than this machine's.
+  // CreateSpace sessions settle on the later of two changes, so they are
+  // stamped with the peers' shared clock rather than this machine's.
   const peerClock = peer.clock;
   const togetherNow = useCallback(() => peerClock?.now() ?? Date.now(), [peerClock]);
-  const gameWord = useGameWord({ send: sendToPeer, now: togetherNow });
   // Filled in once the booth exists below: what Save does to this screen's own
   // strip when the two of you finish editing it.
   const finishEdit = useRef<(scene: Scene) => void>(() => undefined);
@@ -474,20 +471,17 @@ export function RoomClient({ code }: { code: string }) {
   const clock = peer.clock;
   const sharedNow = useCallback(() => clock?.now() ?? Date.now(), [clock]);
 
-  const { accept: acceptGame, resync: resyncGame } = gameWord;
   const { accept: acceptCanvas, resync: resyncCanvas } = createSpace;
   useEffect(() => {
     acceptShared.current = (message: PeerMessage) => {
-      acceptGame(message);
       acceptCanvas(message);
       acceptTogether(message);
     };
     resyncShared.current = () => {
-      resyncGame();
       resyncCanvas();
       resyncTogether();
     };
-  }, [acceptGame, acceptCanvas, resyncGame, resyncCanvas, acceptTogether, resyncTogether]);
+  }, [acceptCanvas, resyncCanvas, acceptTogether, resyncTogether]);
 
   const discardRecording = useCallback(() => {
     setFinishedRecording(null);
@@ -1676,7 +1670,8 @@ export function RoomClient({ code }: { code: string }) {
                   // takeover screen is a fixed 16:9, and the game list or the
                   // Minecraft panel can be taller than that on a phone.
                   <div className="h-full overflow-auto">
-                    <GameWord webGame={gameWord.webGame} onWebGame={gameWord.openWebGame} />
+                    {/* Each screen plays its own copy: nothing about the game crosses. */}
+                    <GameWord />
                   </div>
                 ) : current === "album" ? (
                   <div className="h-full overflow-hidden">

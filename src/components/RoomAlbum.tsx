@@ -9,6 +9,7 @@ import type { AlbumView } from "@/lib/together/useTogether";
 import { formatAlbumDate } from "./room-album/format";
 import { ReelStack } from "./ReelStack";
 import { MemorySky } from "./MemorySky";
+import { MemoryOverlay } from "./MemoryOverlay";
 
 /**
  * The album, open in the call for both of you, with your faces beside it.
@@ -65,6 +66,9 @@ export function RoomAlbum({
   const fileInput = useRef<HTMLInputElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const [timeZone] = useState(viewerTimeZone);
+  // Held up close on THIS screen only: looking at a memory is one person's
+  // moment, while the note they save still reaches both screens.
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     // Only the first load blanks the frame. A reload because the other screen
@@ -230,7 +234,7 @@ export function RoomAlbum({
       ) : (
         <>
           <main className="relative flex min-h-0 flex-1 p-2 sm:p-3">
-            <MemorySky items={items} selectedId={shown.id} onSelect={select} />
+            <MemorySky items={items} selectedId={shown.id} onSelect={select} onOpen={setOpenId} />
             {moves(shown.kind) ? (
               <video
                 controls
@@ -355,6 +359,18 @@ export function RoomAlbum({
           />
         </>
       )}
+      {(() => {
+        const openItem = items.find((item) => item.id === openId);
+        return openItem === undefined ? null : (
+          <MemoryOverlay
+            item={openItem}
+            onClose={() => setOpenId(null)}
+            // The same PATCH as the caption line below, which tells the other
+            // screen to reload, so its lantern tag changes too.
+            onSaveCaption={(item, caption) => patch(item, { caption })}
+          />
+        );
+      })()}
     </section>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { WEB_GAMES, webGame, type WebGameId } from "@/lib/gameword/webGames";
 import styles from "./GameWord.module.css";
 
@@ -10,30 +10,55 @@ type Props = {
   onBack?: () => void;
 };
 
+const BLANK_FRAME_TIP = "If the frame stays blank, open it in a new tab.";
+
 export function WebGameLauncher({ webGameId, onWebGame, onBack }: Props): ReactElement {
+  const [tipHidden, setTipHidden] = useState(false);
+
   if (webGameId !== null) {
     const selected = webGame(webGameId);
     return (
+      // Exactly the movie screen's size: the game gets every pixel the slim
+      // toolbar does not, and nothing here can make the view taller than it.
       <section className={`${styles.arcade} ${styles.player}`} aria-label={`${selected.name} web game`}>
         <div className={styles.toolbar}>
           <h2 className={styles.toolbarTitle}>
             <span aria-hidden>{selected.icon}</span> {selected.name}
           </h2>
+          {selected.embed && !tipHidden ? (
+            <p className={styles.hint}>
+              <span className={styles.hintText}>
+                Join the same room inside the game to play together. {BLANK_FRAME_TIP}
+              </span>
+              <button
+                type="button"
+                aria-label="Hide tip"
+                className={styles.hintDismiss}
+                onClick={() => setTipHidden(true)}
+              >
+                ×
+              </button>
+            </p>
+          ) : null}
           <div className={styles.toolbarActions}>
-            <a href={selected.url} target="_blank" rel="noopener noreferrer" className={styles.link}>
+            <a
+              href={selected.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={BLANK_FRAME_TIP}
+              className={styles.link}
+            >
               Open in new tab
             </a>
-            <button type="button" className={styles.button} onClick={() => onWebGame(null)}>
+            <button
+              type="button"
+              className={`${styles.button} ${styles.compact}`}
+              onClick={() => onWebGame(null)}
+            >
               Close
             </button>
           </div>
         </div>
-        {selected.embed ? (
-          <p className={styles.hint}>
-            Make a private room in the game and share its link with each other. If the frame stays blank, open
-            it in a new tab.
-          </p>
-        ) : null}
         {selected.embed ? (
           <iframe
             title={selected.name}
@@ -47,10 +72,10 @@ export function WebGameLauncher({ webGameId, onWebGame, onBack }: Props): ReactE
         ) : (
           <div className={styles.tabCard}>
             <p className={styles.panelIntro}>
-              {selected.name} opens in its own tab so both of you can play there.
+              {selected.name} opens in its own tab. Join the same room there to play together.
             </p>
-            {/* A real link, not window.open: a tab can only open from this
-                person's own click, never from a message the other screen sent. */}
+            {/* A real link, not window.open: a tab should only open from this
+                person's own click. */}
             <div className={styles.actions}>
               <a
                 href={selected.url}
@@ -82,7 +107,8 @@ export function WebGameLauncher({ webGameId, onWebGame, onBack }: Props): ReactE
           ) : null}
         </div>
         <p className={styles.panelIntro}>
-          Choosing one opens it on both screens. Some play right here; the rest open in a new tab.
+          Each of you opens a game on your own screen, then joins the same room inside it to play together.
+          Some play right here; the rest open in a new tab.
         </p>
         <div className={styles.gameGrid}>
           {WEB_GAMES.map((game) => (

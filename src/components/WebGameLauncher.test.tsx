@@ -24,6 +24,23 @@ describe("WebGameLauncher", () => {
     expect(screen.getByRole("link", { name: "Open in new tab" }).getAttribute("target")).toBe("_blank");
   });
 
+  it("fills the screen: the open game and its frame carry the fill classes", () => {
+    render(<WebGameLauncher webGameId="skribbl" onWebGame={vi.fn()} />);
+    const section = screen.getByRole("region", { name: "skribbl.io web game" });
+    expect(section.className).toContain("player");
+    expect(screen.getByTitle("skribbl.io").className).toContain("frame");
+  });
+
+  it("lets the tip be hidden and keeps it hidden while the game is open", () => {
+    const view = render(<WebGameLauncher webGameId="skribbl" onWebGame={vi.fn()} />);
+    expect(screen.getByText(/join the same room inside the game/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Hide tip" }));
+    expect(screen.queryByText(/join the same room inside the game/i)).toBeNull();
+    view.rerender(<WebGameLauncher webGameId="skribbl" onWebGame={vi.fn()} />);
+    expect(screen.queryByText(/join the same room inside the game/i)).toBeNull();
+    expect(screen.getByRole("link", { name: "Open in new tab" }).getAttribute("title")).toMatch(/blank/);
+  });
+
   it("does not render a frame for a game that must open separately", () => {
     render(<WebGameLauncher webGameId="lichess" onWebGame={vi.fn()} />);
     expect(screen.queryByTitle("Lichess")).toBeNull();

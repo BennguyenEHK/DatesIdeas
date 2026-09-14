@@ -6,22 +6,22 @@ import { WebGameLauncher } from "@/components/WebGameLauncher";
 import type { WebGameId } from "@/lib/gameword/webGames";
 import styles from "./GameWord.module.css";
 
-type Props = {
-  /** The web game open for both of you, or null. */
-  webGame: WebGameId | null;
-  onWebGame: (id: WebGameId | null) => void;
-};
-
 type View = "menu" | "web" | "minecraft";
 
-export function GameWord({ webGame, onWebGame }: Props): ReactElement {
+/**
+ * GameWord, entirely on this screen.
+ *
+ * Nothing here crosses to the other person: each of you picks, opens and
+ * closes your own game, and each browser runs its own copy of the site. You
+ * meet inside the game by joining the same room there.
+ */
+export function GameWord(): ReactElement {
   const [view, setView] = useState<View>("menu");
+  const [webGame, setWebGame] = useState<WebGameId | null>(null);
 
-  // A game either of you opened takes over this screen, whatever it was
-  // browsing: playing together starts with looking at the same thing.
-  if (webGame !== null) return <WebGameLauncher webGameId={webGame} onWebGame={onWebGame} />;
+  if (webGame !== null) return <WebGameLauncher webGameId={webGame} onWebGame={setWebGame} />;
   if (view === "web") {
-    return <WebGameLauncher webGameId={null} onWebGame={onWebGame} onBack={() => setView("menu")} />;
+    return <WebGameLauncher webGameId={null} onWebGame={setWebGame} onBack={() => setView("menu")} />;
   }
   if (view === "minecraft") return <MinecraftLauncher onBack={() => setView("menu")} />;
 

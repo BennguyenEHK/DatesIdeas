@@ -6,6 +6,7 @@ import { Wordmark } from "./Wordmark";
 import { NotificationToggle } from "./NotificationToggle";
 import { Projector } from "./Projector";
 import { MemorySky } from "./MemorySky";
+import { MemoryOverlay } from "./MemoryOverlay";
 import { Reel } from "./Reel";
 import { OccasionEditor } from "./OccasionEditor";
 import { buildReel } from "@/lib/album/timeline";
@@ -128,6 +129,10 @@ export function AlbumClient() {
   );
 
   const current = visibleItems.find((item) => item.id === currentId) ?? visibleItems[0] ?? null;
+  // The memory held up close. Looked up from `items` on every render, so a
+  // saved note shows at once and a deleted memory closes its own overlay.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const openItem = items.find((item) => item.id === openId) ?? null;
 
   // Threading is left to CSS rather than tracked here. `.reel-thread` is a
   // one-shot animation, so it plays when the class first lands on the element
@@ -402,7 +407,12 @@ export function AlbumClient() {
             />
           ) : (
             <div className="flex h-full w-full min-h-0 flex-col gap-3">
-              <MemorySky items={visibleItems} selectedId={current.id} onSelect={setCurrentId} />
+              <MemorySky
+                items={visibleItems}
+                selectedId={current.id}
+                onSelect={setCurrentId}
+                onOpen={setOpenId}
+              />
               <Projector
                 item={current}
                 timeZone={timeZone}
@@ -415,6 +425,10 @@ export function AlbumClient() {
           )
         )}
       </main>
+
+      {openItem !== null ? (
+        <MemoryOverlay item={openItem} onClose={() => setOpenId(null)} onSaveCaption={caption} />
+      ) : null}
 
       <footer className="bar-bottom bg-[var(--letterbox)] pb-3">
         <Reel

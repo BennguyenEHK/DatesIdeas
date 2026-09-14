@@ -435,13 +435,7 @@ describe("messages added for recording, CreateSpace and GameWord", () => {
     expect(decode(JSON.stringify({ t: "move", nonce: "n1", move: { kind: "place", index: 3 } }))).toBeNull();
   });
 
-  it("decodes a web game opening and closing, and refuses an unknown one", () => {
-    expect(decode(encode({ t: "webgame", id: "skribbl", sentAt: 5 }))).toEqual({
-      t: "webgame",
-      id: "skribbl",
-      sentAt: 5,
-    });
-    expect(decode(encode({ t: "webgame", id: null, sentAt: 6 }))).toEqual({ t: "webgame", id: null, sentAt: 6 });
-    expect(decode(JSON.stringify({ t: "webgame", id: "example", sentAt: 7 }))).toBeNull();
+  it("sends nothing about web games: each screen plays its own", () => {
+    expect(decode(JSON.stringify({ t: "webgame", id: "skribbl", sentAt: 5 }))).toBeNull();
   });
 });

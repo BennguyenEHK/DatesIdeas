@@ -179,6 +179,33 @@ describe("RoomAlbum", () => {
     );
   });
 
+  it("opens the centre lantern up close on this screen and saves its note for both", async () => {
+    fetchMock
+      .mockResolvedValueOnce(response())
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    const { onChanged, onView } = renderAlbum();
+    await screen.findByRole("region", { name: "Memory sky" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open this memory" }));
+    expect(screen.getByRole("dialog", { name: "Memory from February 1, 2026" })).toBeTruthy();
+    expect(onView).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit note" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "First picnic" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/album/older",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ caption: "First picnic" }) }),
+    );
+    // The lantern's own paper tag shows the same note.
+    expect(screen.getAllByText("First picnic").length).toBeGreaterThan(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("does not notify the other screen when a love PATCH fails", async () => {
     fetchMock
       .mockResolvedValueOnce(response())

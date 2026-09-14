@@ -10,10 +10,13 @@ export function MemorySky({
   items,
   selectedId,
   onSelect,
+  onOpen,
 }: {
   items: AlbumItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** The centre lantern was clicked: show that memory up close. */
+  onOpen?: (id: string) => void;
 }) {
   const pointerStart = useRef<number | null>(null);
   const ids = items.map((item) => item.id);
@@ -68,7 +71,7 @@ export function MemorySky({
             key={lantern.item.id}
             type="button"
             aria-current={isSelected ? "true" : undefined}
-            aria-label={isSelected ? "Selected memory" : `Show ${formatAlbumDate(lantern.item.happenedAt)}`}
+            aria-label={isSelected ? "Open this memory" : `Show ${formatAlbumDate(lantern.item.happenedAt)}`}
             className={`${styles.lantern} ${isSelected ? styles.lanternSelected : ""}`}
             style={
               {
@@ -87,7 +90,8 @@ export function MemorySky({
                 "--sky-negative-sway": `${-lantern.sway}deg`,
               } as CSSProperties
             }
-            onClick={() => onSelect(lantern.item.id)}
+            // A side lantern comes to the centre first; the centre one opens.
+            onClick={() => (isSelected ? onOpen?.(lantern.item.id) : onSelect(lantern.item.id))}
           >
             <span aria-hidden className={styles.lanternMotion}>
               <span className={styles.lanternBloom} />

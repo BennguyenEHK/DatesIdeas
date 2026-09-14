@@ -4,7 +4,6 @@ import { SHOT_COUNTS, type ShotCount } from "@/lib/photo/strip";
 import { isActivityId, type ActivityId } from "@/lib/activities/registry";
 import { isCanvasOp, type CanvasOp } from "@/lib/createspace/ops";
 import { GEARS, type Gear } from "@/lib/album/types";
-import { isWebGameId, type WebGameId } from "@/lib/gameword/webGames";
 import { isCreateSession, type CreateSession } from "@/lib/createspace/session";
 import { isLookId } from "@/lib/looks/types";
 
@@ -162,8 +161,6 @@ export type PeerMessage =
   // over its OWN copy of the strip and hands it back to the booth; the strip
   // itself never crosses.
   | { t: "canvas-finish"; nonce: string }
-  // A web game opened (or closed, null) in GameWord, for both screens.
-  | { t: "webgame"; id: WebGameId | null; sentAt: number }
   // The album, open in the call. Which photograph and which view is showing --
   // an id, never the picture: both browsers hold the same season ticket and
   // load the album themselves.
@@ -337,10 +334,6 @@ export function decode(raw: string): PeerMessage | null {
     case "canvas-finish":
       return isStr(m.nonce) && m.nonce.length > 0 && m.nonce.length <= 40
         ? { t: "canvas-finish", nonce: m.nonce }
-        : null;
-    case "webgame":
-      return (m.id === null || isWebGameId(m.id)) && isNum(m.sentAt)
-        ? { t: "webgame", id: m.id as WebGameId | null, sentAt: m.sentAt }
         : null;
     case "album-view":
       return (m.itemId === null || (isStr(m.itemId) && m.itemId.length > 0 && m.itemId.length <= 40)) &&

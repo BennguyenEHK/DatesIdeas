@@ -1,0 +1,217 @@
+/* The memory taken down from its lantern: the same warm paper, held close,
+   with the night sky dimmed behind it. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  padding: clamp(3.5rem, 6vw, 4.5rem) 1rem 1.5rem;
+  background:
+    radial-gradient(ellipse 60% 50% at 50% 45%, rgba(232, 185, 74, 0.12), transparent 70%),
+    rgba(5, 7, 20, 0.86);
+  backdrop-filter: blur(6px);
+  animation: overlay-in 200ms ease-out;
+}
+
+.dialog {
+  display: flex;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  animation: print-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.close {
+  position: fixed;
+  top: clamp(0.75rem, 2vw, 1.25rem);
+  right: clamp(0.75rem, 2vw, 1.25rem);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid rgba(232, 185, 74, 0.6);
+  border-radius: 50%;
+  color: var(--cream);
+  background: rgba(19, 26, 56, 0.85);
+  box-shadow: 0 0 18px rgba(232, 185, 74, 0.25);
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.close svg {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.close:hover {
+  background: rgba(232, 185, 74, 0.22);
+  transform: scale(1.05);
+}
+
+/* A paper mat with a little lamp light spilling past it. */
+.print {
+  margin: 0;
+  padding: 0.6rem 0.6rem 1rem;
+  border-radius: 2px;
+  background: repeating-linear-gradient(0deg, rgba(139, 91, 45, 0.08) 0 1px, transparent 1px 4px), #f5e6bd;
+  box-shadow:
+    0 0 0 1px rgba(255, 238, 182, 0.6),
+    0 20px 50px -18px rgba(0, 0, 0, 0.9),
+    0 0 70px -10px rgba(232, 185, 74, 0.4);
+}
+
+/* Natural size, never cropped, never enlarged past what was taken. */
+.media {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(92vw, 70rem);
+  max-height: 68vh;
+  object-fit: contain;
+  background: #0b0d1c;
+}
+
+.tag {
+  position: relative;
+  width: min(28rem, 92vw);
+  padding: 0.7rem 0.9rem 0.8rem;
+  color: #3b2916;
+  background: repeating-linear-gradient(0deg, rgba(129, 98, 52, 0.08) 0 1px, transparent 1px 4px), #f6e4b8;
+  box-shadow:
+    0 6px 16px rgba(5, 6, 18, 0.45),
+    inset 0 0 0 1px rgba(103, 65, 29, 0.22);
+  transform: rotate(-0.8deg);
+}
+
+/* The string the tag hangs from, as it did under the lantern. */
+.tag::before {
+  content: "";
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 1px;
+  height: 1rem;
+  background: rgba(245, 230, 189, 0.7);
+}
+
+.date {
+  margin: 0 0 0.3rem;
+  color: #806234;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+}
+
+.note,
+.noteEmpty {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.noteEmpty {
+  color: #8a7050;
+  font-style: italic;
+}
+
+.edit,
+.cancel,
+.save {
+  border-radius: 2px;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.edit {
+  margin-top: 0.5rem;
+  padding: 0;
+  border: 0;
+  color: #7a4a17;
+  background: none;
+  text-decoration: underline;
+  text-decoration-color: rgba(122, 74, 23, 0.4);
+  text-underline-offset: 3px;
+}
+
+.editor {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid rgba(103, 65, 29, 0.35);
+  border-radius: 2px;
+  color: #2c1d0e;
+  background: rgba(255, 250, 235, 0.85);
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.save {
+  padding: 0.35rem 0.9rem;
+  border: 1px solid #a8741f;
+  color: #2a1a07;
+  background: #e8b94a;
+}
+
+.save:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.cancel {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid rgba(103, 65, 29, 0.35);
+  color: #5a3d1c;
+  background: transparent;
+}
+
+.close:focus-visible,
+.edit:focus-visible,
+.save:focus-visible,
+.cancel:focus-visible,
+.textarea:focus-visible {
+  outline: 2px solid var(--lamp);
+  outline-offset: 2px;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes print-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  .dialog {
+    animation: none;
+  }
+
+  .close {
+    transition: none;
+  }
+}
