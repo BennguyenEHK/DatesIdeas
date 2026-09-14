@@ -3,6 +3,7 @@ import {
   PANEL_ASPECT,
   SHOT_COUNTS,
   STRIP_WIDTH,
+  isShotCount,
   type Rect,
   stripLayout,
 } from "./strip";
@@ -95,10 +96,17 @@ describe("photo strip layout", () => {
     },
   );
 
-  it.each([0, 1, 3, 5, Number.NaN, Number.POSITIVE_INFINITY])(
+  it.each([0, 5, 2.5, Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects %s as a shot count",
     (shots) => {
       expect(() => stripLayout(shots as 2 | 4)).toThrow(TypeError);
     },
   );
+
+  it("accepts the newly supported single and three-shot layouts", () => {
+    expect(isShotCount(1)).toBe(true);
+    expect(isShotCount(3)).toBe(true);
+    expect(stripLayout(1).panels).toHaveLength(1);
+    expect(stripLayout(3).panels).toHaveLength(3);
+  });
 });

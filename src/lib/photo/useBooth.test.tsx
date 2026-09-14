@@ -22,6 +22,7 @@ vi.mock("./segment", () => ({
 }));
 vi.mock("./paint", () => ({
   paintStrip: vi.fn(),
+  paintLookStrip: vi.fn(),
   // Returns a marker rather than a real canvas: jsdom has no 2d context, and
   // what these tests care about is WHICH captures were composed, not pixels.
   shotPreview: vi.fn((_t: unknown, shot: { left: unknown; right: unknown }) => ({
@@ -65,6 +66,7 @@ describe("starting a sitting", () => {
       t: "photo",
       themeId: "planetarium",
       shots: 2,
+      lookId: null,
     });
   });
 

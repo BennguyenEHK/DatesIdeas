@@ -1,5 +1,6 @@
 import { startRecording, type Clip } from "./record";
 import { paintFinish, paintScene } from "./paint";
+import { loadBackdrop } from "./backdrops";
 import { stripLayout, type ShotCount } from "./strip";
 import type { Theme } from "./themes";
 
@@ -97,6 +98,9 @@ export async function buildLiveStrip(
   let frame: number | null = null;
 
   try {
+    // This path is already asynchronous, so wait once here. The moving strip
+    // then opens on the same illustrated scene as its still counterpart.
+    if (input.theme.backdrop !== null) await loadBackdrop(input.theme.backdrop);
     const canvas = deps.makeCanvas(layout.width, layout.height);
     const ctx = canvas.getContext("2d");
     if (ctx === null) return null;

@@ -26,6 +26,8 @@ export function PhotoStrip({
   clipMimeType,
   clipPending,
   onDiscard,
+  onEdit,
+  size = "column",
 }: {
   /** An object URL for the finished strip, or null before there is one. */
   url: string | null;
@@ -48,6 +50,10 @@ export function PhotoStrip({
   /** True while the moving version is still being stitched together. */
   clipPending: boolean;
   onDiscard: () => void;
+  /** Opens this completed strip in CreateSpace. */
+  onEdit?: () => void;
+  /** One-shot strips can occupy the booth's full 16:9 frame. */
+  size?: "column" | "wide";
 }) {
   const reduceMotion = useReducedMotion();
 
@@ -73,7 +79,9 @@ export function PhotoStrip({
 
   return (
     <motion.div
-      className="flex h-full min-h-0 flex-col items-center gap-3"
+      className={`flex h-full min-h-0 items-center gap-3 ${
+        size === "wide" ? "flex-row justify-center" : "flex-col"
+      }`}
       initial={reduceMotion ? { opacity: 1 } : { opacity: 0, y: 14 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: reduceMotion ? 0 : 0.7, ease: [0.22, 1, 0.36, 1] }}
@@ -87,15 +95,56 @@ export function PhotoStrip({
         className="min-h-0 w-auto max-w-full flex-1 rounded-[2px] object-contain shadow-[0_18px_60px_-30px_rgba(0,0,0,0.9)]"
       />
       <div className="flex shrink-0 flex-col items-center gap-3 text-xs">
-        <SaveMenu
-          onDownload={onSave}
-          onUpload={onUpload}
-          onKeep={onKeep}
-          canKeep={canKeep}
-          hasClip={hasClip}
-          clipMimeType={clipMimeType}
-          clipPending={clipPending}
-        />
+        <div className="flex items-center gap-2">
+          <SaveMenu
+            onDownload={onSave}
+            onUpload={onUpload}
+            onKeep={onKeep}
+            canKeep={canKeep}
+            hasClip={hasClip}
+            clipMimeType={clipMimeType}
+            clipPending={clipPending}
+          />
+          {onEdit && (
+            // The glow lives on a wrapper as drop-shadows: the star is cut out
+            // with clip-path, which would clip a box-shadow on the button away.
+            <span
+              className="inline-grid"
+              style={{
+                filter:
+                  "drop-shadow(0 0 6px rgba(232,185,74,0.85)) drop-shadow(0 0 16px rgba(232,185,74,0.45))",
+              }}
+            >
+            <motion.button
+              type="button"
+              aria-label="Edit this strip"
+              title="Edit this strip"
+              onClick={onEdit}
+              className={`relative grid h-12 w-12 place-items-center overflow-hidden text-[#251836] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--cream)] ${
+                reduceMotion ? "" : "animate-pulse"
+              }`}
+              style={{
+                clipPath: "polygon(50% 0%,61% 34%,98% 36%,68% 57%,79% 94%,50% 72%,21% 94%,32% 57%,2% 36%,39% 34%)",
+                background: "linear-gradient(135deg, var(--cream), var(--lamp) 48%, var(--dress))",
+              }}
+              whileHover={reduceMotion ? undefined : { scale: 1.07, rotate: 4 }}
+              whileTap={{ scale: 0.96 }}
+            >
+              {!reduceMotion && (
+                <motion.span
+                  aria-hidden
+                  className="absolute inset-y-0 w-3 -translate-x-10 bg-white/70 blur-sm"
+                  animate={{ x: ["-2.5rem", "4rem"] }}
+                  transition={{ duration: 2.8, repeat: Infinity, repeatDelay: 1.4 }}
+                />
+              )}
+              <span className="relative font-[family-name:var(--font-display)] text-[0.62rem] uppercase tracking-wide">
+                Edit
+              </span>
+            </motion.button>
+            </span>
+          )}
+        </div>
         <button
           type="button"
           onClick={onDiscard}

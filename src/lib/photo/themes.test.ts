@@ -12,9 +12,11 @@ import {
 } from "./themes";
 
 describe("the set of themes", () => {
-  it("offers the six that were asked for", () => {
-    expect(THEME_IDS).toHaveLength(6);
-    expect(THEMES).toHaveLength(6);
+  it("keeps the original six order and appends the three picture scenes", () => {
+    expect(THEME_IDS).toEqual([
+      "griffith", "goldenHour", "rose", "planetarium", "neon", "silver", "tokyo", "paris", "jungle",
+    ]);
+    expect(THEMES).toHaveLength(9);
   });
 
   it("has no duplicate ids", () => {
@@ -47,12 +49,17 @@ describe("what every theme must provide", () => {
       planetarium: 0.18,
       neon: 0.16,
       silver: 0.2,
+      tokyo: 0.13,
+      paris: 0.17,
+      jungle: 0.11,
     });
     expect(THEMES.map((t) => t.vignette)).toEqual(THEME_IDS.map((id) => VIGNETTE_STRENGTHS[id]));
   });
 
   it("keeps the shared grade without letting it overwhelm either room", () => {
-    expect(THEMES.map((t) => t.grade?.alpha ?? null)).toEqual([0.08, 0.1, 0.1, 0.07, 0.07, null]);
+    expect(THEMES.map((t) => t.grade?.alpha ?? null)).toEqual([
+      0.08, 0.1, 0.1, 0.07, 0.07, null, 0.08, 0.07, 0.06,
+    ]);
   });
 
   it.each(THEMES.map((t) => [t.id, t] as const))(
@@ -64,6 +71,14 @@ describe("what every theme must provide", () => {
       expect(t.frame).toMatch(/^#/);
     },
   );
+
+  it("only gives the new picture themes public backdrops", () => {
+    expect(THEMES.filter((t) => t.backdrop !== null).map((t) => t.backdrop)).toEqual([
+      "/booth/backdrops/tokyo.svg",
+      "/booth/backdrops/paris.svg",
+      "/booth/backdrops/jungle.svg",
+    ]);
+  });
 
   it.each(THEMES.map((t) => [t.id, t] as const))(
     "%s has a sky that spans top to bottom",

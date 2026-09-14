@@ -20,7 +20,7 @@ describe("photo booth timeline", () => {
     ]);
   });
 
-  it.each([2, 4] as const)("schedules %i flashes in panel order", (shots) => {
+  it.each([1, 2, 3, 4] as const)("schedules %i flashes in panel order", (shots) => {
     const timeline = boothTimeline(10_000, shots);
     const flashes = timeline.filter((step) => step.kind === "flash");
 
@@ -33,7 +33,7 @@ describe("photo booth timeline", () => {
     }
   });
 
-  it.each([2, 4] as const)("places counts before each shot's flash", (shots) => {
+  it.each([1, 2, 3, 4] as const)("places counts before each shot's flash", (shots) => {
     const timeline = boothTimeline(10_000, shots);
     const flashes = timeline.filter((step) => step.kind === "flash");
     const counts = timeline.filter((step) => step.kind === "count");
@@ -55,7 +55,7 @@ describe("photo booth timeline", () => {
     }
   });
 
-  it.each([2, 4] as const)("holds each flash for review before the next countdown", (shots) => {
+  it.each([1, 2, 3, 4] as const)("holds each flash for review before the next countdown", (shots) => {
     const timeline = boothTimeline(10_000, shots);
     const flashes = timeline.filter((step) => step.kind === "flash");
     const reviews = timeline.filter((step) => step.kind === "review");
@@ -73,7 +73,7 @@ describe("photo booth timeline", () => {
     }
   });
 
-  it.each([2, 4] as const)("ends with one reveal after the final flash", (shots) => {
+  it.each([1, 2, 3, 4] as const)("ends with one reveal after the final flash", (shots) => {
     const timeline = boothTimeline(10_000, shots);
     const flashes = timeline.filter((step) => step.kind === "flash");
     const reveals = timeline.filter((step) => step.kind === "reveal");
@@ -92,13 +92,13 @@ describe("photo booth timeline", () => {
     expect(shifted.map((step) => ({ ...step, at: step.at - 3_600_000 }))).toEqual(timeline);
   });
 
-  it.each([2, 4] as const)("matches boothDurationMs for %i shots", (shots) => {
+  it.each([1, 2, 3, 4] as const)("matches boothDurationMs for %i shots", (shots) => {
     const startAt = 500;
     const timeline = boothTimeline(startAt, shots);
     expect(boothDurationMs(shots)).toBe(timeline.at(-1)!.at - startAt);
   });
 
-  it.each([0, 1, 3, 5, Number.NaN])("rejects invalid shot count %s", (shots) => {
+  it.each([0, 5, 2.5, Number.NaN])("rejects invalid shot count %s", (shots) => {
     expect(() => boothTimeline(0, shots as 2 | 4)).toThrow(TypeError);
     expect(() => boothDurationMs(shots as 2 | 4)).toThrow(TypeError);
   });

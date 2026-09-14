@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { boothTimeline, COUNT_FROM } from "./booth";
 import { captureFrame, frameToBlob, type Frame } from "./capture";
-import { paintStrip, shotPreview, type Shot } from "./paint";
+import { paintLookStrip, paintStrip, shotPreview, type Shot } from "./paint";
+import { loadBackdrop } from "./backdrops";
+import { loadLookImage } from "./lookImages";
 import { cutOutOrOriginal } from "./segment";
 import { useLiveFilm } from "./useLiveFilm";
 import { buildLiveStrip } from "./liveStrip";
@@ -11,6 +13,7 @@ import { stripLayout, type ShotCount } from "./strip";
 import { DEFAULT_THEME_ID, theme as themeById, type ThemeId } from "./themes";
 import type { SyncedClock } from "@/lib/sync/SyncedClock";
 import type { PeerMessage } from "@/lib/rtc/protocol";
+import type { CustomLook } from "@/lib/looks/types";
 
 /** How long the flash stays white. Long enough to see, short enough to blink. */
 const FLASH_MS = 420;
@@ -27,6 +30,13 @@ export interface Booth {
   setThemeId: (id: ThemeId) => void;
   shots: ShotCount;
   setShots: (n: ShotCount) => void;
+  /** The selected CreateSpace look, if this sitting uses one. */
+  lookId: string | null;
+  setLookId: (id: string | null) => void;
+  /** The selected look's paper layer for the live stage, or null for themes. */
+  lookBackdropUrl: string | null;
+  /** The selected look's locked panel count for the live stage. */
+  lookShots: ShotCount | null;
   /** The number currently on screen, or null between counts. */
   count: number | null;
   /** The photograph just taken, held up before the next countdown. */
@@ -36,6 +46,8 @@ export interface Booth {
   /** Between the last flash and the strip being ready. */
   busy: boolean;
   stripUrl: string | null;
+  /** The count used for the strip currently on screen, or null before one exists. */
+  stripShots: ShotCount | null;
   /** Attach to a hidden canvas: the surface the live photo is filmed from. */
   filmCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** True when this sitting produced at least one live photo. */
@@ -59,6 +71,8 @@ export interface Booth {
   accept: (msg: PeerMessage) => void;
   save: () => void;
   discard: () => void;
+  /** Replaces the developed strip after CreateSpace has edited it. */
+  replaceStrip: (blob: Blob) => void;
 }
 
 /**
@@ -76,6 +90,7 @@ export function useBooth({
   localVideo,
   remoteVideo,
   caption,
+  looks = [],
 }: {
   clock: SyncedClock | null;
   send: (m: PeerMessage) => void;
@@ -83,15 +98,19 @@ export function useBooth({
   remoteVideo: React.RefObject<HTMLVideoElement | null>;
   /** Stamped along the bottom of the strip: the date and the room. */
   caption: string;
+  /** Looks designed in CreateSpace and available to both people in this room. */
+  looks?: readonly CustomLook[];
 }): Booth {
   const [themeId, setThemeId] = useState<ThemeId>(DEFAULT_THEME_ID);
   const [shots, setShots] = useState<ShotCount>(4);
+  const [lookId, setLookIdState] = useState<string | null>(null);
   const [count, setCount] = useState<number | null>(null);
   const [review, setReview] = useState<{ shotIndex: number; frame: Frame | null } | null>(null);
   const [flashing, setFlashing] = useState(false);
   const [running, setRunning] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stripUrl, setStripUrl] = useState<string | null>(null);
+  const [stripShots, setStripShots] = useState<ShotCount | null>(null);
 
   const film = useLiveFilm({ localVideo, remoteVideo });
 
@@ -102,10 +121,12 @@ export function useBooth({
   const clockRef = useRef(clock);
   const sendRef = useRef(send);
   const captionRef = useRef(caption);
+  const looksRef = useRef(looks);
   useEffect(() => {
     clockRef.current = clock;
     sendRef.current = send;
     captionRef.current = caption;
+    looksRef.current = looks;
   });
 
   useEffect(() => {
@@ -126,11 +147,15 @@ export function useBooth({
     timers.current.push(id);
   }, []);
 
-  const develop = useCallback(async (id: ThemeId, n: ShotCount) => {
+  const develop = useCallback(async (id: ThemeId, n: ShotCount, activeLookId: string | null) => {
     setBusy(true);
     try {
       const t = themeById(id);
       const layout = stripLayout(n);
+      if (t.backdrop !== null) await loadBackdrop(t.backdrop);
+      const look = activeLookId === null
+        ? undefined
+        : looksRef.current.find((candidate) => candidate.id === activeLookId && candidate.shots === n);
 
       // The cut-out, and the only place it happens: a handful of stills that
       // have already been taken, never a live frame. That is what makes
@@ -148,7 +173,19 @@ export function useBooth({
       canvas.height = layout.height;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      paintStrip(ctx, layout, t, painted, captionRef.current);
+      if (look) {
+        const [backdrop, overlay] = await Promise.all([
+          loadLookImage(look.backdropUrl),
+          loadLookImage(look.overlayUrl),
+        ]);
+        if (backdrop !== null && overlay !== null) {
+          paintLookStrip(ctx, layout, { backdrop, overlay, ink: look.ink }, painted, captionRef.current);
+        } else {
+          paintStrip(ctx, layout, t, painted, captionRef.current);
+        }
+      } else {
+        paintStrip(ctx, layout, t, painted, captionRef.current);
+      }
 
       const blob = await frameToBlob(
         { canvas, width: layout.width, height: layout.height },
@@ -159,6 +196,7 @@ export function useBooth({
         if (old) URL.revokeObjectURL(old);
         return URL.createObjectURL(blob);
       });
+      setStripShots(n);
     } catch {
       // A strip that fails to develop is a disappointment, not a broken call.
     } finally {
@@ -168,7 +206,7 @@ export function useBooth({
   }, []);
 
   const run = useCallback(
-    (id: ThemeId, n: ShotCount, startAt: number) => {
+    (id: ThemeId, n: ShotCount, startAt: number, activeLookId: string | null) => {
       setRunning(true);
       setCount(null);
       setReview(null);
@@ -236,19 +274,32 @@ export function useBooth({
             return;
           }
           setReview(null);
-          void develop(id, n);
+          void develop(id, n, activeLookId);
         });
       }
     },
     [at, develop, film, localVideo, remoteVideo],
   );
 
+  const setLookId = useCallback((id: string | null) => {
+    const look = id === null ? undefined : looksRef.current.find((candidate) => candidate.id === id);
+    setLookIdState(look?.id ?? null);
+    if (look) setShots(look.shots);
+  }, []);
+
+  const selectShots = useCallback((n: ShotCount) => {
+    if (lookId === null) setShots(n);
+  }, [lookId]);
+
   const start = useCallback(() => {
     const now = clockRef.current?.now() ?? Date.now();
     const startAt = now + ANNOUNCE_LEAD_MS;
-    sendRef.current({ t: "photo", themeId, shots, startAt });
-    run(themeId, shots, startAt);
-  }, [themeId, shots, run]);
+    const look = lookId === null ? undefined : looksRef.current.find((candidate) => candidate.id === lookId);
+    const activeLookId = look?.id ?? null;
+    const count = look?.shots ?? shots;
+    sendRef.current({ t: "photo", themeId, shots: count, startAt, lookId: activeLookId });
+    run(themeId, count, startAt, activeLookId);
+  }, [themeId, shots, lookId, run]);
 
   const accept = useCallback(
     (msg: PeerMessage) => {
@@ -256,7 +307,11 @@ export function useBooth({
       // Their choice of look and length, so both strips match.
       setThemeId(msg.themeId);
       setShots(msg.shots);
-      run(msg.themeId, msg.shots, msg.startAt);
+      const look = msg.lookId === null
+        ? undefined
+        : looksRef.current.find((candidate) => candidate.id === msg.lookId && candidate.shots === msg.shots);
+      setLookIdState(look?.id ?? null);
+      run(msg.themeId, msg.shots, msg.startAt, look?.id ?? null);
     },
     [run],
   );
@@ -273,6 +328,14 @@ export function useBooth({
     setStripUrl((old) => {
       if (old) URL.revokeObjectURL(old);
       return null;
+    });
+    setStripShots(null);
+  }, []);
+
+  const replaceStrip = useCallback((blob: Blob) => {
+    setStripUrl((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return URL.createObjectURL(blob);
     });
   }, []);
 
@@ -330,13 +393,20 @@ export function useBooth({
     themeId,
     setThemeId,
     shots,
-    setShots,
+    setShots: selectShots,
+    lookId,
+    setLookId,
+    lookBackdropUrl: lookId === null
+      ? null
+      : looks.find((look) => look.id === lookId)?.backdropUrl ?? null,
+    lookShots: lookId === null ? null : looks.find((look) => look.id === lookId)?.shots ?? null,
     count,
     review,
     flashing,
     running,
     busy,
     stripUrl,
+    stripShots,
     filmCanvasRef: film.canvasRef,
     hasClip: film.clips.some((c) => c !== null),
     // What this browser actually chose to record in. Every clip in a sitting
@@ -350,5 +420,6 @@ export function useBooth({
     accept,
     save,
     discard,
+    replaceStrip,
   };
 }

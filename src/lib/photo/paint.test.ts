@@ -4,6 +4,7 @@ import {
   PERSON_BLUR_ALPHA,
   PERSON_BLUR_PX,
   paintShot,
+  paintLookStrip,
   paintStrip,
   shotPreview,
   type Shot,
@@ -95,6 +96,8 @@ class RecordingContext {
   arc(...args: number[]): void { this.calls.push(["arc", ...args]); }
   fill(): void { this.calls.push(["fill"]); }
   fillText(...args: [string, number, number]): void { this.calls.push(["fillText", ...args]); }
+  rect(...args: number[]): void { this.calls.push(["rect", ...args]); }
+  clip(): void { this.calls.push(["clip"]); }
 }
 
 function ctx(): RecordingContext {
@@ -198,6 +201,31 @@ describe("paintStrip", () => {
     paintStrip(context as unknown as CanvasRenderingContext2D, stripLayout(2, 200), theme("silver"), shots(), "Tonight");
 
     expect(context.calls.filter(([name]) => name === "setComposite")).toHaveLength(0);
+  });
+});
+
+describe("paintLookStrip", () => {
+  it("puts designed paper behind people and its transparent marks over them", () => {
+    const context = ctx();
+    const layout = stripLayout(1, 200);
+    const backdrop = { width: 200, height: layout.height } as CanvasImageSource;
+    const overlay = { width: 200, height: layout.height } as CanvasImageSource;
+
+    paintLookStrip(
+      context as unknown as CanvasRenderingContext2D,
+      layout,
+      { backdrop, overlay, ink: "#123456" },
+      shots(),
+      "Tonight",
+    );
+
+    const backdropDraw = context.calls.findIndex(([name, image]) => name === "drawImage" && image === backdrop);
+    const peopleDraw = context.calls.findIndex(([name, image]) => name === "drawImage" && image !== backdrop && image !== overlay);
+    const overlayDraw = context.calls.findIndex(([name, image]) => name === "drawImage" && image === overlay);
+    expect(backdropDraw).toBeLessThan(peopleDraw);
+    expect(peopleDraw).toBeLessThan(overlayDraw);
+    expect(context.calls.some(([name]) => name === "clip")).toBe(true);
+    expect(context.calls.at(-2)).toEqual(["fillText", "Tonight", 100, layout.caption.y + layout.caption.height / 2]);
   });
 });
 

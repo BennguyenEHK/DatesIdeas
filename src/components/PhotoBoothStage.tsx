@@ -7,9 +7,13 @@ import { ScenePainter } from "./ScenePainter";
 import {
   paintScene,
   paintFinish,
+  paintLookScene,
   PERSON_BLUR_ALPHA,
   PERSON_BLUR_PX,
 } from "@/lib/photo/paint";
+import { useBackdropReady } from "@/lib/photo/backdrops";
+import { lookImage, useLookImageReady } from "@/lib/photo/lookImages";
+import type { ShotCount } from "@/lib/photo/strip";
 import { SCREEN_FR, FACES_FR, takeoverAspect } from "@/lib/ui/stage";
 import type { Theme } from "@/lib/photo/themes";
 import type { ActiveMeme } from "@/lib/ui/useMemeQueue";
@@ -39,6 +43,10 @@ export function PhotoBoothStage({
   localVideoRef,
   remoteVideoRef,
   filmCanvasRef,
+  stripShots,
+  running = false,
+  lookBackdropUrl = null,
+  lookShots = 1,
   children,
 }: {
   theme: Theme;
@@ -56,11 +64,24 @@ export function PhotoBoothStage({
   remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
   /** The off-screen surface the live photo is filmed from. */
   filmCanvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** Lets a one-shot keepsake take over the full 16:9 booth once it is ready. */
+  stripShots?: ShotCount | null;
+  /** A sitting is under way, so the stage belongs to the countdown. */
+  running?: boolean;
+  /** The selected designed look's paper layer, shown behind the live couple. */
+  lookBackdropUrl?: string | null;
+  /** Panel count of the selected designed look. */
+  lookShots?: ShotCount;
   /** The strip, developing in the column beside the booth. */
   children: React.ReactNode;
 }) {
   const reduceMotion = useReducedMotion();
   const reviewCanvasRef = useRef<HTMLCanvasElement>(null);
+  const backdropReady = useBackdropReady(theme);
+  const lookReady = useLookImageReady(lookBackdropUrl);
+  // Only while nothing is being taken: a new sitting needs the frame back for
+  // its countdown, and the old one-shot strip would otherwise cover it.
+  const wideStrip = stripShots === 1 && !running;
 
   useEffect(() => {
     const destination = reviewCanvasRef.current;
@@ -77,9 +98,14 @@ export function PhotoBoothStage({
 
   const scene = useCallback(
     (ctx: CanvasRenderingContext2D, box: { width: number; height: number }) => {
-      paintScene(ctx, theme, box);
+      const lookBackdrop = lookBackdropUrl === null ? null : lookImage(lookBackdropUrl);
+      if (lookBackdrop !== null && lookReady) {
+        paintLookScene(ctx, lookBackdrop, lookShots, box);
+      } else {
+        paintScene(ctx, backdropReady ? theme : { ...theme, backdrop: null }, box);
+      }
     },
-    [theme],
+    [theme, lookBackdropUrl, lookShots, lookReady, backdropReady],
   );
 
   const finish = useCallback(
@@ -118,6 +144,7 @@ export function PhotoBoothStage({
           muted
           label="You"
           memes={localMemes}
+          hideRoomBackdrop={theme.backdrop !== null}
         />
         <Half
           videoRef={remoteVideoRef}
@@ -126,6 +153,7 @@ export function PhotoBoothStage({
           muted={false}
           label="Them"
           memes={remoteMemes}
+          hideRoomBackdrop={theme.backdrop !== null}
         />
       </div>
 
@@ -207,9 +235,14 @@ export function PhotoBoothStage({
           />
         )}
       </AnimatePresence>
+      {wideStrip && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--night)]/95 p-3">
+          {children}
+        </div>
+      )}
       </div>
 
-      <div className="min-h-0 md:content-center">{children}</div>
+      {!wideStrip && <div className="min-h-0 md:content-center">{children}</div>}
 
       {/* Where the live photo is actually painted and filmed.
           Kept in the DOM rather than detached, because a canvas that has never
@@ -240,6 +273,7 @@ function Half({
   muted,
   label,
   memes,
+  hideRoomBackdrop,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   stream: MediaStream | null;
@@ -247,6 +281,8 @@ function Half({
   muted: boolean;
   label: string;
   memes: ActiveMeme[];
+  /** Picture backdrops already provide scenery; a blurred room would obscure them. */
+  hideRoomBackdrop: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const backdropRef = useRef<HTMLVideoElement>(null);
@@ -274,7 +310,7 @@ function Half({
             className="absolute inset-0 h-full w-full object-cover"
             style={{
               filter: `blur(${PERSON_BLUR_PX}px)`,
-              opacity: PERSON_BLUR_ALPHA,
+              opacity: hideRoomBackdrop ? 0 : PERSON_BLUR_ALPHA,
               transform: mirrored ? "scaleX(-1)" : undefined,
             }}
           />

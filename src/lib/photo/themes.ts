@@ -23,6 +23,9 @@ export const THEME_IDS = [
   "planetarium",
   "neon",
   "silver",
+  "tokyo",
+  "paris",
+  "jungle",
 ] as const;
 
 export type ThemeId = (typeof THEME_IDS)[number];
@@ -40,6 +43,9 @@ export const VIGNETTE_STRENGTHS: Readonly<Record<ThemeId, number>> = {
   planetarium: 0.18,
   neon: 0.16,
   silver: 0.2,
+  tokyo: 0.13,
+  paris: 0.17,
+  jungle: 0.11,
 };
 
 /** A colour stop down the vertical sky gradient. `at` runs 0 (top) to 1. */
@@ -92,6 +98,8 @@ export interface Theme {
   ink: string;
   /** The strip's border. */
   frame: string;
+  /** A scene illustration placed behind the cut-outs, or null for painted skies. */
+  backdrop: string | null;
 }
 
 export const THEMES: readonly Theme[] = [
@@ -113,6 +121,7 @@ export const THEMES: readonly Theme[] = [
     desaturate: 0,
     ink: "#f5efe0",
     frame: "#e8b94a",
+    backdrop: null,
   },
   {
     id: "goldenHour",
@@ -132,6 +141,7 @@ export const THEMES: readonly Theme[] = [
     desaturate: 0,
     ink: "#42203f",
     frame: "#f5efe0",
+    backdrop: null,
   },
   {
     id: "rose",
@@ -149,6 +159,7 @@ export const THEMES: readonly Theme[] = [
     desaturate: 0,
     ink: "#5c2038",
     frame: "#f7ccd2",
+    backdrop: null,
   },
   {
     id: "planetarium",
@@ -169,6 +180,7 @@ export const THEMES: readonly Theme[] = [
     desaturate: 0,
     ink: "#e9e4ff",
     frame: "#8f86d6",
+    backdrop: null,
   },
   {
     id: "neon",
@@ -190,6 +202,7 @@ export const THEMES: readonly Theme[] = [
     desaturate: 0,
     ink: "#35d6e8",
     frame: "#ff3d81",
+    backdrop: null,
   },
   {
     id: "silver",
@@ -209,6 +222,61 @@ export const THEMES: readonly Theme[] = [
     desaturate: 1,
     ink: "#1a1a18",
     frame: "#1a1a18",
+    backdrop: null,
+  },
+  {
+    id: "tokyo",
+    label: "Tokyo Tower",
+    note: "Dusk city lights beneath the tower's warm lattice.",
+    sky: [
+      { at: 0, color: "#18234c" },
+      { at: 0.56, color: "#b15b73" },
+      { at: 1, color: "#241c3a" },
+    ],
+    glows: [{ x: 0.5, y: 0.68, radius: 0.52, color: "rgba(255,177,98,0.23)" }],
+    grade: { color: "#f2a45d", alpha: 0.08, mode: "soft-light" },
+    stars: 18,
+    vignette: VIGNETTE_STRENGTHS.tokyo,
+    desaturate: 0,
+    ink: "#fff0cf",
+    frame: "#f2ad63",
+    backdrop: "/booth/backdrops/tokyo.svg",
+  },
+  {
+    id: "paris",
+    label: "Eiffel Tower",
+    note: "Warm lights on the Seine after dark.",
+    sky: [
+      { at: 0, color: "#071229" },
+      { at: 0.62, color: "#182244" },
+      { at: 1, color: "#0b1022" },
+    ],
+    glows: [{ x: 0.49, y: 0.53, radius: 0.56, color: "rgba(255,205,108,0.24)" }],
+    grade: { color: "#e4be78", alpha: 0.07, mode: "overlay" },
+    stars: 34,
+    vignette: VIGNETTE_STRENGTHS.paris,
+    desaturate: 0,
+    ink: "#fff2ce",
+    frame: "#d9ae67",
+    backdrop: "/booth/backdrops/paris.svg",
+  },
+  {
+    id: "jungle",
+    label: "Jungle",
+    note: "Leaf-shadowed light in a quiet green clearing.",
+    sky: [
+      { at: 0, color: "#0b2b2c" },
+      { at: 0.52, color: "#185343" },
+      { at: 1, color: "#102c26" },
+    ],
+    glows: [{ x: 0.55, y: 0.12, radius: 0.68, color: "rgba(216,235,152,0.19)" }],
+    grade: { color: "#a9ca7a", alpha: 0.06, mode: "soft-light" },
+    stars: 0,
+    vignette: VIGNETTE_STRENGTHS.jungle,
+    desaturate: 0,
+    ink: "#eff4c8",
+    frame: "#afcf7b",
+    backdrop: "/booth/backdrops/jungle.svg",
   },
 ];
 

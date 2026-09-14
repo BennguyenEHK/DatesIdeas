@@ -1,7 +1,9 @@
 import { starsFor, type Theme } from "./themes";
+import { backdropImage } from "./backdrops";
 import {
   PANEL_ASPECT,
   STRIP_WIDTH,
+  stripLayout,
   type Panel,
   type Rect,
   type StripLayout,
@@ -156,6 +158,12 @@ export function paintScene(
   for (const stop of t.sky) sky.addColorStop(stop.at, stop.color);
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, box.width, box.height);
+  if (t.backdrop !== null) {
+    const backdrop = backdropImage(t.backdrop);
+    if (backdrop !== null) {
+      drawCropped(ctx, backdrop, { x: 0, y: 0, width: box.width, height: box.height });
+    }
+  }
   ctx.restore();
 
   ctx.save();
@@ -339,4 +347,69 @@ export function paintStrip(
     layout.caption.y + layout.caption.height / 2,
   );
   ctx.restore();
+}
+
+/**
+ * Paints a couple-designed strip. Its two layers are deliberately placed on
+ * either side of the people so marks can pass in front of them while paper and
+ * scenery stay behind them.
+ */
+export function paintLookStrip(
+  ctx: CanvasRenderingContext2D,
+  layout: StripLayout,
+  layers: { backdrop: CanvasImageSource; overlay: CanvasImageSource; ink: string },
+  shots: Shot[],
+  caption: string,
+): void {
+  ctx.drawImage(layers.backdrop, 0, 0, layout.width, layout.height);
+  const blurRadius = Math.max(1, Math.round(PERSON_BLUR_PX * (layout.width / STRIP_WIDTH)));
+
+  for (const [index, panel] of layout.panels.entries()) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(panel.x, panel.y, panel.width, panel.height);
+    ctx.clip();
+    paintPeople(ctx, panel, shots[index], blurRadius);
+    ctx.restore();
+  }
+
+  ctx.drawImage(layers.overlay, 0, 0, layout.width, layout.height);
+  ctx.save();
+  ctx.fillStyle = layers.ink;
+  ctx.font = `${Math.max(1, layout.caption.height * 0.48)}px "Poiret One", Georgia, serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(
+    caption,
+    layout.caption.x + layout.caption.width / 2,
+    layout.caption.y + layout.caption.height / 2,
+  );
+  ctx.restore();
+}
+
+/** Paints the first 16:9 panel of a designed strip into the wide live booth. */
+export function paintLookScene(
+  ctx: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  shots: import("./strip").ShotCount,
+  box: { width: number; height: number },
+): void {
+  const source = intrinsicSize(image);
+  const panel = stripLayout(shots, source?.width ?? STRIP_WIDTH).panels[0];
+  if (!panel || source === null) {
+    drawCropped(ctx, image, { x: 0, y: 0, width: box.width, height: box.height });
+    return;
+  }
+  const scale = source.width / (source.width || STRIP_WIDTH);
+  ctx.drawImage(
+    image,
+    panel.x * scale,
+    panel.y * scale,
+    panel.width * scale,
+    panel.height * scale,
+    0,
+    0,
+    box.width,
+    box.height,
+  );
 }

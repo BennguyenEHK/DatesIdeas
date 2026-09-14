@@ -17,6 +17,7 @@ function stage(props: {
   count?: number | null;
   flashing?: boolean;
   review?: { shotIndex: number; frame: { canvas: HTMLCanvasElement } | null } | null;
+  stripShots?: 1 | 2 | 3 | 4 | null;
 }) {
   return render(
     <PhotoBoothStage
@@ -32,6 +33,7 @@ function stage(props: {
       localVideoRef={createRef<HTMLVideoElement>()}
       remoteVideoRef={createRef<HTMLVideoElement>()}
       filmCanvasRef={createRef<HTMLCanvasElement>()}
+      stripShots={props.stripShots}
     >
       <div>strip</div>
     </PhotoBoothStage>,
@@ -92,5 +94,12 @@ describe("the booth flash", () => {
   it("shows the countdown when nothing is being reviewed", () => {
     const { getByText } = stage({ count: 5 });
     expect(getByText("5")).toBeTruthy();
+  });
+});
+
+describe("a finished single-shot strip", () => {
+  it("takes over the whole booth frame instead of remaining in the side column", () => {
+    const { getByText } = stage({ stripShots: 1 });
+    expect(getByText("strip").parentElement?.className).toContain("absolute inset-0 z-20");
   });
 });
