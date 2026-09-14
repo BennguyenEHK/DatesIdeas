@@ -30,6 +30,18 @@ describe("MemorySky", () => {
     expect(onSelect).toHaveBeenNthCalledWith(2, "one");
   });
 
+  it("places lanterns by percentages of the sky, not container height units", () => {
+    // Regression: positions written as `calc(50cqh - 50%)` resolved `cqh` to 0
+    // in the browser, so every lantern sat above the top edge of an empty sky.
+    render(<MemorySky items={items} selectedId="two" onSelect={vi.fn()} />);
+    const selected = screen.getByRole("button", { name: "Selected memory" });
+    expect(selected.style.getPropertyValue("--sky-x")).toBe("50%");
+    expect(selected.style.getPropertyValue("--sky-y")).toBe("50%");
+    for (const lantern of screen.getAllByRole("button", { name: /memory|Show/ })) {
+      expect(lantern.getAttribute("style") ?? "").not.toMatch(/cq[hwib]/);
+    }
+  });
+
   it("selects a neighbouring lantern and never advances by itself", () => {
     vi.useFakeTimers();
     const onSelect = vi.fn();

@@ -72,8 +72,10 @@ export function MemorySky({
             className={`${styles.lantern} ${isSelected ? styles.lanternSelected : ""}`}
             style={
               {
-                "--sky-x": `calc(${lantern.x}cqw - 50%)`,
-                "--sky-y": `calc(${lantern.y}cqh - 50%)`,
+                // Plain percentages of the sky. Container height units resolved
+                // to 0 here, which hung every lantern above the top edge.
+                "--sky-x": `${lantern.x}%`,
+                "--sky-y": `${lantern.y}%`,
                 "--sky-scale": lantern.scale,
                 "--sky-opacity": lantern.opacity,
                 "--sky-depth": lantern.depth,
