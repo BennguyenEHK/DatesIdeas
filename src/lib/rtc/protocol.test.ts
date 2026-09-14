@@ -193,7 +193,12 @@ describe("starting a photo booth sitting", () => {
   };
 
   it("round-trips a sitting", () => {
-    expect(decode(encode(shot))).toEqual(shot);
+    expect(decode(encode(shot))).toEqual({ ...shot, lookId: null });
+  });
+
+  it("carries a designed look's id, and refuses a malformed one", () => {
+    expect(decode(encode({ ...shot, lookId: "look_abc123" }))).toEqual({ ...shot, lookId: "look_abc123" });
+    expect(decode(JSON.stringify({ ...shot, lookId: "../x" }))).toBeNull();
   });
 
   it("carries the instant both cameras fire from", () => {

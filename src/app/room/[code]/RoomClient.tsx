@@ -37,6 +37,10 @@ import { RoomCalendar } from "@/components/RoomCalendar";
 import { useTogether } from "@/lib/together/useTogether";
 import { useGameWord } from "@/lib/gameword/useGameWord";
 import { useCreateSpace } from "@/lib/createspace/useCreateSpace";
+import { composeOverStrip } from "@/lib/createspace/compose";
+import type { Scene } from "@/lib/createspace/ops";
+import { DEFAULT_PAPER } from "@/lib/createspace/session";
+import { useLooks } from "@/lib/looks/useLooks";
 import { newRecordingId, putRecording } from "@/lib/recording/store";
 import { Blackout } from "@/components/Blackout";
 import { useEnding } from "@/lib/room/useEnding";
@@ -308,13 +312,15 @@ export function RoomClient({ code }: { code: string }) {
       if (
         msg.t === "canvas" ||
         msg.t === "canvas-base" ||
+        msg.t === "canvas-session" ||
+        msg.t === "canvas-finish" ||
+        msg.t === "webgame" ||
         msg.t === "game" ||
         msg.t === "move" ||
         msg.t === "album-view" ||
         msg.t === "album-changed" ||
         msg.t === "calendar-week" ||
-        msg.t === "calendar-changed" ||
-        msg.t === "film"
+        msg.t === "calendar-changed"
       ) {
         acceptShared.current?.(msg);
         return;
@@ -447,17 +453,27 @@ export function RoomClient({ code }: { code: string }) {
   // recomputed on every render.
   const [myIdentity] = useState(getIdentity);
 
+  // The album view and the web game settle on the later of two changes, so
+  // both are stamped with the peers' shared clock rather than this machine's.
+  const peerClock = peer.clock;
+  const togetherNow = useCallback(() => peerClock?.now() ?? Date.now(), [peerClock]);
   const gameWord = useGameWord({
     identity: myIdentity,
     partnerIdentity: theirIdentity,
     send: sendToPeer,
+    now: togetherNow,
   });
-  const createSpace = useCreateSpace({ send: sendToPeer });
-  // The film of a day is anchored to the peers' shared clock, so both screens
-  // compute the same moment of it from the same state.
-  const peerClock = peer.clock;
-  const togetherNow = useCallback(() => peerClock?.now() ?? Date.now(), [peerClock]);
-  const together = useTogether({ send: sendToPeer, now: togetherNow });
+  // Filled in once the booth exists below: what Save does to this screen's own
+  // strip when the two of you finish editing it.
+  const finishEdit = useRef<(scene: Scene) => void>(() => undefined);
+  const onFinishCanvas = useCallback((scene: Scene) => finishEdit.current(scene), []);
+  const createSpace = useCreateSpace({
+    send: sendToPeer,
+    identity: myIdentity,
+    now: togetherNow,
+    onFinish: onFinishCanvas,
+  });
+  const together = useTogether({ send: sendToPeer });
   const { accept: acceptTogether, resync: resyncTogether } = together;
   // Every drawing item is stamped with the shared clock, not this machine's.
   // The scene is ordered by that stamp, so two clocks that disagree by a few
@@ -705,8 +721,10 @@ export function RoomClient({ code }: { code: string }) {
   // Whether this browser holds a season ticket, which decides only whether the
   // booth offers to keep a strip in the album.
   const { paired } = usePair();
+  const looks = useLooks({ paired });
 
   const booth = useBooth({
+    looks: looks.looks,
     clock: peer.clock,
     send: peer.send,
     localVideo,
@@ -722,6 +740,18 @@ export function RoomClient({ code }: { code: string }) {
   useEffect(() => {
     acceptPhoto.current = booth.accept;
   });
+
+  // Each screen draws the shared marks over the strip IT developed, so the
+  // edited strip never has to cross the connection any more than the original.
+  const { stripUrl, replaceStrip } = booth;
+  useEffect(() => {
+    finishEdit.current = (scene) => {
+      if (stripUrl === null) return;
+      void composeOverStrip(stripUrl, scene).then((blob) => {
+        if (blob !== null) replaceStrip(blob);
+      });
+    };
+  }, [replaceStrip, stripUrl]);
 
   /**
    * Sends one keepsake away so a QR code has something to point at.
@@ -984,6 +1014,11 @@ export function RoomClient({ code }: { code: string }) {
 
   const movie = current === "movie";
   const photobooth = current === "photobooth";
+  // The other person may have saved a look since this list was loaded.
+  const { reload: reloadLooks } = looks;
+  useEffect(() => {
+    if (photobooth) reloadLooks();
+  }, [photobooth, reloadLooks]);
 
   // No karaoke exception. Pausing gestures there meant the status bar had a
   // state it could not name and reported a warm-up that would never finish --
@@ -1491,8 +1526,24 @@ export function RoomClient({ code }: { code: string }) {
                 localVideoRef={localVideo}
                 remoteVideoRef={remoteVideo}
                 filmCanvasRef={booth.filmCanvasRef}
+                stripShots={booth.stripShots}
+                running={booth.running}
+                lookBackdropUrl={booth.lookBackdropUrl}
+                lookShots={booth.lookShots ?? undefined}
               >
                 <PhotoStrip
+                  size={booth.stripShots === 1 ? "wide" : "column"}
+                  onEdit={() => {
+                    createSpace.apply({ kind: "clear" });
+                    createSpace.setSession({
+                      workshop: "strip",
+                      mode: "edit",
+                      shots: booth.stripShots ?? booth.shots,
+                      backdrop: null,
+                      merge: false,
+                    });
+                    onSelectActivity("createspace");
+                  }}
                   url={booth.stripUrl}
                   busy={booth.busy}
                   onSave={booth.save}
@@ -1601,10 +1652,30 @@ export function RoomClient({ code }: { code: string }) {
                       identity={myIdentity}
                       scene={createSpace.scene}
                       baseItemId={createSpace.baseItemId}
+                      session={createSpace.session}
                       room={code}
                       sharedNow={sharedNow}
                       onOp={createSpace.apply}
                       onBase={createSpace.setBase}
+                      onSession={createSpace.setSession}
+                      undo={createSpace.undo}
+                      redo={createSpace.redo}
+                      canUndo={createSpace.canUndo}
+                      canRedo={createSpace.canRedo}
+                      editStripUrl={booth.stripUrl}
+                      onFinishEdit={() => {
+                        // finish() composes this screen's strip and tells the
+                        // other screen to compose its own, from the marks as
+                        // they are now; only then is the canvas cleared.
+                        createSpace.finish();
+                        createSpace.apply({ kind: "clear" });
+                        createSpace.setSession({ workshop: "menu", mode: "new" });
+                        onSelectActivity("photobooth");
+                      }}
+                      localStream={peer.localStream}
+                      remoteStream={peer.remoteStream}
+                      paired={paired}
+                      onLookSaved={looks.added}
                     />
                   </div>
                 ) : current === "gameword" ? (
@@ -1620,15 +1691,13 @@ export function RoomClient({ code }: { code: string }) {
                       onStart={gameWord.start}
                       onMove={gameWord.move}
                       onLeave={gameWord.leave}
+                      webGame={gameWord.webGame}
+                      onWebGame={gameWord.openWebGame}
                     />
                   </div>
                 ) : current === "album" ? (
                   <div className="h-full overflow-hidden">
                     <RoomAlbum
-                      film={together.film}
-                      onFilm={together.setFilm}
-                      now={togetherNow}
-                      filmLeadMs={peerClock?.leadTime() ?? 0}
                       view={together.albumView}
                       revision={together.albumRevision}
                       onView={together.showAlbum}
@@ -1703,6 +1772,21 @@ export function RoomClient({ code }: { code: string }) {
               shots={booth.shots}
               onShots={booth.setShots}
               onStart={booth.start}
+              looks={looks.looks}
+              lookId={booth.lookId}
+              onLook={booth.setLookId}
+              onDesignLook={() => {
+                createSpace.apply({ kind: "clear" });
+                createSpace.setSession({
+                  workshop: "strip",
+                  mode: "new",
+                  shots: 1,
+                  paper: DEFAULT_PAPER,
+                  backdrop: null,
+                  merge: false,
+                });
+                onSelectActivity("createspace");
+              }}
               running={booth.running || booth.busy}
               ready={peer.localStream !== null && peer.remoteStream !== null}
             />
