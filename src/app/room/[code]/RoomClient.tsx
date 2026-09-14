@@ -315,8 +315,6 @@ export function RoomClient({ code }: { code: string }) {
         msg.t === "canvas-session" ||
         msg.t === "canvas-finish" ||
         msg.t === "webgame" ||
-        msg.t === "game" ||
-        msg.t === "move" ||
         msg.t === "album-view" ||
         msg.t === "album-changed" ||
         msg.t === "calendar-week" ||
@@ -457,12 +455,7 @@ export function RoomClient({ code }: { code: string }) {
   // both are stamped with the peers' shared clock rather than this machine's.
   const peerClock = peer.clock;
   const togetherNow = useCallback(() => peerClock?.now() ?? Date.now(), [peerClock]);
-  const gameWord = useGameWord({
-    identity: myIdentity,
-    partnerIdentity: theirIdentity,
-    send: sendToPeer,
-    now: togetherNow,
-  });
+  const gameWord = useGameWord({ send: sendToPeer, now: togetherNow });
   // Filled in once the booth exists below: what Save does to this screen's own
   // strip when the two of you finish editing it.
   const finishEdit = useRef<(scene: Scene) => void>(() => undefined);
@@ -1680,20 +1673,10 @@ export function RoomClient({ code }: { code: string }) {
                   </div>
                 ) : current === "gameword" ? (
                   // Scrolls inside the screen rather than overflowing it: the
-                  // takeover screen is a fixed 16:9, and a picker or a word chain
-                  // can be taller than that on a phone.
+                  // takeover screen is a fixed 16:9, and the game list or the
+                  // Minecraft panel can be taller than that on a phone.
                   <div className="h-full overflow-auto">
-                    <GameWord
-                      identity={myIdentity}
-                      partnerIdentity={theirIdentity}
-                      game={gameWord.session.game}
-                      error={gameWord.session.error}
-                      onStart={gameWord.start}
-                      onMove={gameWord.move}
-                      onLeave={gameWord.leave}
-                      webGame={gameWord.webGame}
-                      onWebGame={gameWord.openWebGame}
-                    />
+                    <GameWord webGame={gameWord.webGame} onWebGame={gameWord.openWebGame} />
                   </div>
                 ) : current === "album" ? (
                   <div className="h-full overflow-hidden">

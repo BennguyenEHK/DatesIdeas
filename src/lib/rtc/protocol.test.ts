@@ -429,15 +429,19 @@ describe("messages added for recording, CreateSpace and GameWord", () => {
     expect(decode(encode({ t: "canvas-base", itemId: null }))).toEqual({ t: "canvas-base", itemId: null });
   });
 
-  it("decodes a game start and a move, and refuses a board smuggled in", () => {
-    const start = { t: "game" as const, game: "connect4" as const, players: ["ben", "k"] as [string, string], nonce: "n1" };
-    expect(decode(encode(start))).toEqual(start);
-    expect(decode(JSON.stringify({ ...start, players: ["only-one"] }))).toBeNull();
-    expect(decode(encode({ t: "move", nonce: "n1", move: { kind: "place", index: 3 } }))).toEqual({
-      t: "move",
-      nonce: "n1",
-      move: { kind: "place", index: 3 },
+  it("no longer accepts the retired board game messages", () => {
+    const players = ["ben", "k"];
+    expect(decode(JSON.stringify({ t: "game", game: "connect4", players, nonce: "n1" }))).toBeNull();
+    expect(decode(JSON.stringify({ t: "move", nonce: "n1", move: { kind: "place", index: 3 } }))).toBeNull();
+  });
+
+  it("decodes a web game opening and closing, and refuses an unknown one", () => {
+    expect(decode(encode({ t: "webgame", id: "skribbl", sentAt: 5 }))).toEqual({
+      t: "webgame",
+      id: "skribbl",
+      sentAt: 5,
     });
-    expect(decode(JSON.stringify({ t: "move", nonce: "n1", move: { kind: "board", cells: [] } }))).toBeNull();
+    expect(decode(encode({ t: "webgame", id: null, sentAt: 6 }))).toEqual({ t: "webgame", id: null, sentAt: 6 });
+    expect(decode(JSON.stringify({ t: "webgame", id: "example", sentAt: 7 }))).toBeNull();
   });
 });

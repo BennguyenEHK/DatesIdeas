@@ -2,6 +2,7 @@
 
 import type { ReactElement } from "react";
 import { WEB_GAMES, webGame, type WebGameId } from "@/lib/gameword/webGames";
+import styles from "./GameWord.module.css";
 
 type Props = {
   webGameId: WebGameId | null;
@@ -13,39 +14,26 @@ export function WebGameLauncher({ webGameId, onWebGame, onBack }: Props): ReactE
   if (webGameId !== null) {
     const selected = webGame(webGameId);
     return (
-      <section
-        className="flex h-full min-h-[30rem] flex-col bg-[var(--night)]"
-        aria-label={`${selected.name} web game`}
-      >
-        <div
-          className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--edge)]
-          bg-[var(--letterbox)] p-3"
-        >
-          <h2 className="font-[family-name:var(--font-display)] text-2xl text-[var(--dress)]">
+      <section className={`${styles.arcade} ${styles.player}`} aria-label={`${selected.name} web game`}>
+        <div className={styles.toolbar}>
+          <h2 className={styles.toolbarTitle}>
             <span aria-hidden>{selected.icon}</span> {selected.name}
           </h2>
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <a
-              href={selected.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[var(--lamp)] underline decoration-[var(--edge)] underline-offset-4"
-            >
+          <div className={styles.toolbarActions}>
+            <a href={selected.url} target="_blank" rel="noopener noreferrer" className={styles.link}>
               Open in new tab
             </a>
-            <button
-              type="button"
-              onClick={() => onWebGame(null)}
-              className="border border-[var(--edge)] px-3 py-2 text-[var(--cream)]"
-            >
+            <button type="button" className={styles.button} onClick={() => onWebGame(null)}>
               Close
             </button>
           </div>
         </div>
-        <p className="border-b border-[var(--edge)] px-3 py-2 text-sm text-[var(--mist)]">
-          Make a private room in the game and share its link with each other. If the frame stays blank, open
-          it in a new tab.
-        </p>
+        {selected.embed ? (
+          <p className={styles.hint}>
+            Make a private room in the game and share its link with each other. If the frame stays blank, open
+            it in a new tab.
+          </p>
+        ) : null}
         {selected.embed ? (
           <iframe
             title={selected.name}
@@ -54,28 +42,28 @@ export function WebGameLauncher({ webGameId, onWebGame, onBack }: Props): ReactE
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
             referrerPolicy="no-referrer-when-downgrade"
             loading="eager"
-            className="min-h-[24rem] flex-1 border-0"
+            className={styles.frame}
           />
         ) : (
-          <div className="m-4 border border-[var(--edge)] bg-[var(--dusk)] p-5 sm:m-7 sm:p-7">
-            <p className="text-[var(--cream)]">
+          <div className={styles.tabCard}>
+            <p className={styles.panelIntro}>
               {selected.name} opens in its own tab so both of you can play there.
             </p>
-            <a
-              href={selected.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-5 inline-block bg-[var(--lamp)] px-4 py-3 text-[var(--night)]"
-            >
-              Open {selected.name}
-            </a>
-            <button
-              type="button"
-              onClick={() => onWebGame(null)}
-              className="ml-3 border border-[var(--edge)] px-4 py-3 text-[var(--cream)]"
-            >
-              Close
-            </button>
+            {/* A real link, not window.open: a tab can only open from this
+                person's own click, never from a message the other screen sent. */}
+            <div className={styles.actions}>
+              <a
+                href={selected.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.buttonPrimary}
+              >
+                Open {selected.name}
+              </a>
+              <button type="button" className={styles.button} onClick={() => onWebGame(null)}>
+                Close
+              </button>
+            </div>
           </div>
         )}
       </section>
@@ -83,46 +71,38 @@ export function WebGameLauncher({ webGameId, onWebGame, onBack }: Props): ReactE
   }
 
   return (
-    <section
-      className="border border-[var(--lamp)] bg-[var(--dusk)] p-5 sm:p-6"
-      aria-label="Web game launcher"
-    >
-      {onBack ? (
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-4 text-sm text-[var(--mist)] underline decoration-[var(--edge)] underline-offset-4"
-        >
-          Back to games
-        </button>
-      ) : null}
-      <h2 className="font-[family-name:var(--font-display)] text-3xl text-[var(--dress)]">
-        Web games for two
-      </h2>
-      <p className="mt-2 text-[var(--mist)]">
-        Pick a small game to play together while you stay on the call.
-      </p>
-      <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {WEB_GAMES.map((game) => (
-          <button
-            key={game.id}
-            type="button"
-            onClick={() => onWebGame(game.id)}
-            className="min-h-36 border border-[var(--edge)] bg-[var(--letterbox)] p-4 text-left
-              text-[var(--cream)] transition-colors hover:border-[var(--lamp)]"
-          >
-            <span className="text-2xl" aria-hidden>
-              {game.icon}
-            </span>
-            <span className="mt-2 block font-[family-name:var(--font-display)] text-xl text-[var(--dress)]">
-              {game.name}
-            </span>
-            <span className="mt-1 block text-sm text-[var(--mist)]">{game.note}</span>
-            <span className="mt-3 inline-block border border-[var(--edge)] px-2 py-1 text-xs text-[var(--lamp)]">
-              {game.embed ? "Plays here" : "Opens in a new tab"}
-            </span>
-          </button>
-        ))}
+    <section className={styles.arcade} aria-label="Web game launcher">
+      <div className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <h2 className={styles.panelTitle}>Web games</h2>
+          {onBack ? (
+            <button type="button" className={styles.back} onClick={onBack}>
+              Back to games
+            </button>
+          ) : null}
+        </div>
+        <p className={styles.panelIntro}>
+          Choosing one opens it on both screens. Some play right here; the rest open in a new tab.
+        </p>
+        <div className={styles.gameGrid}>
+          {WEB_GAMES.map((game) => (
+            <button
+              key={game.id}
+              type="button"
+              className={styles.gameCard}
+              onClick={() => onWebGame(game.id)}
+            >
+              <span aria-hidden className={styles.gameIcon}>
+                {game.icon}
+              </span>
+              <span className={styles.gameName}>{game.name}</span>
+              <span className={styles.gameNote}>{game.note}</span>
+              <span className={`${styles.chip} ${game.embed ? styles.chipHere : styles.chipTab}`}>
+                {game.embed ? "Plays here" : "Opens in a new tab"}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
     </section>
   );

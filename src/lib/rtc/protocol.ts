@@ -4,7 +4,6 @@ import { SHOT_COUNTS, type ShotCount } from "@/lib/photo/strip";
 import { isActivityId, type ActivityId } from "@/lib/activities/registry";
 import { isCanvasOp, type CanvasOp } from "@/lib/createspace/ops";
 import { GEARS, type Gear } from "@/lib/album/types";
-import { isGameId, isGameMove, type GameId, type GameMove } from "@/lib/gameword/games";
 import { isWebGameId, type WebGameId } from "@/lib/gameword/webGames";
 import { isCreateSession, type CreateSession } from "@/lib/createspace/session";
 import { isLookId } from "@/lib/looks/types";
@@ -165,12 +164,6 @@ export type PeerMessage =
   | { t: "canvas-finish"; nonce: string }
   // A web game opened (or closed, null) in GameWord, for both screens.
   | { t: "webgame"; id: WebGameId | null; sentAt: number }
-  // GameWord. A game starting, with the seating decided by whoever started it.
-  // The nonce names this particular game, so a move from the one before cannot
-  // land on the board of the one after.
-  | { t: "game"; game: GameId; players: [string, string]; nonce: string }
-  // One move. Only what the player chose travels; each side computes the board.
-  | { t: "move"; nonce: string; move: GameMove }
   // The album, open in the call. Which photograph and which view is showing --
   // an id, never the picture: both browsers hold the same season ticket and
   // load the album themselves.
@@ -348,24 +341,6 @@ export function decode(raw: string): PeerMessage | null {
     case "webgame":
       return (m.id === null || isWebGameId(m.id)) && isNum(m.sentAt)
         ? { t: "webgame", id: m.id as WebGameId | null, sentAt: m.sentAt }
-        : null;
-    case "game":
-      return isGameId(m.game) &&
-        Array.isArray(m.players) &&
-        m.players.length === 2 &&
-        m.players.every((player) => isStr(player) && player.length <= 64) &&
-        isStr(m.nonce) &&
-        m.nonce.length <= 40
-        ? {
-            t: "game",
-            game: m.game,
-            players: [m.players[0] as string, m.players[1] as string],
-            nonce: m.nonce,
-          }
-        : null;
-    case "move":
-      return isStr(m.nonce) && m.nonce.length <= 40 && isGameMove(m.move)
-        ? { t: "move", nonce: m.nonce, move: m.move }
         : null;
     case "album-view":
       return (m.itemId === null || (isStr(m.itemId) && m.itemId.length > 0 && m.itemId.length <= 40)) &&

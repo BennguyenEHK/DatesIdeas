@@ -1,0 +1,501 @@
+/* ---------------------------------------------------------------------------
+   GameWord: the arcade corner of the evening.
+
+   The rest of the app is a twilight film still; this one room is allowed to be
+   louder -- a retro sunset over a neon grid, the palette of an 80s arcade
+   cabinet that two people wandered into on a date. The boldness is spent on
+   the horizon alone. Everything under it stays quiet so the games read first.
+--------------------------------------------------------------------------- */
+
+.arcade {
+  --gw-ink: #140726;
+  --gw-plum: #2b0f4c;
+  --gw-magenta: #ff2a6d;
+  --gw-coral: #ff7849;
+  --gw-sun: #ffc93c;
+  --gw-cyan: #05d9e8;
+  --gw-text: #fdf0ff;
+  --gw-soft: #cbb6e8;
+
+  position: relative;
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--gw-text);
+  background: linear-gradient(180deg, #0b0418 0%, var(--gw-ink) 42%, var(--gw-plum) 100%);
+  font-family: var(--font-sans);
+}
+
+/* ----------------------------------------------------------------- horizon */
+
+/* Grows into whatever height the menu leaves spare, so a wide call screen gets
+   a wide sky instead of an empty band under the two choices. */
+.hero {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 13rem;
+  max-height: 24rem;
+  overflow: hidden;
+  background: linear-gradient(180deg, #0d0421 0%, #3a0f5c 50%, #b0165e 80%, var(--gw-coral) 100%);
+}
+
+.sunGlow {
+  position: absolute;
+  left: 50%;
+  bottom: 14%;
+  width: clamp(12rem, 40vw, 20rem);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    circle,
+    rgba(255, 120, 73, 0.55) 0%,
+    rgba(255, 42, 109, 0.2) 45%,
+    transparent 70%
+  );
+}
+
+/* The sun is cut into bands that thin toward the horizon, the one detail that
+   makes a circle read as an 80s sunset rather than a ball. It hangs from below
+   the sign, never behind it: Monoton's letters are hollow tubes, and a sun seen
+   through them turns the name into noise. */
+.sun {
+  position: absolute;
+  left: 50%;
+  top: clamp(5.2rem, 32%, 8rem);
+  width: clamp(6.5rem, 17vw, 10rem);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, var(--gw-sun) 0%, var(--gw-coral) 55%, var(--gw-magenta) 100%);
+  mask-image: linear-gradient(
+    180deg,
+    #000 0 32%,
+    transparent 32% 35%,
+    #000 35% 44%,
+    transparent 44% 48%,
+    #000 48% 56%,
+    transparent 56% 61%,
+    #000 61% 68%,
+    transparent 68% 74%,
+    #000 74%
+  );
+}
+
+/* Opaque, so it hides the lower half of the sun: the sun sets into the floor. */
+.floor {
+  position: absolute;
+  left: -50%;
+  right: -50%;
+  bottom: 0;
+  height: 34%;
+  background-color: #1a0633;
+  background-image:
+    linear-gradient(rgba(5, 217, 232, 0.6) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(5, 217, 232, 0.6) 1px, transparent 1px);
+  background-size:
+    2.8rem 1.1rem,
+    2.8rem 1.1rem;
+  transform: perspective(12rem) rotateX(55deg);
+  transform-origin: 50% 100%;
+  box-shadow: 0 -2px 18px rgba(5, 217, 232, 0.45);
+  animation: gw-roll 4s linear infinite;
+}
+
+@keyframes gw-roll {
+  to {
+    background-position:
+      0 1.1rem,
+      0 0;
+  }
+}
+
+.sign {
+  position: absolute;
+  inset-inline: 0;
+  top: 0.9rem;
+  margin: 0;
+  color: #fff6fb;
+  font-family: var(--font-monoton), var(--font-display), sans-serif;
+  font-size: clamp(2.2rem, 6vw, 3.6rem);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  text-align: center;
+  text-shadow:
+    0 0 2px #fff,
+    0 0 7px #fff,
+    0 0 14px var(--gw-magenta),
+    0 0 30px var(--gw-magenta),
+    0 0 60px rgba(255, 42, 109, 0.7);
+  animation: gw-power-on 1.4s steps(1, end) 1;
+}
+
+/* The one orchestrated moment: the tube catches, drops, catches, holds. */
+@keyframes gw-power-on {
+  0% {
+    opacity: 0.15;
+  }
+  18% {
+    opacity: 1;
+  }
+  26% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 1;
+  }
+  48% {
+    opacity: 0.55;
+  }
+  60%,
+  100% {
+    opacity: 1;
+  }
+}
+
+/* -------------------------------------------------------------------- menu */
+
+/* Its own height only: the sky above is what takes up the spare room. */
+.menu {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 1rem;
+  padding: clamp(1rem, 3vw, 1.75rem);
+}
+
+.lede {
+  margin: 0;
+  color: var(--gw-soft);
+  font-size: 0.95rem;
+  text-align: center;
+}
+
+.cabinets {
+  display: grid;
+  width: 100%;
+  max-width: 46rem;
+  margin-inline: auto;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+}
+
+.cabinet {
+  --glow: var(--gw-magenta);
+
+  display: grid;
+  align-items: center;
+  gap: 0.2rem 1rem;
+  grid-template-columns: auto 1fr;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--glow);
+  border-radius: 0.9rem;
+  color: var(--gw-text);
+  text-align: left;
+  background: linear-gradient(160deg, rgba(43, 15, 76, 0.92), rgba(20, 7, 38, 0.96));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 0 18px -8px var(--glow);
+  cursor: pointer;
+  transition:
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.cabinet:hover {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 0 30px -6px var(--glow);
+  transform: translateY(-2px);
+}
+
+.cabinet:active {
+  transform: translateY(0);
+}
+
+.cabinetCyan {
+  --glow: var(--gw-cyan);
+}
+
+.cabinetIcon {
+  grid-row: span 2;
+  width: 3rem;
+  height: 3rem;
+  color: var(--glow);
+  filter: drop-shadow(0 0 6px var(--glow));
+}
+
+.cabinetTitle {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.cabinetNote {
+  color: var(--gw-soft);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+/* ------------------------------------------------------------------ panels */
+
+.panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1rem;
+  padding: clamp(1rem, 3vw, 1.75rem);
+}
+
+.panelHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.panelTitle {
+  margin: 0;
+  color: #e9fdff;
+  font-family: var(--font-monoton), var(--font-display), sans-serif;
+  font-size: clamp(1.5rem, 4vw, 2.2rem);
+  font-weight: 400;
+  line-height: 1.1;
+  text-shadow:
+    0 0 8px var(--gw-cyan),
+    0 0 22px rgba(5, 217, 232, 0.5);
+}
+
+.panelIntro {
+  max-width: 60ch;
+  margin: 0;
+  color: var(--gw-soft);
+  line-height: 1.5;
+}
+
+.back {
+  padding: 0.35rem 0;
+  border: 0;
+  color: var(--gw-cyan);
+  background: none;
+  font-size: 0.9rem;
+  text-decoration: underline;
+  text-decoration-color: rgba(5, 217, 232, 0.45);
+  text-underline-offset: 4px;
+  cursor: pointer;
+}
+
+.gameGrid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+}
+
+.gameCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(5, 217, 232, 0.3);
+  border-radius: 0.75rem;
+  color: var(--gw-text);
+  text-align: left;
+  background: rgba(20, 7, 38, 0.88);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.gameCard:hover {
+  border-color: var(--gw-magenta);
+  box-shadow: 0 0 22px -8px var(--gw-magenta);
+}
+
+.gameIcon {
+  font-size: 1.5rem;
+}
+
+.gameName {
+  font-weight: 600;
+}
+
+.gameNote {
+  color: var(--gw-soft);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.chip {
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 0.12rem 0.6rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.72rem;
+}
+
+.chipHere {
+  color: var(--gw-cyan);
+}
+
+.chipTab {
+  color: var(--gw-coral);
+}
+
+/* ------------------------------------------------------------- open game */
+
+.player {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.6rem 0.9rem;
+  border-bottom: 1px solid rgba(255, 42, 109, 0.55);
+  background: linear-gradient(90deg, rgba(255, 42, 109, 0.22), rgba(5, 217, 232, 0.14));
+}
+
+.toolbarTitle {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.toolbarActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.link {
+  color: var(--gw-cyan);
+  font-size: 0.9rem;
+  text-underline-offset: 4px;
+}
+
+.hint {
+  margin: 0;
+  padding: 0.5rem 0.9rem;
+  color: var(--gw-soft);
+  font-size: 0.8rem;
+}
+
+.frame {
+  width: 100%;
+  min-height: 24rem;
+  flex: 1;
+  border: 0;
+  background: #000;
+}
+
+.tabCard {
+  max-width: 34rem;
+  margin: clamp(1rem, 4vw, 2rem);
+  padding: 1.25rem 1.4rem;
+  border: 1px solid rgba(255, 120, 73, 0.55);
+  border-radius: 0.9rem;
+  background: rgba(20, 7, 38, 0.9);
+  box-shadow: 0 0 26px -12px var(--gw-coral);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+/* ----------------------------------------------------------------- controls */
+
+.button,
+.buttonPrimary {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.45rem 1rem;
+  border: 1px solid var(--gw-magenta);
+  border-radius: 999px;
+  color: var(--gw-text);
+  background: transparent;
+  font-size: 0.9rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.buttonPrimary {
+  border-color: transparent;
+  color: #1a0526;
+  background: linear-gradient(90deg, var(--gw-magenta), var(--gw-coral) 60%, var(--gw-sun));
+  font-weight: 600;
+}
+
+.button:disabled {
+  border-color: rgba(203, 182, 232, 0.3);
+  color: rgba(203, 182, 232, 0.55);
+  cursor: not-allowed;
+}
+
+.label {
+  display: block;
+  color: var(--gw-soft);
+  font-size: 0.85rem;
+}
+
+.input {
+  width: 100%;
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgba(5, 217, 232, 0.45);
+  border-radius: 0.5rem;
+  color: var(--gw-text);
+  background: #0e0420;
+}
+
+.error {
+  margin: 0;
+  color: var(--gw-coral);
+  font-size: 0.85rem;
+}
+
+.note {
+  margin: 0;
+  color: var(--gw-soft);
+  font-size: 0.85rem;
+}
+
+.cabinet:focus-visible,
+.gameCard:focus-visible,
+.button:focus-visible,
+.buttonPrimary:focus-visible,
+.back:focus-visible,
+.link:focus-visible,
+.input:focus-visible {
+  outline: 2px solid var(--gw-sun);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floor,
+  .sign {
+    animation: none;
+  }
+
+  .cabinet,
+  .gameCard {
+    transition: none;
+  }
+
+  .cabinet:hover {
+    transform: none;
+  }
+}

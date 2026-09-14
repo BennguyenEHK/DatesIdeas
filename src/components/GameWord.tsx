@@ -1,203 +1,80 @@
 "use client";
 
 import { useState, type ReactElement } from "react";
-import { GameBoard } from "@/components/GameBoard";
 import { MinecraftLauncher } from "@/components/MinecraftLauncher";
 import { WebGameLauncher } from "@/components/WebGameLauncher";
-import {
-  GAME_IDS,
-  GAME_LABELS,
-  seatOf,
-  type GameId,
-  type GameMove,
-  type GameState,
-} from "@/lib/gameword/games";
 import type { WebGameId } from "@/lib/gameword/webGames";
+import styles from "./GameWord.module.css";
 
 type Props = {
-  identity: string;
-  partnerIdentity: string | null;
-  game: GameState | null;
-  error: string | null;
-  onStart: (game: GameId) => void;
-  onMove: (move: GameMove) => void;
-  onLeave: () => void;
-  webGame?: WebGameId | null;
-  onWebGame?: (id: WebGameId | null) => void;
+  /** The web game open for both of you, or null. */
+  webGame: WebGameId | null;
+  onWebGame: (id: WebGameId | null) => void;
 };
 
-function Picker({
-  partnerIdentity,
-  onStart,
-  onWebGame,
-}: Pick<Props, "partnerIdentity" | "onStart" | "onWebGame">) {
-  const [showMinecraft, setShowMinecraft] = useState(false);
-  const [showWebGames, setShowWebGames] = useState(false);
-  if (showMinecraft) return <MinecraftLauncher onBack={() => setShowMinecraft(false)} />;
-  if (showWebGames) {
-    return (
-      <WebGameLauncher
-        webGameId={null}
-        onWebGame={onWebGame ?? (() => undefined)}
-        onBack={() => setShowWebGames(false)}
-      />
-    );
+type View = "menu" | "web" | "minecraft";
+
+export function GameWord({ webGame, onWebGame }: Props): ReactElement {
+  const [view, setView] = useState<View>("menu");
+
+  // A game either of you opened takes over this screen, whatever it was
+  // browsing: playing together starts with looking at the same thing.
+  if (webGame !== null) return <WebGameLauncher webGameId={webGame} onWebGame={onWebGame} />;
+  if (view === "web") {
+    return <WebGameLauncher webGameId={null} onWebGame={onWebGame} onBack={() => setView("menu")} />;
   }
+  if (view === "minecraft") return <MinecraftLauncher onBack={() => setView("menu")} />;
+
   return (
-    <section
-      className="border border-[var(--edge)] bg-[var(--letterbox)] p-5 sm:p-7"
-      aria-label="Choose a game"
-    >
-      <h2 className="font-[family-name:var(--font-display)] text-4xl text-[var(--dress)]">
-        Choose your game
-      </h2>
-      {partnerIdentity === null ? (
-        <p className="mt-3 text-[var(--mist)]">
-          A game starts when the other person joins the call.
-        </p>
-      ) : null}
-      <div className="mt-5 grid gap-2 sm:grid-cols-3">
-        {GAME_IDS.map((game) => (
-          <button
-            key={game}
-            type="button"
-            disabled={partnerIdentity === null}
-            onClick={() => onStart(game)}
-            className="min-h-24 border border-[var(--edge)] bg-[var(--dusk)] p-4 text-left
-              text-[var(--cream)] enabled:hover:border-[var(--lamp)] disabled:text-[var(--mist)]"
-          >
-            <span className="font-[family-name:var(--font-display)] text-2xl text-[var(--lamp)]">
-              {GAME_LABELS[game]}
+    <section className={styles.arcade} aria-label="Choose a game">
+      <header className={styles.hero}>
+        <div aria-hidden className={styles.sunGlow} />
+        <div aria-hidden className={styles.sun} />
+        <div aria-hidden className={styles.floor} />
+        <h2 className={styles.sign}>GameWord</h2>
+      </header>
+
+      <div className={styles.menu}>
+        <p className={styles.lede}>Pick somewhere to play together while you stay on the call.</p>
+        <div className={styles.cabinets}>
+          <button type="button" className={styles.cabinet} onClick={() => setView("web")}>
+            <GlobeIcon />
+            <span className={styles.cabinetTitle}>Web games</span>
+            <span className={styles.cabinetNote}>
+              Free games for two, from drawing and guessing to cards and chess.
             </span>
           </button>
-        ))}
-      </div>
-      <div className="mt-5 grid gap-2 sm:grid-cols-2">
-        <button
-          type="button"
-          aria-label="Open Minecraft launcher"
-          onClick={() => setShowMinecraft(true)}
-          className="border border-[var(--lamp)] bg-[var(--night)] p-4 text-left text-[var(--cream)]"
-        >
-          <span className="block text-lg text-[var(--lamp)]" aria-hidden>▣</span>
-          <span className="mt-1 block">Open Minecraft launcher</span>
-          <span className="mt-1 block text-sm text-[var(--mist)]">
-            Join a server hosted outside FestiBooth.
-          </span>
-        </button>
-        <button
-          type="button"
-          aria-label="Web Game"
-          onClick={() => setShowWebGames(true)}
-          className="border border-[var(--lamp)] bg-[var(--night)] p-4 text-left text-[var(--cream)]"
-        >
-          <span className="block text-lg text-[var(--lamp)]" aria-hidden>◉</span>
-          <span className="mt-1 block">Web Game</span>
-          <span className="mt-1 block text-sm text-[var(--mist)]">
-            Pick a free two-player game for the web.
-          </span>
-        </button>
+          <button
+            type="button"
+            className={`${styles.cabinet} ${styles.cabinetCyan}`}
+            onClick={() => setView("minecraft")}
+          >
+            <CubeIcon />
+            <span className={styles.cabinetTitle}>Minecraft</span>
+            <span className={styles.cabinetNote}>Join the server one of you hosts.</span>
+          </button>
+        </div>
       </div>
     </section>
   );
 }
 
-function resultMessage(game: GameState, mine: 0 | 1 | null): string {
-  if (game.status === "drawn") return "A draw";
-  if (game.winner === mine) return "You won";
-  return "They won";
+function GlobeIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 48 48" className={styles.cabinetIcon} fill="none" stroke="currentColor">
+      <circle cx="24" cy="24" r="17" strokeWidth="2.5" />
+      <path d="M7 24h34M24 7c-6 5-8 11-8 17s2 12 8 17c6-5 8-11 8-17s-2-12-8-17Z" strokeWidth="2" />
+      <path d="M11 15h26M11 33h26" strokeWidth="1.5" opacity="0.7" />
+    </svg>
+  );
 }
 
-export function GameWord(props: Props): ReactElement {
-  const [confirmingResign, setConfirmingResign] = useState(false);
-  if (props.webGame !== undefined && props.webGame !== null) {
-    return (
-      <WebGameLauncher
-        webGameId={props.webGame}
-        onWebGame={props.onWebGame ?? (() => undefined)}
-      />
-    );
-  }
-  if (props.game === null)
-    return (
-      <Picker
-        partnerIdentity={props.partnerIdentity}
-        onStart={props.onStart}
-        onWebGame={props.onWebGame}
-      />
-    );
-
-  const game = props.game;
-  const mine = seatOf(game, props.identity);
-  const playing = game.status === "playing";
-  const turnMessage = mine === game.turn ? "Your move" : "Their move";
+function CubeIcon() {
   return (
-    <section
-      className="border border-[var(--edge)] bg-[var(--letterbox)] p-4 sm:p-7"
-      aria-label={`${GAME_LABELS[game.game]} game`}
-    >
-      <div className="mb-5 flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="font-[family-name:var(--font-display)] text-3xl text-[var(--dress)]">
-          {GAME_LABELS[game.game]}
-        </h2>
-        <p role="status" className="text-sm text-[var(--mist)]">
-          {playing ? turnMessage : resultMessage(game, mine)}
-        </p>
-      </div>
-      <GameBoard game={game} identity={props.identity} onMove={props.onMove} />
-      {props.error ? (
-        <p role="alert" className="mt-4 border-l-2 border-[var(--neon)] pl-3 text-[var(--cream)]">
-          {props.error}
-        </p>
-      ) : null}
-      {playing ? (
-        <div className="mt-5">
-          {confirmingResign ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm text-[var(--mist)]">Concede this game?</p>
-              <button
-                type="button"
-                onClick={() => props.onMove({ kind: "resign" })}
-                className="border border-[var(--lamp)] px-3 py-2 text-[var(--cream)]"
-              >
-                Yes, concede
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingResign(false)}
-                className="px-3 py-2 text-[var(--mist)]"
-              >
-                Keep playing
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirmingResign(true)}
-              className="text-sm text-[var(--mist)] underline decoration-[var(--lamp)] underline-offset-4"
-            >
-              Concede game
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="mt-5 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => props.onStart(game.game)}
-            className="bg-[var(--lamp)] px-4 py-2 text-[var(--night)]"
-          >
-            Play again
-          </button>
-          <button
-            type="button"
-            onClick={props.onLeave}
-            className="border border-[var(--edge)] px-4 py-2 text-[var(--cream)]"
-          >
-            Choose another game
-          </button>
-        </div>
-      )}
-    </section>
+    <svg aria-hidden viewBox="0 0 48 48" className={styles.cabinetIcon} fill="none" stroke="currentColor">
+      <path d="M24 6 40 15v18L24 42 8 33V15Z" strokeWidth="2.5" strokeLinejoin="round" />
+      <path d="M8 15l16 9 16-9M24 24v18" strokeWidth="2" strokeLinejoin="round" />
+      <path d="M16 19.5v9M32 19.5v9" strokeWidth="1.5" opacity="0.7" />
+    </svg>
   );
 }

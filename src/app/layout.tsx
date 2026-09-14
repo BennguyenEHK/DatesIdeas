@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Poiret_One, Inter } from "next/font/google";
+import { Poiret_One, Inter, Monoton } from "next/font/google";
 import "./globals.css";
 import { ServiceWorker } from "@/components/ServiceWorker";
 
@@ -8,6 +8,16 @@ const poiret = Poiret_One({
   weight: "400",
   subsets: ["latin"],
   display: "swap",
+});
+
+// GameWord's neon sign. Not preloaded: only the arcade corner uses it, and
+// every other page should not pay for a face it never shows.
+const monoton = Monoton({
+  variable: "--font-monoton",
+  weight: "400",
+  subsets: ["latin"],
+  display: "swap",
+  preload: false,
 });
 
 const inter = Inter({
@@ -37,7 +47,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en"
-      className={`${poiret.variable} ${inter.variable} h-full antialiased`}
+      className={`${poiret.variable} ${inter.variable} ${monoton.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         {children}

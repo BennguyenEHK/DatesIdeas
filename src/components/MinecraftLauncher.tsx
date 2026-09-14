@@ -2,6 +2,7 @@
 
 import { useState, type ReactElement } from "react";
 import { bedrockJoinUrl, formatAddress, parseServerAddress } from "@/lib/gameword/minecraft";
+import styles from "./GameWord.module.css";
 
 const STORAGE_KEY = "gameword-minecraft-address";
 
@@ -35,70 +36,61 @@ export function MinecraftLauncher({ onBack }: { onBack?: () => void } = {}): Rea
       setMessage("Copy was unavailable. Select and copy the address yourself.");
     }
   };
+
   return (
-    <section
-      className="border border-[var(--lamp)] bg-[var(--dusk)] p-5 sm:p-6"
-      aria-label="Minecraft launcher"
-    >
-      {/* The launcher replaces the game menu entirely, so without this the only
-          way back to the games was to close the whole activity. */}
-      {onBack ? (
-        <button
-          type="button"
-          onClick={onBack}
-          className="mb-4 font-sans text-sm text-[var(--mist)] underline decoration-[var(--edge)] underline-offset-4 transition-colors hover:text-[var(--cream)]"
-        >
-          Back to games
-        </button>
-      ) : null}
-      <h2 className="font-[family-name:var(--font-display)] text-3xl text-[var(--dress)]">
-        Minecraft together
-      </h2>
-      <p className="mt-3 text-[var(--cream)]">
-        This Minecraft server is not part of FestiBooth. It runs on a computer one of you hosts;
-        this panel only helps you both get to it.
-      </p>
-      <label className="mt-5 block text-sm text-[var(--mist)]" htmlFor="minecraft-address">
-        Server address
-      </label>
-      <input
-        id="minecraft-address"
-        value={rawAddress}
-        onChange={(event) => updateAddress(event.target.value)}
-        placeholder="play.example.com:25565"
-        className="mt-1 w-full border border-[var(--edge)] bg-[var(--night)] px-3 py-2 text-[var(--cream)]"
-      />
-      {rawAddress && !address ? (
-        <p className="mt-2 text-sm text-[var(--neon)]">
-          Use a hostname or IPv4 address, with an optional port.
+    <section className={styles.arcade} aria-label="Minecraft launcher">
+      <div className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <h2 className={styles.panelTitle}>Minecraft</h2>
+          {/* The launcher replaces the game menu entirely, so without this the
+              only way back to the games was to close the whole activity. */}
+          {onBack ? (
+            <button type="button" className={styles.back} onClick={onBack}>
+              Back to games
+            </button>
+          ) : null}
+        </div>
+        <p className={styles.panelIntro}>
+          This server is not part of FestiBooth. It runs on a computer one of you hosts; this panel only helps
+          you both get to it.
         </p>
-      ) : null}
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={!address}
-          onClick={copy}
-          className="border border-[var(--lamp)] px-4 py-2 text-[var(--cream)] disabled:border-[var(--edge)] disabled:text-[var(--mist)]"
-        >
-          Copy address
-        </button>
-        {address ? (
-          <a
-            href={bedrockJoinUrl("GameWord server", address.host, address.port)}
-            className="bg-[var(--lamp)] px-4 py-2 text-[var(--night)]"
-          >
-            Open in Minecraft (Bedrock)
-          </a>
+        <div>
+          <label className={styles.label} htmlFor="minecraft-address">
+            Server address
+          </label>
+          <input
+            id="minecraft-address"
+            value={rawAddress}
+            onChange={(event) => updateAddress(event.target.value)}
+            placeholder="play.example.com:25565"
+            className={styles.input}
+          />
+          {rawAddress && !address ? (
+            <p className={styles.error}>Use a hostname or IPv4 address, with an optional port.</p>
+          ) : null}
+        </div>
+        <div className={styles.actions}>
+          <button type="button" className={styles.button} disabled={!address} onClick={copy}>
+            Copy address
+          </button>
+          {address ? (
+            <a
+              href={bedrockJoinUrl("GameWord server", address.host, address.port)}
+              className={styles.buttonPrimary}
+            >
+              Open in Minecraft (Bedrock)
+            </a>
+          ) : null}
+        </div>
+        {message ? (
+          <p role="status" className={styles.note}>
+            {message}
+          </p>
         ) : null}
-      </div>
-      {message ? (
-        <p role="status" className="mt-2 text-sm text-[var(--mist)]">
-          {message}
+        <p className={styles.note}>
+          Java Edition: Multiplayer, then Direct connection, then paste the address.
         </p>
-      ) : null}
-      <p className="mt-5 text-sm text-[var(--mist)]">
-        Java Edition: Multiplayer, then Direct connection, then paste the address.
-      </p>
+      </div>
     </section>
   );
 }
