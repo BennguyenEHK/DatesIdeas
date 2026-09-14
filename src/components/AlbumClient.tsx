@@ -5,21 +5,10 @@ import Link from "next/link";
 import { Wordmark } from "./Wordmark";
 import { NotificationToggle } from "./NotificationToggle";
 import { Projector } from "./Projector";
+import { MemorySky } from "./MemorySky";
 import { Reel } from "./Reel";
 import { OccasionEditor } from "./OccasionEditor";
-import { DayFilm } from "./DayFilm";
 import { buildReel } from "@/lib/album/timeline";
-import {
-  dayItems,
-  filmElapsed,
-  pauseFilm,
-  resumeFilm,
-  seekFilm,
-  startFilm,
-  type FilmState,
-} from "@/lib/album/film";
-import { dayFilmFacts } from "@/lib/album/dayFilmFacts";
-import { civilDate } from "@/lib/album/occasions";
 import { searchItems } from "@/lib/album/search";
 import { addToAlbum } from "@/lib/album/upload";
 import { posterFromVideo } from "@/lib/album/poster";
@@ -99,7 +88,6 @@ export function AlbumClient() {
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [film, setFilm] = useState<FilmState | null>(null);
   const filesRef = useRef<HTMLInputElement>(null);
 
   // Resolved once, as lazy initial state. The zone cannot change while the
@@ -140,15 +128,6 @@ export function AlbumClient() {
   );
 
   const current = visibleItems.find((item) => item.id === currentId) ?? visibleItems[0] ?? null;
-  const day = current === null ? null : civilDate(current.happenedAt, timeZone);
-  const dayCount = useMemo(
-    () => (day === null ? 0 : dayItems(items, day, timeZone).length),
-    [day, items, timeZone],
-  );
-  const filmFacts = useMemo(
-    () => (film === null ? null : dayFilmFacts(items, occasions, film.day, timeZone)),
-    [film, items, occasions, timeZone],
-  );
 
   // Threading is left to CSS rather than tracked here. `.reel-thread` is a
   // one-shot animation, so it plays when the class first lands on the element
@@ -412,16 +391,28 @@ export function AlbumClient() {
             </button>
           </div>
         ) : (
-          <Projector
-            item={current}
-            timeZone={timeZone}
-            onLove={(i, l) => void love(i, l)}
-            onCaption={(i, value) => void caption(i, value)}
-            onDelete={(item) => void remove(item)}
-            onPlayDay={day === null ? undefined : () => setFilm(startFilm(day, Date.now()))}
-            dayCount={dayCount}
-            empty={query.trim() !== "" && visibleItems.length === 0 ? "search" : undefined}
-          />
+          current === null ? (
+            <Projector
+              item={null}
+              timeZone={timeZone}
+              onLove={(i, l) => void love(i, l)}
+              onCaption={(i, value) => void caption(i, value)}
+              onDelete={(item) => void remove(item)}
+              empty={query.trim() !== "" && visibleItems.length === 0 ? "search" : undefined}
+            />
+          ) : (
+            <div className="flex h-full w-full min-h-0 flex-col gap-3">
+              <MemorySky items={visibleItems} selectedId={current.id} onSelect={setCurrentId} />
+              <Projector
+                item={current}
+                timeZone={timeZone}
+                onLove={(i, l) => void love(i, l)}
+                onCaption={(i, value) => void caption(i, value)}
+                onDelete={(item) => void remove(item)}
+                showMedia={false}
+              />
+            </div>
+          )
         )}
       </main>
 
@@ -435,29 +426,6 @@ export function AlbumClient() {
           threading={shouldThread}
         />
       </footer>
-      {film !== null && filmFacts !== null ? (
-        <DayFilm
-          {...filmFacts}
-          elapsedMs={() => filmElapsed(film, Date.now())}
-          playing={film.pausedAtMs === null}
-          onPause={() =>
-            setFilm((currentFilm) =>
-              currentFilm === null ? null : pauseFilm(currentFilm, Date.now()),
-            )
-          }
-          onResume={() =>
-            setFilm((currentFilm) =>
-              currentFilm === null ? null : resumeFilm(currentFilm, Date.now()),
-            )
-          }
-          onSeek={(elapsedMs) =>
-            setFilm((currentFilm) =>
-              currentFilm === null ? null : seekFilm(currentFilm, elapsedMs, Date.now()),
-            )
-          }
-          onClose={() => setFilm(null)}
-        />
-      ) : null}
     </div>
   );
 }

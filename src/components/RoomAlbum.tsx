@@ -3,25 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildReel } from "@/lib/album/timeline";
 import { addToAlbum } from "@/lib/album/upload";
-import { GEARS, moves, type AlbumItem, type AlbumKind, type Occasion } from "@/lib/album/types";
+import { GEARS, moves, type AlbumItem, type AlbumKind } from "@/lib/album/types";
 import type { ListResponse } from "@/lib/album/wire";
 import type { AlbumView } from "@/lib/together/useTogether";
 import { formatAlbumDate } from "./room-album/format";
 import { ReelStack } from "./ReelStack";
-import { DayFilm } from "./DayFilm";
-import { dayFilmFacts } from "@/lib/album/dayFilmFacts";
-import {
-  dayItems,
-  filmElapsed,
-  pauseFilm,
-  resumeFilm,
-  seekFilm,
-  startFilm,
-  type FilmState,
-} from "@/lib/album/film";
-import { civilDate } from "@/lib/album/occasions";
-
-const NO_FILM = () => undefined;
+import { MemorySky } from "./MemorySky";
 
 /**
  * The album, open in the call for both of you, with your faces beside it.
@@ -41,14 +28,6 @@ export interface RoomAlbumProps {
   onChanged: () => void;
   /** Back to the call, for both of you. */
   onClose: () => void;
-  /** The film of a day playing on both screens, or null. */
-  film?: FilmState | null;
-  /** Call only for this person's own film actions: start, pause, resume, seek, close. */
-  onFilm?: (next: FilmState | null) => void;
-  /** The shared clock the film is anchored to. */
-  now?: () => number;
-  /** How far ahead a start is anchored, so both screens begin on the same frame. */
-  filmLeadMs?: number;
 }
 
 type LoadState = "loading" | "ready" | "unauthorized" | "failed";
@@ -73,13 +52,8 @@ export function RoomAlbum({
   onView,
   onChanged,
   onClose,
-  film = null,
-  onFilm = NO_FILM,
-  now = Date.now,
-  filmLeadMs = 0,
 }: RoomAlbumProps) {
   const [items, setItems] = useState<AlbumItem[]>([]);
-  const [occasions, setOccasions] = useState<Occasion[]>([]);
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("");
   // The item whose caption is being typed. Tied to an id rather than a flag, so
@@ -106,7 +80,6 @@ export function RoomAlbum({
       if (!response.ok) throw new Error("album request failed");
       const body = (await response.json()) as ListResponse;
       setItems(body.items);
-      setOccasions(Array.isArray(body.occasions) ? body.occasions : []);
       setState("ready");
     } catch {
       setMessage("The album could not be opened just now.");
@@ -125,15 +98,6 @@ export function RoomAlbum({
     [items, timeZone, view.gear],
   );
   const shown = items.find((item) => item.id === view.itemId) ?? ordered[0]?.item ?? null;
-  const day = shown === null ? null : civilDate(shown.happenedAt, timeZone);
-  const dayCount = useMemo(
-    () => (day === null ? 0 : dayItems(items, day, timeZone).length),
-    [day, items, timeZone],
-  );
-  const filmFacts = useMemo(
-    () => (film === null ? null : dayFilmFacts(items, occasions, film.day, timeZone)),
-    [film, items, occasions, timeZone],
-  );
 
   useEffect(() => {
     if (shown === null || strip.current === null) return;
@@ -144,18 +108,6 @@ export function RoomAlbum({
   const select = useCallback(
     (itemId: string) => onView({ itemId, gear: view.gear }),
     [onView, view.gear],
-  );
-
-  const step = useCallback(
-    (direction: number) => {
-      // Through the film strip as it is drawn, so previous and next move one
-      // thumbnail along in every gear rather than through the raw list.
-      if (shown === null) return;
-      const position = ordered.findIndex((frame) => frame.item.id === shown.id);
-      const next = ordered[position + direction];
-      if (next !== undefined) select(next.item.id);
-    },
-    [ordered, select, shown],
   );
 
   const patch = useCallback(
@@ -218,17 +170,6 @@ export function RoomAlbum({
   return (
     <section
       aria-label="Shared album"
-      tabIndex={0}
-      onKeyDown={(event) => {
-        if (event.key === "ArrowLeft") {
-          event.preventDefault();
-          step(-1);
-        }
-        if (event.key === "ArrowRight") {
-          event.preventDefault();
-          step(1);
-        }
-      }}
       className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[var(--letterbox)] text-[var(--cream)] outline-none"
     >
       <header className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--edge)] px-3 py-2">
@@ -288,38 +229,17 @@ export function RoomAlbum({
         </div>
       ) : (
         <>
-          <main className="relative flex min-h-0 flex-1 items-center justify-center p-2 sm:p-3">
-            <button
-              type="button"
-              aria-label="Previous memory"
-              onClick={() => step(-1)}
-              className="absolute left-2 z-10 hidden border border-[var(--edge)] bg-[var(--letterbox)]/80 px-2 py-1 text-[var(--lamp)] sm:block"
-            >
-              ‹
-            </button>
+          <main className="relative flex min-h-0 flex-1 p-2 sm:p-3">
+            <MemorySky items={items} selectedId={shown.id} onSelect={select} />
             {moves(shown.kind) ? (
               <video
                 controls
                 playsInline
                 poster={shown.posterUrl ?? undefined}
                 src={shown.url}
-                className="h-full max-h-full w-full object-contain"
+                className="absolute bottom-3 left-1/2 z-30 max-h-24 max-w-[70%] -translate-x-1/2"
               />
-            ) : (
-              <img
-                src={shown.url}
-                alt={shown.caption ?? "Album memory"}
-                className="h-full max-h-full w-full object-contain"
-              />
-            )}
-            <button
-              type="button"
-              aria-label="Next memory"
-              onClick={() => step(1)}
-              className="absolute right-2 z-10 hidden border border-[var(--edge)] bg-[var(--letterbox)]/80 px-2 py-1 text-[var(--lamp)] sm:block"
-            >
-              ›
-            </button>
+            ) : null}
           </main>
           <div className="shrink-0 border-t border-[var(--edge)] px-3 py-2">
             <div className="flex items-center justify-between gap-3">
@@ -334,17 +254,6 @@ export function RoomAlbum({
                 >
                   {shown.loved ? "♥" : "♡"}
                 </button>
-                {day !== null && dayCount >= 2 ? (
-                  <button
-                    type="button"
-                    // Anchored a little ahead on the shared clock, so the film
-                    // begins on the same frame on both screens.
-                    onClick={() => onFilm(startFilm(day, now() + filmLeadMs))}
-                    className="text-xs text-[var(--lamp)]"
-                  >
-                    ▶ Play this day
-                  </button>
-                ) : null}
                 <button
                   type="button"
                   disabled={busy}
@@ -421,6 +330,7 @@ export function RoomAlbum({
                     className="reel-frame h-full w-16 sm:w-20"
                     data-loved={frame.loved}
                   >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- signed storage URL on an unknown host. */}
                     <img
                       src={frame.item.posterUrl ?? frame.item.url}
                       alt=""
@@ -445,22 +355,6 @@ export function RoomAlbum({
           />
         </>
       )}
-      {film !== null && filmFacts !== null && filmFacts.items.length > 0 ? (
-        // The transform makes this box the film's containing block, so its
-        // `fixed inset-0` fills the album frame instead of the whole screen
-        // and the faces beside it stay in view.
-        <div className="absolute inset-0 z-30" style={{ transform: "translateZ(0)" }}>
-          <DayFilm
-            {...filmFacts}
-            elapsedMs={() => filmElapsed(film, now())}
-            playing={film.pausedAtMs === null}
-            onPause={() => onFilm(pauseFilm(film, now()))}
-            onResume={() => onFilm(resumeFilm(film, now()))}
-            onSeek={(elapsedMs) => onFilm(seekFilm(film, elapsedMs, now()))}
-            onClose={() => onFilm(null)}
-          />
-        </div>
-      ) : null}
     </section>
   );
 }

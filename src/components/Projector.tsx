@@ -42,8 +42,7 @@ export function Projector({
   onLove,
   onCaption,
   onDelete,
-  onPlayDay,
-  dayCount,
+  showMedia = true,
   empty,
 }: {
   item: AlbumItem | null;
@@ -51,8 +50,7 @@ export function Projector({
   onLove: (item: AlbumItem, loved: boolean) => void;
   onCaption: (item: AlbumItem, caption: string | null) => void;
   onDelete: (item: AlbumItem) => void;
-  onPlayDay?: () => void;
-  dayCount?: number;
+  showMedia?: boolean;
   empty?: "search";
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -96,7 +94,8 @@ export function Projector({
 
   return (
     <figure className="flex h-full flex-col items-center justify-center gap-3">
-      <div className="flex min-h-0 flex-1 items-center justify-center">
+      {showMedia || moves(item.kind) ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
         {moves(item.kind) ? (
           <video
             ref={videoRef}
@@ -118,7 +117,8 @@ export function Projector({
             className="max-h-full max-w-full object-contain"
           />
         )}
-      </div>
+        </div>
+      ) : null}
 
       <figcaption className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 font-sans text-xs tracking-wide text-[var(--mist)]">
         <span>{dayLabel(item.happenedAt, timeZone)}</span>
@@ -167,15 +167,6 @@ export function Projector({
         >
           <span aria-hidden>{item.loved ? "♥" : "♡"}</span>
         </button>
-        {onPlayDay !== undefined && (dayCount ?? 0) >= 2 ? (
-          <button
-            type="button"
-            onClick={onPlayDay}
-            className="text-[var(--mist)] underline underline-offset-4 hover:text-[var(--cream)]"
-          >
-            ▶ Play this day
-          </button>
-        ) : null}
         {confirmingDelete ? (
           <span className="flex items-center gap-2">
             <span>This cannot be undone.</span>

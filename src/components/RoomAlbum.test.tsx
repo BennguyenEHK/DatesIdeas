@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RoomAlbum } from "./RoomAlbum";
 import type { AlbumItem } from "@/lib/album/types";
-import { civilDate } from "@/lib/album/occasions";
 
 const ITEMS: AlbumItem[] = [
   {
@@ -71,20 +70,20 @@ afterEach(() => {
 describe("RoomAlbum", () => {
   it("renders loaded items and follows view.itemId", async () => {
     renderAlbum();
-    expect(await screen.findByAltText("Older memory")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Show February 2, 2026" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Memory sky" })).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Show February 2, 2026" })).not.toHaveLength(0);
   });
 
   it("sends a person's thumbnail navigation with the current gear", async () => {
     const { onView } = renderAlbum({ view: { itemId: "older", gear: "days" } });
-    await screen.findByAltText("Older memory");
-    fireEvent.click(screen.getByRole("button", { name: "Show February 2, 2026" }));
+    await screen.findByRole("region", { name: "Memory sky" });
+    fireEvent.click(screen.getAllByRole("button", { name: "Show February 2, 2026" })[0]);
     expect(onView).toHaveBeenCalledWith({ itemId: "newest", gear: "days" });
   });
 
   it("follows a view received from the other screen without echoing it", async () => {
     const { onView, rerender } = renderAlbum();
-    await screen.findByAltText("Older memory");
+    await screen.findByRole("region", { name: "Memory sky" });
     rerender(
       <RoomAlbum
         view={{ itemId: "newest", gear: "frames" }}
@@ -94,13 +93,13 @@ describe("RoomAlbum", () => {
         onClose={vi.fn()}
       />,
     );
-    expect(await screen.findByAltText("Newest memory")).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Memory sky" })).toBeTruthy();
     expect(onView).not.toHaveBeenCalled();
   });
 
   it("fetches again when revision rises", async () => {
     const { rerender } = renderAlbum();
-    await screen.findByAltText("Older memory");
+    await screen.findByRole("region", { name: "Memory sky" });
     rerender(
       <RoomAlbum
         view={{ itemId: "older", gear: "frames" }}
@@ -116,7 +115,7 @@ describe("RoomAlbum", () => {
   it("keeps the photograph on screen while it reloads for the other screen's change", async () => {
     // K loving a photograph must not blank this screen or restart a video.
     const { rerender } = renderAlbum();
-    await screen.findByAltText("Older memory");
+    await screen.findByRole("region", { name: "Memory sky" });
     let finish: (value: Response) => void = () => undefined;
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => (finish = resolve)));
     rerender(
@@ -129,16 +128,16 @@ describe("RoomAlbum", () => {
       />,
     );
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(screen.getByAltText("Older memory")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Memory sky" })).toBeTruthy();
     expect(screen.queryByText("Opening the album…")).toBeNull();
     finish(response());
-    expect(await screen.findByAltText("Older memory")).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Memory sky" })).toBeTruthy();
   });
 
-  it("moves to the next thumbnail in the strip with the arrow key", async () => {
+  it("moves to the next lantern in the sky with the arrow key", async () => {
     const { onView } = renderAlbum({ view: { itemId: "newest", gear: "frames" } });
-    await screen.findByAltText("Newest memory");
-    fireEvent.keyDown(screen.getByRole("region", { name: "Shared album" }), { key: "ArrowRight" });
+    await screen.findByRole("region", { name: "Memory sky" });
+    fireEvent.keyDown(screen.getByRole("region", { name: "Memory sky" }), { key: "ArrowRight" });
     expect(onView).toHaveBeenCalledWith({ itemId: "older", gear: "frames" });
   });
 
@@ -151,59 +150,11 @@ describe("RoomAlbum", () => {
     };
     fetchMock.mockResolvedValue(response(200, [...ITEMS, sameDay]));
     const { onView } = renderAlbum({ view: { itemId: "newest", gear: "days" } });
-    await screen.findByAltText("Newest memory");
+    await screen.findByRole("region", { name: "Memory sky" });
     const stack = screen.getByRole("option", { name: /2 memories/ });
     fireEvent.click(stack);
     // The top of the stack is the newest memory of that day.
     expect(onView).toHaveBeenCalledWith({ itemId: "older-2", gear: "days" });
-  });
-
-  it("starts the day's film for both screens, anchored ahead on the shared clock", async () => {
-    const sameDay = {
-      ...ITEMS[1],
-      id: "older-2",
-      caption: "Also that day",
-      happenedAt: "2026-02-01T15:00:00Z",
-    };
-    fetchMock.mockResolvedValue(response(200, [...ITEMS, sameDay]));
-    const onFilm = vi.fn();
-    renderAlbum({ onFilm, now: () => 10_000, filmLeadMs: 300 });
-    await screen.findByAltText("Older memory");
-    fireEvent.click(screen.getByRole("button", { name: "▶ Play this day" }));
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    expect(onFilm).toHaveBeenCalledWith({
-      day: civilDate("2026-02-01T12:00:00Z", zone),
-      anchorMs: 10_300,
-      pausedAtMs: null,
-    });
-  });
-
-  it("offers no film for a day with a single memory", async () => {
-    renderAlbum({ onFilm: vi.fn() });
-    await screen.findByAltText("Older memory");
-    expect(screen.queryByRole("button", { name: "▶ Play this day" })).toBeNull();
-  });
-
-  it("plays a shared film inside the album and closes it for both screens", async () => {
-    vi.stubGlobal("requestAnimationFrame", () => 1);
-    vi.stubGlobal("cancelAnimationFrame", () => undefined);
-    const sameDay = {
-      ...ITEMS[1],
-      id: "older-2",
-      caption: "Also that day",
-      happenedAt: "2026-02-01T15:00:00Z",
-    };
-    fetchMock.mockResolvedValue(response(200, [...ITEMS, sameDay]));
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const onFilm = vi.fn();
-    renderAlbum({
-      film: { day: civilDate("2026-02-01T12:00:00Z", zone), anchorMs: 0, pausedAtMs: 0 },
-      onFilm,
-      now: () => 0,
-    });
-    expect(await screen.findByRole("dialog", { name: "Play the day" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "CLOSE" }));
-    expect(onFilm).toHaveBeenCalledWith(null);
   });
 
   it("keeps the call available when this device is not paired", async () => {
@@ -219,7 +170,7 @@ describe("RoomAlbum", () => {
       .mockResolvedValueOnce(response())
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
     const { onChanged } = renderAlbum();
-    await screen.findByAltText("Older memory");
+    await screen.findByRole("region", { name: "Memory sky" });
     fireEvent.click(screen.getByRole("button", { name: "Love memory" }));
     await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
     expect(fetchMock).toHaveBeenLastCalledWith(
@@ -233,7 +184,7 @@ describe("RoomAlbum", () => {
       .mockResolvedValueOnce(response())
       .mockResolvedValueOnce(new Response(null, { status: 500 }));
     const { onChanged } = renderAlbum();
-    await screen.findByAltText("Older memory");
+    await screen.findByRole("region", { name: "Memory sky" });
     fireEvent.click(screen.getByRole("button", { name: "Love memory" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toContain("did not save"));
     expect(onChanged).not.toHaveBeenCalled();
