@@ -5,11 +5,15 @@ import type { Scene } from "./ops";
 class RecordingPainter implements CanvasPainter {
   calls: string[] = [];
   fillStyle = "";
+  globalAlpha = 1;
+  globalCompositeOperation: GlobalCompositeOperation = "source-over";
   font = "";
   lineCap: CanvasLineCap = "butt";
   lineJoin: CanvasLineJoin = "miter";
   lineWidth = 1;
   strokeStyle = "";
+  shadowBlur = 0;
+  shadowColor = "";
   textAlign: CanvasTextAlign = "start";
   textBaseline: CanvasTextBaseline = "alphabetic";
 
@@ -86,7 +90,7 @@ describe("paintScene", () => {
     expect(painter.lineWidth).toBe(20);
     expect(painter.lineCap).toBe("round");
     expect(painter.lineJoin).toBe("round");
-    expect(painter.calls).toEqual(["beginPath", "arc 50 50 10", "fill"]);
+    expect(painter.calls).toEqual(["save", "beginPath", "arc 50 50 10", "fill", "restore"]);
   });
 
   it("paints stickers in scene order with their rotation", () => {
@@ -116,5 +120,30 @@ describe("paintScene", () => {
       "fillText ⭐ 0 0",
       "restore",
     ]);
+  });
+
+  it("uses destination-out for eraser marks and restores the drawing state", () => {
+    const painter = new RecordingPainter();
+    paintScene(painter, { items: [{
+      type: "stroke", id: "erase", author: "me", at: 1, ink: "#ffffff", tool: "eraser",
+      width: 0.1, points: [[0, 0], [1, 1]],
+    }] }, 100, 100);
+    expect(painter.globalCompositeOperation).toBe("destination-out");
+    expect(painter.calls).toContain("restore");
+  });
+
+  it("scatters deterministic spray dots from the stroke id", () => {
+    const scene = (id: string): Scene => ({ items: [{
+      type: "stroke", id, author: "me", at: 1, ink: "#ffffff", tool: "spray",
+      width: 0.1, points: [[0.1, 0.1], [0.9, 0.9]],
+    }] });
+    const first = new RecordingPainter();
+    const second = new RecordingPainter();
+    const other = new RecordingPainter();
+    paintScene(first, scene("same"), 100, 100);
+    paintScene(second, scene("same"), 100, 100);
+    paintScene(other, scene("other"), 100, 100);
+    expect(first.calls).toEqual(second.calls);
+    expect(first.calls).not.toEqual(other.calls);
   });
 });

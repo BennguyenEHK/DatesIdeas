@@ -70,4 +70,44 @@ describe("useCreateSpace", () => {
     expect(late.result.current.scene).toEqual(result.current.scene);
     expect(late.result.current.baseItemId).toBe("photo-1");
   });
+
+  it("undoes and redoes only this person's mark", () => {
+    const send = vi.fn();
+    const { result } = renderHook(() => useCreateSpace({ send, identity: "ben" }));
+    act(() => result.current.apply({ kind: "stroke", stroke: stroke("a", "ben", 1) }));
+    act(() => result.current.undo());
+    expect(result.current.canRedo).toBe(true);
+    expect(result.current.scene.items).toEqual([]);
+    act(() => result.current.redo());
+    expect(result.current.scene.items).toHaveLength(1);
+    expect(result.current.scene.items[0]).toMatchObject({ author: "ben", at: 1 });
+  });
+
+  it("converges when the other screen receives an undo and its redo in reverse order", () => {
+    const send = vi.fn();
+    const { result } = renderHook(() => useCreateSpace({ send, identity: "ben" }));
+    act(() => result.current.apply({ kind: "stroke", stroke: stroke("a", "ben", 1) }));
+    act(() => result.current.undo());
+    act(() => result.current.redo());
+
+    const messages = send.mock.calls.map(([message]) => message as PeerMessage);
+    const [add, remove, readd] = messages;
+    const other = renderHook(() => useCreateSpace({ send: vi.fn(), identity: "k" }));
+    for (const message of [add, readd, remove]) act(() => other.result.current.accept(message));
+
+    expect(other.result.current.scene).toEqual(result.current.scene);
+  });
+
+  it("shares newer sessions and finishes an incoming nonce once", () => {
+    const send = vi.fn();
+    const onFinish = vi.fn();
+    const { result } = renderHook(() => useCreateSpace({ send, identity: "ben", now: () => 42, onFinish }));
+    act(() => result.current.setSession({ workshop: "strip", shots: 2 }));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      t: "canvas-session", session: expect.objectContaining({ workshop: "strip", shots: 2, at: 42, by: "ben" }),
+    }));
+    act(() => result.current.accept({ t: "canvas-finish", nonce: "once" }));
+    act(() => result.current.accept({ t: "canvas-finish", nonce: "once" }));
+    expect(onFinish).toHaveBeenCalledTimes(1);
+  });
 });

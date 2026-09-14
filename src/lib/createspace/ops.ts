@@ -17,6 +17,8 @@
  * lands in the same place on both.
  */
 
+import { isHexColor } from "@/lib/looks/types";
+
 /** The inks, taken from the app's own palette so a drawing belongs to the room. */
 export const INKS = [
   "#f5efe0", // cream
@@ -26,10 +28,18 @@ export const INKS = [
   "#a8b2d8", // mist
   "#131a38", // night
 ] as const;
-export type Ink = (typeof INKS)[number];
+/** Any CSS-safe hex colour; INKS remains the quick-pick palette. */
+export type Ink = string;
 
-export const STICKERS = ["❤️", "✨", "⭐", "🌙", "🎬", "🎵", "🌹", "😘", "🥂", "🎈", "👑", "💌"] as const;
+export const STICKERS = [
+  "❤️", "✨", "⭐", "🌙", "🎬", "🎵", "🌹", "😘", "🥂", "🎈", "👑", "💌",
+  "💕", "🌸", "🦋", "🎀", "🎉", "🧸", "💫", "🕯️", "🎞️", "📸", "🎶", "🥐",
+  "🧋", "🍓", "🧁", "🍿", "🪩", "🌌", "🪐", "🕊️", "🏩", "🌆", "🎠", "🫶",
+] as const;
 export type Glyph = (typeof STICKERS)[number];
+
+export const TOOLS = ["pencil", "brush", "spray", "eraser"] as const;
+export type Tool = (typeof TOOLS)[number];
 
 /** Enough for a long flourish; small enough that one stroke fits one message. */
 export const MAX_POINTS = 600;
@@ -37,7 +47,7 @@ export const MAX_POINTS = 600;
 export const MAX_ITEMS = 2000;
 
 export const MIN_WIDTH = 0.002;
-export const MAX_WIDTH = 0.05;
+export const MAX_WIDTH = 0.12;
 export const MIN_SCALE = 0.3;
 export const MAX_SCALE = 4;
 
@@ -49,6 +59,8 @@ export interface Stroke {
   /** Shared-clock milliseconds. What orders the scene. */
   at: number;
   ink: Ink;
+  /** Absent is the original pencil, retained for older peers. */
+  tool?: Tool;
   /** A fraction of the picture's width. */
   width: number;
   points: readonly Point[];
@@ -191,7 +203,11 @@ const isShortString = (value: unknown, max: number): value is string =>
 const inPicture = (value: unknown): value is number => isNum(value) && value >= -0.1 && value <= 1.1;
 
 export function isInk(value: unknown): value is Ink {
-  return typeof value === "string" && (INKS as readonly string[]).includes(value);
+  return isHexColor(value);
+}
+
+export function isTool(value: unknown): value is Tool {
+  return typeof value === "string" && (TOOLS as readonly string[]).includes(value);
 }
 
 export function isGlyph(value: unknown): value is Glyph {
@@ -206,6 +222,7 @@ function isStroke(value: unknown): value is Stroke {
     isShortString(s.author, 64) &&
     isNum(s.at) &&
     isInk(s.ink) &&
+    (s.tool === undefined || isTool(s.tool)) &&
     isNum(s.width) &&
     s.width >= MIN_WIDTH &&
     s.width <= MAX_WIDTH &&

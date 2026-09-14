@@ -52,6 +52,13 @@ describe("two screens agree", () => {
     expect(ids([add, keep, remove])).toEqual(["b"]);
     expect(ids([keep, add, remove])).toEqual(["b"]);
   });
+
+  it("brings an item back when redo reapplies it after its removal", () => {
+    const add: CanvasOp = { kind: "stroke", stroke: stroke("a", "ben", 1) };
+    const remove: CanvasOp = { kind: "remove", id: "a" };
+    expect(replay([add, remove, add]).items.map((item) => item.id)).toEqual(["a"]);
+    expect(replay([remove, add]).items.map((item) => item.id)).toEqual(["a"]);
+  });
 });
 
 describe("stickers", () => {
@@ -117,8 +124,15 @@ describe("isCanvasOp, on what the other browser sent", () => {
     expect(isCanvasOp({ kind: "clear" })).toBe(true);
   });
 
-  it("refuses an ink outside the palette", () => {
-    expect(isCanvasOp({ kind: "stroke", stroke: { ...stroke("a", "ben", 1), ink: "#ff0000" } })).toBe(false);
+  it("accepts any six-digit hex ink and rejects malformed colours", () => {
+    expect(isCanvasOp({ kind: "stroke", stroke: { ...stroke("a", "ben", 1), ink: "#ff0000" } })).toBe(true);
+    expect(isCanvasOp({ kind: "stroke", stroke: { ...stroke("a", "ben", 1), ink: "red" } })).toBe(false);
+  });
+
+  it("allows older pencil strokes and rejects unknown tools", () => {
+    expect(isCanvasOp({ kind: "stroke", stroke: stroke("a", "ben", 1) })).toBe(true);
+    expect(isCanvasOp({ kind: "stroke", stroke: { ...stroke("a", "ben", 1), tool: "brush" } })).toBe(true);
+    expect(isCanvasOp({ kind: "stroke", stroke: { ...stroke("a", "ben", 1), tool: "marker" } })).toBe(false);
   });
 
   it("refuses a stroke too long to be one", () => {
