@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PeerMessage } from "@/lib/rtc/protocol";
 import { newNonce, type GameId, type GameMove } from "./games";
+import type { WebGameId } from "./webGames";
 import {
   EMPTY_SESSION,
   localMove,
@@ -23,12 +24,17 @@ export function useGameWord({
   identity,
   partnerIdentity,
   send,
+  now = Date.now,
 }: {
   identity: string;
   partnerIdentity: string | null;
   send: (message: PeerMessage) => void;
+  now?: () => number;
 }) {
   const [session, setSession] = useState<Session>(EMPTY_SESSION);
+  const [webGame, setWebGame] = useState<WebGameId | null>(null);
+  const webGameSentAt = useRef<number | null>(null);
+  const latestWebGame = useRef<WebGameId | null>(null);
 
   // Handlers read the latest session from here rather than closing over a stale
   // one. Written in an effect, never during render.
@@ -72,6 +78,17 @@ export function useGameWord({
     setSession(EMPTY_SESSION);
   }, []);
 
+  const openWebGame = useCallback(
+    (id: WebGameId | null) => {
+      const sentAt = now();
+      latestWebGame.current = id;
+      webGameSentAt.current = sentAt;
+      setWebGame(id);
+      send({ t: "webgame", id, sentAt });
+    },
+    [now, send],
+  );
+
   /** Feed every inbound message through here; anything not a game is ignored. */
   const accept = useCallback(
     (message: PeerMessage) => {
@@ -82,6 +99,22 @@ export function useGameWord({
         const next = startSession(message);
         latest.current = next;
         setSession(next);
+        return;
+      }
+      if (message.t === "webgame") {
+        const currentSentAt = webGameSentAt.current;
+        const currentId = latestWebGame.current ?? "";
+        const incomingId = message.id ?? "";
+        if (
+          currentSentAt !== null &&
+          (message.sentAt < currentSentAt ||
+            (message.sentAt === currentSentAt && incomingId <= currentId))
+        ) {
+          return;
+        }
+        webGameSentAt.current = message.sentAt;
+        latestWebGame.current = message.id;
+        setWebGame(message.id);
         return;
       }
       if (message.t === "move") {
@@ -105,6 +138,13 @@ export function useGameWord({
    */
   const resync = useCallback(() => {
     const current = latest.current;
+    if (webGameSentAt.current !== null) {
+      send({
+        t: "webgame",
+        id: latestWebGame.current,
+        sentAt: webGameSentAt.current,
+      });
+    }
     if (current.game === null || current.nonce === null) return;
     send({
       t: "game",
@@ -117,5 +157,5 @@ export function useGameWord({
     }
   }, [send]);
 
-  return { session, start, move, leave, accept, resync };
+  return { session, webGame, start, move, leave, openWebGame, accept, resync };
 }

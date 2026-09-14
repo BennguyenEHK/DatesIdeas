@@ -57,3 +57,21 @@ describe("the Minecraft launcher inside GameWord", () => {
     expect(screen.queryByLabelText("Minecraft launcher")).toBeNull();
   });
 });
+
+describe("the web game launcher inside GameWord", () => {
+  it("shows the shared web game instead of the board", () => {
+    const props = { ...callbacks(), onWebGame: vi.fn() };
+    render(
+      <GameWord
+        {...props}
+        identity="me"
+        partnerIdentity="them"
+        game={newGame("tictactoe", ["me", "them"])}
+        webGame="skribbl"
+        error={null}
+      />,
+    );
+    expect(screen.getByTitle("skribbl.io")).toBeTruthy();
+    expect(screen.queryByLabelText("Noughts and crosses board")).toBeNull();
+  });
+});

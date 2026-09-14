@@ -3,6 +3,7 @@
 import { useState, type ReactElement } from "react";
 import { GameBoard } from "@/components/GameBoard";
 import { MinecraftLauncher } from "@/components/MinecraftLauncher";
+import { WebGameLauncher } from "@/components/WebGameLauncher";
 import {
   GAME_IDS,
   GAME_LABELS,
@@ -11,6 +12,7 @@ import {
   type GameMove,
   type GameState,
 } from "@/lib/gameword/games";
+import type { WebGameId } from "@/lib/gameword/webGames";
 
 type Props = {
   identity: string;
@@ -20,11 +22,27 @@ type Props = {
   onStart: (game: GameId) => void;
   onMove: (move: GameMove) => void;
   onLeave: () => void;
+  webGame?: WebGameId | null;
+  onWebGame?: (id: WebGameId | null) => void;
 };
 
-function Picker({ partnerIdentity, onStart }: Pick<Props, "partnerIdentity" | "onStart">) {
+function Picker({
+  partnerIdentity,
+  onStart,
+  onWebGame,
+}: Pick<Props, "partnerIdentity" | "onStart" | "onWebGame">) {
   const [showMinecraft, setShowMinecraft] = useState(false);
+  const [showWebGames, setShowWebGames] = useState(false);
   if (showMinecraft) return <MinecraftLauncher onBack={() => setShowMinecraft(false)} />;
+  if (showWebGames) {
+    return (
+      <WebGameLauncher
+        webGameId={null}
+        onWebGame={onWebGame ?? (() => undefined)}
+        onBack={() => setShowWebGames(false)}
+      />
+    );
+  }
   return (
     <section
       className="border border-[var(--edge)] bg-[var(--letterbox)] p-5 sm:p-7"
@@ -45,7 +63,8 @@ function Picker({ partnerIdentity, onStart }: Pick<Props, "partnerIdentity" | "o
             type="button"
             disabled={partnerIdentity === null}
             onClick={() => onStart(game)}
-            className="min-h-24 border border-[var(--edge)] bg-[var(--dusk)] p-4 text-left text-[var(--cream)] enabled:hover:border-[var(--lamp)] disabled:text-[var(--mist)]"
+            className="min-h-24 border border-[var(--edge)] bg-[var(--dusk)] p-4 text-left
+              text-[var(--cream)] enabled:hover:border-[var(--lamp)] disabled:text-[var(--mist)]"
           >
             <span className="font-[family-name:var(--font-display)] text-2xl text-[var(--lamp)]">
               {GAME_LABELS[game]}
@@ -53,13 +72,32 @@ function Picker({ partnerIdentity, onStart }: Pick<Props, "partnerIdentity" | "o
           </button>
         ))}
       </div>
-      <button
-        type="button"
-        onClick={() => setShowMinecraft(true)}
-        className="mt-5 border border-[var(--lamp)] bg-[var(--night)] px-4 py-3 text-[var(--cream)]"
-      >
-        Open Minecraft launcher
-      </button>
+      <div className="mt-5 grid gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          aria-label="Open Minecraft launcher"
+          onClick={() => setShowMinecraft(true)}
+          className="border border-[var(--lamp)] bg-[var(--night)] p-4 text-left text-[var(--cream)]"
+        >
+          <span className="block text-lg text-[var(--lamp)]" aria-hidden>▣</span>
+          <span className="mt-1 block">Open Minecraft launcher</span>
+          <span className="mt-1 block text-sm text-[var(--mist)]">
+            Join a server hosted outside FestiBooth.
+          </span>
+        </button>
+        <button
+          type="button"
+          aria-label="Web Game"
+          onClick={() => setShowWebGames(true)}
+          className="border border-[var(--lamp)] bg-[var(--night)] p-4 text-left text-[var(--cream)]"
+        >
+          <span className="block text-lg text-[var(--lamp)]" aria-hidden>◉</span>
+          <span className="mt-1 block">Web Game</span>
+          <span className="mt-1 block text-sm text-[var(--mist)]">
+            Pick a free two-player game for the web.
+          </span>
+        </button>
+      </div>
     </section>
   );
 }
@@ -72,8 +110,22 @@ function resultMessage(game: GameState, mine: 0 | 1 | null): string {
 
 export function GameWord(props: Props): ReactElement {
   const [confirmingResign, setConfirmingResign] = useState(false);
+  if (props.webGame !== undefined && props.webGame !== null) {
+    return (
+      <WebGameLauncher
+        webGameId={props.webGame}
+        onWebGame={props.onWebGame ?? (() => undefined)}
+      />
+    );
+  }
   if (props.game === null)
-    return <Picker partnerIdentity={props.partnerIdentity} onStart={props.onStart} />;
+    return (
+      <Picker
+        partnerIdentity={props.partnerIdentity}
+        onStart={props.onStart}
+        onWebGame={props.onWebGame}
+      />
+    );
 
   const game = props.game;
   const mine = seatOf(game, props.identity);
