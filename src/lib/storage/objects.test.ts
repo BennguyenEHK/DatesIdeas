@@ -145,6 +145,16 @@ describe("deleteKeys", () => {
     expect(await deleteKeys(refused, config)).toBe(0);
   });
 
+  it("accepts a private look layer and source picture for deletion", async () => {
+    const { deleteKeys } = await import("./objects");
+    const pair = "11111111-2222-3333-8444-555555555555";
+    // No configured client is needed: reaching configuration proves the
+    // allow-list admitted both paths instead of dropping them up front.
+    await expect(deleteKeys([
+      `looks/${pair}/abcdef-backdrop.png`, `looks/${pair}/src/abcdef.webp`,
+    ], null)).resolves.toBe(0);
+  });
+
   it("does nothing when storage is not configured", async () => {
     const { deleteKeys } = await import("./objects");
     expect(await deleteKeys(["keepsakes/ROOM/strip-a.png"], null)).toBe(0);

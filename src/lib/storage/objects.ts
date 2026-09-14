@@ -9,6 +9,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { isAlbumKey, isLegacyAlbumKey } from "@/lib/album/keys";
+import { isLookKeyFor } from "@/lib/looks/keys";
 import { DATED_PATTERN } from "./datedName";
 
 /** How long an upload link stays usable. Short: it is used immediately. */
@@ -193,6 +194,8 @@ export async function listKeys(
  */
 function mayDelete(key: string): boolean {
   if (key.includes("..") || key.includes("\\")) return false;
+  const look = /^looks\/([0-9a-f-]{36})\//i.exec(key);
+  if (look !== null) return isLookKeyFor(look[1], key);
   return /^(?:keepsakes|album)\/(?:\d{4}\/\d{2}\/[^/]+|[^/]+\/[^/]+)$/.test(key);
 }
 
