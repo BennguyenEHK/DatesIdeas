@@ -25,6 +25,10 @@ import { TakeoverStage } from "@/components/TakeoverStage";
 import { activity, activityKey, type ActivityId } from "@/lib/activities/registry";
 import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
+import {
+  activityAnnouncement,
+  type ChosenActivity,
+} from "@/lib/activities/announce";
 import { ActivityPlaceholder } from "@/components/ActivityPlaceholder";
 import { KaraokePanel, type SongLanding } from "@/components/KaraokePanel";
 import { RoomControls } from "@/components/RoomControls";
@@ -250,12 +254,16 @@ export function RoomClient({ code }: { code: string }) {
 
   const [current, setCurrent] = useState<ActivityId | null>(null);
   const activitySwap = useRef<{ showAt: number; key: number } | null>(null);
+  // The same choice in the form a newly arrived peer is told it. Kept beside
+  // activitySwap so the two are only ever written together.
+  const chosenActivity = useRef<ChosenActivity | null>(null);
 
   const applyActivity = useCallback((id: ActivityId | null, showAt: number) => {
     // key -1 for "closed" keeps null orderable against the real activities.
     const key = id === null ? -1 : activityKey(id);
     if (!shouldReplace(activitySwap.current, { showAt, key })) return;
     activitySwap.current = { showAt, key };
+    chosenActivity.current = { id, showAt };
     setCurrent(id);
     // Karaoke and movie share one player and one shared position, so the film
     // is dropped only when leaving BOTH of them -- switching between the two
@@ -345,6 +353,12 @@ export function RoomClient({ code }: { code: string }) {
         // half played. Their screen starts empty after a reconnect, and both
         // replays are safe to send even if they already had some of it.
         resyncShared.current?.();
+        // And which activity this screen is on. Choosing the album is said
+        // once, when it is chosen, so someone who arrives or reconnects after
+        // that would otherwise stay on the call while this side sits in the
+        // album. Both sides do this, and the swap rule keeps the newer choice.
+        const announcement = activityAnnouncement(chosenActivity.current);
+        if (announcement !== null) peerRef.current?.send(announcement);
         return;
       }
       if (
