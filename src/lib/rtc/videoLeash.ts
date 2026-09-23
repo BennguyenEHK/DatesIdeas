@@ -31,8 +31,8 @@ export const LEAN_VIDEO: LeashSettings = {
 };
 
 /**
- * A TCP relay and a long relay path both need enough headroom for audio to
- * remain conversational. Full video keeps its source resolution here so the
+ * A TCP relay and any long path, relayed or direct, need enough headroom for
+ * audio to remain conversational. Full video keeps its source resolution here so the
  * encoder spends the smaller budget on a stable picture rather than scaling
  * and re-scaling it.
  */
@@ -42,7 +42,7 @@ export const CONSTRAINED_FULL_VIDEO: LeashSettings = {
   maxFramerate: 24,
 };
 
-/** Karaoke remains leaner than full video even when both cross a slow relay. */
+/** Karaoke remains leaner than full video even when both cross a slow path. */
 export const CONSTRAINED_LEAN_VIDEO: LeashSettings = {
   maxBitrateBps: 400_000,
   scaleResolutionDownBy: 2,
@@ -94,21 +94,256 @@ export function sameSettings(a: LeashSettings, b: LeashSettings): boolean {
 }
 
 /**
- * Selects a sender budget from the activity and the path actually carrying
- * media. Until ICE has identified that path, retaining the established budget
- * avoids reacting to an incomplete snapshot.
+ * The tightest budget the call can fall back to when the voice is visibly
+ * suffering. Half resolution is accepted here because the alternative is a
+ * conversation where every reply arrives a third of a second late.
+ */
+export const SQUEEZED_FULL_VIDEO: LeashSettings = {
+  maxBitrateBps: 450_000,
+  scaleResolutionDownBy: 2,
+  maxFramerate: 20,
+};
+
+/** Karaoke remains leaner than full video even at the tightest level. */
+export const SQUEEZED_LEAN_VIDEO: LeashSettings = {
+  maxBitrateBps: 300_000,
+  scaleResolutionDownBy: 2,
+  maxFramerate: 15,
+};
+
+/**
+ * How hard the camera is being held back: 0 is whatever the route allows,
+ * 1 is the constrained budget, 2 is the squeezed one.
+ */
+export type LeashLevel = 0 | 1 | 2;
+
+/**
+ * What the voice is actually experiencing, as measured on the last poll.
+ *
+ * Preferably what the OTHER side reports about the voice we send them -- the
+ * RTCP receiver report -- because that is the only measurement of our own
+ * uplink, and our uplink is the one our camera can fill. The numbers about the
+ * voice arriving here describe the other person's uplink instead, and are only
+ * the fallback for a browser that exposes no receiver report.
+ */
+export interface LinkHealth {
+  /**
+   * With `source` "their-report", the RTP interarrival jitter they measured;
+   * otherwise the mean time an audio sample waited in our jitter buffer. Both
+   * in ms, but they are different quantities on very different scales.
+   */
+  audioJitterMs: number | null;
+  /** Audio packets lost over the last window, as a percentage 0-100. */
+  audioLossPct: number | null;
+  /** Where the numbers came from. Absent means our own jitter buffer. */
+  source?: "their-report" | "our-buffer";
+}
+
+/** Buffering beyond this is a voice that is audibly behind the conversation. */
+const BUFFER_UP_MS = 150;
+/** The voice must be comfortably healthy, not merely acceptable, to loosen. */
+const BUFFER_DOWN_MS = 80;
+/**
+ * Interarrival jitter is a smoothed spread of arrival times, not a buffer
+ * length: a healthy call sits at a few milliseconds, and thirty already means
+ * packets are queueing behind something. Judging it against the buffer's 150
+ * would leave the jitter half of the rule unable to fire at all.
+ */
+const REPORTED_UP_MS = 30;
+const REPORTED_DOWN_MS = 15;
+/** Loss beyond this is audible as clipped syllables. */
+const LOSS_UP_PCT = 2;
+const LOSS_DOWN_PCT = 0.5;
+
+/**
+ * One step of the leash's reaction to how the call is actually going.
+ *
+ * The route rules are a guess made from distance and relay type; this is the
+ * correction made from evidence -- ideally from what the other side hears of
+ * our voice. A call can sit on a perfectly good-looking route and still have
+ * our voice arriving late and clipped at their end, because our camera is
+ * filling an uplink nobody can see from the route alone. The gap between the thresholds is deliberate: a level is only given
+ * back once the voice is clearly well, so the call does not oscillate between
+ * a budget that hurts and one that barely stops hurting.
+ */
+export function healthStep(
+  previous: LeashLevel,
+  health: LinkHealth,
+): LeashLevel {
+  const { audioJitterMs: jitter, audioLossPct: loss } = health;
+  const reported = health.source === "their-report";
+  const upMs = reported ? REPORTED_UP_MS : BUFFER_UP_MS;
+  const downMs = reported ? REPORTED_DOWN_MS : BUFFER_DOWN_MS;
+  const struggling =
+    (jitter !== null && jitter > upMs) || (loss !== null && loss > LOSS_UP_PCT);
+  if (struggling) return previous === 0 ? 1 : 2;
+
+  // Missing readings are not evidence of health, so they cannot loosen it.
+  const healthy =
+    jitter !== null && jitter < downMs && loss !== null && loss < LOSS_DOWN_PCT;
+  if (healthy) return previous === 2 ? 1 : 0;
+
+  return previous;
+}
+
+/** How tight the route alone requires the budget to be. */
+function routeLevel(route: RouteQuality | null): LeashLevel {
+  if (route === null) return 0;
+  const distant = route.netRttMs !== null && route.netRttMs > 150;
+  if (!route.relayed) return distant ? 1 : 0;
+  return route.relayProtocol === "tcp" || distant ? 1 : 0;
+}
+
+/**
+ * Selects a sender budget from the activity, the path actually carrying media
+ * and the level the call's own health has pushed it to. Until ICE has
+ * identified that path, retaining the established budget avoids reacting to an
+ * incomplete snapshot.
+ *
+ * Distance counts on a direct route too. Round trip alone does not make a
+ * route worse, but a long path is almost always one between two different
+ * home connections, and 2.5 Mbps of camera saturates whichever uplink is the
+ * smaller. The voice shares that uplink, and the browser pays for the queue by
+ * holding every word back in its buffer -- measured at over 300 ms on a direct
+ * transpacific call that looked healthy by every other number.
+ *
+ * The health level can only tighten what the route decided, never loosen it.
  */
 export function budgetFor(
   mode: VideoMode,
   route: RouteQuality | null,
+  level: LeashLevel = 0,
+  capBps: number | null = null,
 ): LeashSettings {
-  if (route === null || !route.relayed) return leashFor(mode);
+  const profile = profileFor(mode, route, level);
+  return capApplies(route, level) ? capToHeadroom(profile, capBps) : profile;
+}
 
-  if (route.relayProtocol === "tcp" || (route.netRttMs !== null && route.netRttMs > 150)) {
-    return mode === "lean" ? CONSTRAINED_LEAN_VIDEO : CONSTRAINED_FULL_VIDEO;
+/**
+ * Whether the upload estimate is allowed to cap the picture at all.
+ *
+ * Only once there is evidence of trouble: a relayed route, or a health level
+ * that has already stepped up because the other side hears our voice badly.
+ * The estimate is Chrome's bandwidth estimate, and when the encoder is held
+ * below it the estimate settles near what is actually sent rather than
+ * probing upward -- so a cap subtracted from it would feed its own input and
+ * ratchet a perfectly healthy direct call down towards the floor, with the
+ * rise limit making the climb back slow. A healthy direct call keeps its
+ * named budget and never sees the cap.
+ */
+export function capApplies(route: RouteQuality | null, level: LeashLevel): boolean {
+  return level >= 1 || route?.relayed === true;
+}
+
+/** The named budget the route and the health level choose, before any cap. */
+export function profileFor(
+  mode: VideoMode,
+  route: RouteQuality | null,
+  level: LeashLevel = 0,
+): LeashSettings {
+  const effective = Math.max(routeLevel(route), level);
+  const lean = mode === "lean";
+
+  if (effective === 2) return lean ? SQUEEZED_LEAN_VIDEO : SQUEEZED_FULL_VIDEO;
+  if (effective === 1) {
+    return lean ? CONSTRAINED_LEAN_VIDEO : CONSTRAINED_FULL_VIDEO;
   }
+  if (route === null || !route.relayed) return leashFor(mode);
+  return lean ? RELAYED_LEAN_VIDEO : RELAYED_FULL_VIDEO;
+}
 
-  return mode === "lean" ? RELAYED_LEAN_VIDEO : RELAYED_FULL_VIDEO;
+/** What the voice needs from the upload before the camera gets any of it. */
+export const AUDIO_NEED_KBPS = 64;
+/** Room left for RTCP, retransmits and the data channels. */
+export const HEADROOM_MARGIN_KBPS = 32;
+/** The camera is never asked for less than this; below it, it stops making sense. */
+export const HEADROOM_FLOOR_BPS = 80_000;
+/** Below this a full-size picture only freezes, so it is shrunk instead. */
+export const TINY_PICTURE_BELOW_BPS = 250_000;
+/** How coarsely the browser's estimate is bucketed before it may decide anything. */
+export const HEADROOM_BUCKET_KBPS = 50;
+
+/**
+ * The most the camera may send given the browser's own estimate of the
+ * upload, in bps -- or null when there is no estimate yet.
+ *
+ * The named budgets are guesses about a route; this is the measurement. On a
+ * relayed evening the browser estimated 145 kbps of room while the camera and
+ * voice together were sending 220, and every surplus bit joined a queue that
+ * reached a 1.4-second round trip. Whatever the budget said, the link had
+ * already said less.
+ *
+ * Null means only "not measured yet", and the named budget still applies then;
+ * it never means uncapped. An estimate below what the voice itself needs
+ * gives the floor, not null.
+ */
+export function headroomCapBps(
+  outgoingKbps: number | null,
+  audioKbps = AUDIO_NEED_KBPS,
+): number | null {
+  if (outgoingKbps === null || !Number.isFinite(outgoingKbps)) return null;
+  const spareBps = (outgoingKbps - audioKbps - HEADROOM_MARGIN_KBPS) * 1000;
+  return Math.max(HEADROOM_FLOOR_BPS, spareBps);
+}
+
+/**
+ * Lowers a budget to the headroom cap. A cap small enough that a full-size
+ * picture would only stall also shrinks the picture and slows it: a tiny live
+ * face is better than a large frozen one. Returns the budget itself when the
+ * cap does not bind, so the named budgets keep their identity.
+ */
+export function capToHeadroom(
+  budget: LeashSettings,
+  capBps: number | null,
+): LeashSettings {
+  if (capBps === null || capBps >= budget.maxBitrateBps) return budget;
+  const tiny = capBps < TINY_PICTURE_BELOW_BPS;
+  return {
+    maxBitrateBps: capBps,
+    scaleResolutionDownBy: tiny
+      ? Math.max(budget.scaleResolutionDownBy, 4)
+      : budget.scaleResolutionDownBy,
+    maxFramerate: tiny
+      ? Math.min(budget.maxFramerate, 12)
+      : budget.maxFramerate,
+  };
+}
+
+/** What was last handed to the encoder, and the named budget it came from. */
+export interface AppliedLeash {
+  profile: LeashSettings;
+  settings: LeashSettings;
+}
+
+/** A change of capped bitrate smaller than this is not worth a keyframe. */
+const CAP_CHANGE_RATIO = 0.2;
+
+/**
+ * Whether a new budget is worth reconfiguring a running encoder for.
+ *
+ * A different named budget, resolution or framerate always is. A bitrate that
+ * moved only because the upload estimate wobbled must move by more than a
+ * fifth first: the estimate shifts every poll, and each reconfiguration costs
+ * a keyframe on exactly the link that has least room for one.
+ */
+export function leashChanged(
+  applied: AppliedLeash | null,
+  next: AppliedLeash,
+): boolean {
+  if (applied === null) return true;
+  if (!sameSettings(applied.profile, next.profile)) return true;
+  const a = applied.settings;
+  const b = next.settings;
+  if (
+    a.scaleResolutionDownBy !== b.scaleResolutionDownBy ||
+    a.maxFramerate !== b.maxFramerate
+  ) {
+    return true;
+  }
+  const larger = Math.max(a.maxBitrateBps, b.maxBitrateBps);
+  return (
+    Math.abs(a.maxBitrateBps - b.maxBitrateBps) > larger * CAP_CHANGE_RATIO
+  );
 }
 
 /**
@@ -157,7 +392,10 @@ const encodingFor = (settings: LeashSettings): EncodingLike => ({
  * the bitrate cap down with it. Priority is a nicety. The cap is the point, and
  * nothing optional may be allowed to stand in front of it.
  */
-const applyEncodingPriority = (encoding: EncodingLike, priority: string): void => {
+const applyEncodingPriority = (
+  encoding: EncodingLike,
+  priority: string,
+): void => {
   try {
     encoding.networkPriority = priority;
   } catch {
@@ -269,10 +507,104 @@ export async function leashSenders(
   senders: readonly SenderLike[],
   mode: VideoMode,
   route: RouteQuality | null = null,
+  level: LeashLevel = 0,
+  capBps: number | null = null,
 ): Promise<number> {
-  const settings = budgetFor(mode, route);
+  const settings = budgetFor(mode, route, level, capBps);
   const results = await Promise.all(
     senders.map((sender) => applyLeash(sender, settings)),
   );
   return results.filter((applied) => applied).length;
+}
+
+/** Where the health reaction stands between two stats polls. */
+export interface LeashHealthState {
+  level: LeashLevel;
+  /** The direction the previous poll wanted to move in: -1 looser, 1 tighter. */
+  pending: -1 | 0 | 1;
+  /**
+   * When the level or the headroom cap last moved, or null when neither has.
+   * Shared, so that loosening either one waits out a move of the other.
+   */
+  movedAtMs: number | null;
+  /** The bucketed upload estimate the cap is built from, or null before one. */
+  capKbps: number | null;
+}
+
+export const INITIAL_LEASH_HEALTH: LeashHealthState = {
+  level: 0,
+  pending: 0,
+  movedAtMs: null,
+  capKbps: null,
+};
+
+/** A change of level costs a keyframe, so it may not happen more often than this. */
+export const LEASH_MOVE_COOLDOWN_MS = 15_000;
+
+/**
+ * Advances the health reaction by one stats poll.
+ *
+ * A single poll is a three-second window, and one bad window is as likely to
+ * be a microwave or a neighbour's download as a real change in the link. So a
+ * move needs two consecutive polls asking for it in the same direction, and
+ * even then the level may shift only one step per cooldown: each shift is a
+ * reconfiguration and a keyframe, and a leash that jerks back and forth is its
+ * own source of the congestion it is meant to relieve.
+ */
+export function advanceLeashHealth(
+  state: LeashHealthState,
+  health: LinkHealth,
+  nowMs: number,
+): LeashHealthState {
+  const proposed = healthStep(state.level, health);
+  const direction = Math.sign(proposed - state.level) as -1 | 0 | 1;
+  if (direction === 0) {
+    return state.pending === 0 ? state : { ...state, pending: 0 };
+  }
+
+  const confirmed = state.pending === direction;
+  const cooledDown =
+    state.movedAtMs === null ||
+    nowMs - state.movedAtMs >= LEASH_MOVE_COOLDOWN_MS;
+  if (confirmed && cooledDown) {
+    return { ...state, level: proposed, pending: 0, movedAtMs: nowMs };
+  }
+  return { ...state, pending: direction };
+}
+
+/**
+ * Advances the upload-estimate cap by one stats poll.
+ *
+ * The estimate is bucketed first, so a reading wobbling around one value does
+ * not look like movement. A lower bucket is adopted at once -- the link has
+ * already shrunk, and every poll spent above it is queue. A higher one waits
+ * out the cooldown shared with the health level, so the cap cannot climb back
+ * the moment a single poll looks better. A missing estimate keeps the cap
+ * where it was rather than lifting it.
+ */
+export function advanceHeadroom(
+  state: LeashHealthState,
+  outgoingKbps: number | null,
+  nowMs: number,
+): LeashHealthState {
+  if (outgoingKbps === null || !Number.isFinite(outgoingKbps)) return state;
+  const bucket =
+    Math.round(outgoingKbps / HEADROOM_BUCKET_KBPS) * HEADROOM_BUCKET_KBPS;
+  if (state.capKbps === bucket) return state;
+
+  const rising = state.capKbps !== null && bucket > state.capKbps;
+  if (rising) {
+    const cooledDown =
+      state.movedAtMs === null ||
+      nowMs - state.movedAtMs >= LEASH_MOVE_COOLDOWN_MS;
+    if (!cooledDown) return state;
+  }
+  // The very first estimate is adopted without stamping the cooldown: it is
+  // the starting point, not a move, and must not hold back the health level.
+  const first = state.capKbps === null;
+  return {
+    ...state,
+    capKbps: bucket,
+    movedAtMs: first ? state.movedAtMs : nowMs,
+  };
 }

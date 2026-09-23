@@ -130,4 +130,13 @@ describe("file channel backpressure", () => {
     expect(shouldPause(HIGH_WATER_BYTES)).toBe(false);
     expect(shouldPause(HIGH_WATER_BYTES + 1)).toBe(true);
   });
+
+  it("queues no more than four chunks ahead of the sync channel", () => {
+    // At a megabyte the sync channel's ping waited 14.7 s behind the song on a
+    // 700 kbps relay. Everything queued here is queued ahead of it too.
+    expect(HIGH_WATER_BYTES).toBe(64 * 1024);
+    expect(HIGH_WATER_BYTES).toBe(4 * CHUNK_BYTES);
+    expect(shouldPause(64 * 1024 + 1)).toBe(true);
+    expect(shouldPause(1024 * 1024)).toBe(true);
+  });
 });

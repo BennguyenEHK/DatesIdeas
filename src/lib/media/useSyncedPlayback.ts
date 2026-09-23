@@ -93,6 +93,13 @@ export interface SyncedPlayback {
    * fetched and decoded. Correcting that is how a start-up delay became a jump.
    */
   started: () => void;
+  /**
+   * Moves both players to a new position, keeping whether it is playing.
+   *
+   * Broadcast like `load`, so the other side jumps with this one. Kept inside
+   * the film when its length is known; before that only the start is a limit.
+   */
+  seek: (seconds: number) => void;
   clear: () => void;
   /** Feed inbound media messages here. */
   accept: (msg: PeerMessage) => void;
@@ -457,6 +464,34 @@ export function useSyncedPlayback(
   }, [applyState, broadcast, cancelRamp, now]);
 
 
+  const seek = useCallback(
+    (seconds: number) => {
+      const cur = stateRef.current;
+      if (!cur.videoId || !Number.isFinite(seconds)) return;
+      const end = cur.durationSec ?? Infinity;
+      const at = Math.min(Math.max(0, seconds), end);
+      cancelRamp();
+      // A seek is a fresh start as far as the player is concerned: it has to
+      // fetch from the new place before it plays again. Re-stamping from where
+      // it genuinely resumes, as `started` does after a play, keeps that
+      // fetching delay from being read as drift by the other side.
+      iStartedPlay.current = cur.playing;
+      broadcast(stateAt(cur, at, cur.playing, now()));
+
+      // Moved here as well as through the effect, because the effect would
+      // only arrive at it through the drift check and its stall guard. The
+      // position that guard remembers is from before the jump and says nothing
+      // about the new one.
+      const p = player.current;
+      if (p?.isReady() && loadedId.current === `${cur.source}:${cur.videoId}`) {
+        const want = Math.max(0, at - offsetRef.current);
+        p.seek(want);
+        lastLook.current = null;
+      }
+    },
+    [broadcast, cancelRamp, now],
+  );
+
   const accept = useCallback((msg: PeerMessage) => {
     if (msg.t !== "media") return;
     const cur = stateRef.current;
@@ -524,6 +559,7 @@ export function useSyncedPlayback(
     resync,
     correct: applyState,
     started,
+    seek,
     clear,
     accept,
   };

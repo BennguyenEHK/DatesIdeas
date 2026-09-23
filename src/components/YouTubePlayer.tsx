@@ -16,7 +16,12 @@ interface YTPlayerInstance {
   pauseVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   getCurrentTime(): number;
+  getDuration(): number;
+  getPlayerState(): number;
   setVolume(volume: number): void;
+  cuePlaylist(options: { listType: "playlist"; list: string }): void;
+  /** The ids of the cued playlist, or null until YouTube has read it. */
+  getPlaylist(): string[] | null;
 }
 
 interface YTPlayerEvent {
@@ -120,8 +125,39 @@ function loadYouTubeIframeApi(): Promise<YTNamespace> {
   return apiPromise;
 }
 
+/** How often, and for how long, to wait for YouTube to read a playlist. */
+const PLAYLIST_POLL_MS = 250;
+const PLAYLIST_POLLS = 20;
+
+/**
+ * The sync layer's handle, plus what only a YouTube player can do.
+ *
+ * Kept apart from PlayerHandle so the sync layer and the local-file player
+ * never have to pretend to know about playlists.
+ */
+export interface YouTubePlayerHandle extends PlayerHandle {
+  /**
+   * The video ids in a public playlist, read by the player itself so no API
+   * key is needed. Empty when YouTube could not read it within five seconds.
+   *
+   * Whatever was cued before is put back afterwards, at the same place and
+   * playing if it was, so the sync layer -- which believes that video is still
+   * loaded -- is not left talking to a player showing something else.
+   */
+  expandPlaylist(listId: string): Promise<string[]>;
+  /** Length of the cued video in seconds, or null before YouTube knows it. */
+  duration(): number | null;
+}
+
+/** What the player was doing when a playlist borrowed it. */
+interface Parked {
+  videoId: string | null;
+  at: number;
+  playing: boolean;
+}
+
 export const YouTubePlayer = forwardRef<
-  PlayerHandle,
+  YouTubePlayerHandle,
   {
     onReady?: () => void;
     onStateChange?: (playing: boolean) => void;
@@ -138,8 +174,19 @@ export const YouTubePlayer = forwardRef<
      */
     onStarted?: () => void;
     onError?: (code: number) => void;
+    /**
+     * The video reached its end, with the id of the video that ended.
+     *
+     * Once per ending: YouTube may repeat ENDED, and every repeat would move a
+     * music queue on by another song. The id lets a caller notice that the
+     * other screen has already moved past that song.
+     */
+    onEnded?: (videoId: string | null) => void;
   }
->(function YouTubePlayer({ onReady, onStateChange, onStarted, onError }, ref) {
+>(function YouTubePlayer(
+  { onReady, onStateChange, onStarted, onError, onEnded },
+  ref,
+) {
   const containerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayerInstance | null>(null);
   const readyRef = useRef(false);
@@ -154,6 +201,16 @@ export const YouTubePlayer = forwardRef<
   const onStateChangeRef = useRef(onStateChange);
   const onStartedRef = useRef(onStarted);
   const onErrorRef = useRef(onError);
+  const onEndedRef = useRef(onEnded);
+  // Set on ENDED and cleared on the next PLAYING, so one ending is reported
+  // once however many times YouTube announces it.
+  const endReported = useRef(false);
+  // The last video cued through the handle, which is the one an ENDED is about.
+  const cuedId = useRef<string | null>(null);
+  // Non-null while a playlist is being read. The sync layer keeps sending
+  // commands meanwhile; they are written here instead of reaching a player
+  // that is showing the playlist, and applied when the video is put back.
+  const parked = useRef<Parked | null>(null);
   // A correction seeks, and YouTube answers a seek with another PLAYING event.
   // Reporting that as a fresh start would ask for another correction, which
   // seeks again. A real start-up happens once.
@@ -163,6 +220,7 @@ export const YouTubePlayer = forwardRef<
     onStateChangeRef.current = onStateChange;
     onStartedRef.current = onStarted;
     onErrorRef.current = onError;
+    onEndedRef.current = onEnded;
   });
 
   useEffect(() => {
@@ -221,6 +279,7 @@ export const YouTubePlayer = forwardRef<
             // BUFFERING and CUED are deliberately ignored: reporting either
             // as "paused" would make the sync layer fight the buffer.
             if (event.data === YT.PlayerState.PLAYING) {
+              endReported.current = false;
               onStateChangeRef.current?.(true);
               const at = Date.now();
               if (at - lastStartReport.current >= START_REPORT_GAP_MS) {
@@ -232,6 +291,10 @@ export const YouTubePlayer = forwardRef<
               event.data === YT.PlayerState.ENDED
             ) {
               onStateChangeRef.current?.(false);
+              if (event.data === YT.PlayerState.ENDED && !endReported.current) {
+                endReported.current = true;
+                onEndedRef.current?.(cuedId.current);
+              }
             }
           },
           onError: (event) => {
@@ -260,24 +323,45 @@ export const YouTubePlayer = forwardRef<
     () => ({
       isReady: () => readyRef.current,
       load: (videoId, startSec) => {
+        if (parked.current) {
+          parked.current = { videoId, at: startSec, playing: false };
+          return;
+        }
         if (!readyRef.current || !playerRef.current) return;
+        cuedId.current = videoId;
         // cueVideoById, not loadVideoById: both sides of the call need to
         // start on a shared clock, so only play() is allowed to start it.
         playerRef.current.cueVideoById(videoId, startSec);
       },
       play: () => {
+        if (parked.current) {
+          parked.current.playing = true;
+          return;
+        }
         if (!readyRef.current || !playerRef.current) return;
         playerRef.current.playVideo();
       },
       pause: () => {
+        if (parked.current) {
+          parked.current.playing = false;
+          return;
+        }
         if (!readyRef.current || !playerRef.current) return;
         playerRef.current.pauseVideo();
       },
       seek: (seconds) => {
+        if (parked.current) {
+          parked.current.at = seconds;
+          return;
+        }
         if (!readyRef.current || !playerRef.current) return;
         playerRef.current.seekTo(seconds, true);
       },
       nudge: (seconds) => {
+        if (parked.current) {
+          parked.current.at = seconds;
+          return;
+        }
         if (!readyRef.current || !playerRef.current) return;
         playerRef.current.seekTo(seconds, false);
       },
@@ -296,9 +380,55 @@ export const YouTubePlayer = forwardRef<
         }
       },
       currentTime: () => {
+        if (parked.current) return parked.current.at;
         if (!readyRef.current || !playerRef.current) return 0;
         return playerRef.current.getCurrentTime();
       },
+      duration: () => {
+        if (parked.current || !readyRef.current || !playerRef.current)
+          return null;
+        const seconds = playerRef.current.getDuration();
+        return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
+      },
+      expandPlaylist: (listId) =>
+        new Promise<string[]>((resolve) => {
+          const player = playerRef.current;
+          // One playlist at a time: a second one would park the first one's
+          // playlist as if it were the song to go back to.
+          if (!readyRef.current || !player || parked.current) {
+            resolve([]);
+            return;
+          }
+          const playingState = window.YT?.PlayerState.PLAYING;
+          parked.current = {
+            videoId: cuedId.current,
+            at: player.getCurrentTime(),
+            playing:
+              playingState !== undefined &&
+              player.getPlayerState() === playingState,
+          };
+          player.cuePlaylist({ listType: "playlist", list: listId });
+
+          let polls = 0;
+          const timer = setInterval(() => {
+            polls += 1;
+            const current = playerRef.current;
+            const ids = current?.getPlaylist() ?? null;
+            const found = ids !== null && ids.length > 0;
+            // Unmounted, found, or out of patience: all three end the wait.
+            if (!found && polls < PLAYLIST_POLLS && current) return;
+
+            clearInterval(timer);
+            const back = parked.current;
+            parked.current = null;
+            if (current && back?.videoId) {
+              cuedId.current = back.videoId;
+              current.cueVideoById(back.videoId, back.at);
+              if (back.playing) current.playVideo();
+            }
+            resolve(found ? [...ids] : []);
+          }, PLAYLIST_POLL_MS);
+        }),
     }),
     [],
   );

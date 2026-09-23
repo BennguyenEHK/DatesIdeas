@@ -47,7 +47,7 @@ brake on that; the rule itself is accepted.
 ```sql
 create table pair_keys (
   id          text primary key,           -- random, for revocation
-  pair_id     text not null references pairs(id) on delete cascade,
+  pair_id     uuid not null references pairs(id) on delete cascade,  -- pairs.id is uuid
   key_hash    text not null unique,
   created_at  timestamptz not null default now(),
   last_seen_at timestamptz
@@ -73,7 +73,7 @@ later.
 ```sql
 create table pair_invites (
   code_hash   text primary key,
-  pair_id     text not null references pairs(id) on delete cascade,
+  pair_id     uuid not null references pairs(id) on delete cascade,  -- pairs.id is uuid
   expires_at  timestamptz not null,
   used_at     timestamptz
 );

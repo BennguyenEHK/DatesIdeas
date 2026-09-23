@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildReel } from "@/lib/album/timeline";
 import { addToAlbum } from "@/lib/album/upload";
@@ -29,6 +30,17 @@ export interface RoomAlbumProps {
   onChanged: () => void;
   /** Back to the call, for both of you. */
   onClose: () => void;
+  /** This device is being put on the album by the other screen right now. */
+  joining?: boolean;
+  /** Why joining the album from the other screen failed, or null. */
+  joinError?: string | null;
+  /** Asks the other screen to let this device in again. */
+  onRetryJoin?: () => void;
+  /**
+   * False when nobody in the room is on an album, so there is nobody to be let
+   * in by and the only way forward is to start one.
+   */
+  canBeInvited?: boolean;
 }
 
 type LoadState = "loading" | "ready" | "unauthorized" | "failed";
@@ -53,6 +65,10 @@ export function RoomAlbum({
   onView,
   onChanged,
   onClose,
+  joining = false,
+  joinError = null,
+  onRetryJoin,
+  canBeInvited,
 }: RoomAlbumProps) {
   const [items, setItems] = useState<AlbumItem[]>([]);
   const [state, setState] = useState<LoadState>("loading");
@@ -210,12 +226,44 @@ export function RoomAlbum({
           Opening the album…
         </div>
       ) : state === "unauthorized" ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
-          <p className="text-sm text-[var(--cream)]">This device isn&apos;t on your album yet.</p>
-          <p className="mt-2 max-w-xs text-xs text-[var(--mist)]">
-            Open the album on the other device and scan the season ticket QR.
-          </p>
-        </div>
+        // The other screen is letting this device in, or has just failed to.
+        // Once it has, the room bumps `revision` and the album loads for real.
+        joining ? (
+          <div
+            role="status"
+            className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm
+              text-[var(--mist)]"
+          >
+            Getting you in…
+          </div>
+        ) : joinError !== null ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+            <p className="text-sm text-[var(--mist)]">{joinError}</p>
+            <button
+              type="button"
+              onClick={onRetryJoin}
+              className="text-xs text-[var(--lamp)] underline underline-offset-4"
+            >
+              Try again
+            </button>
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6 text-center">
+            <p className="text-sm text-[var(--cream)]">This device isn&apos;t on your album yet.</p>
+            {canBeInvited === false ? (
+              <Link
+                href="/us/new"
+                className="mt-3 text-xs text-[var(--lamp)] underline underline-offset-4"
+              >
+                Set up your album
+              </Link>
+            ) : (
+              <p className="mt-2 max-w-xs text-xs text-[var(--mist)]">
+                Open the album on the other device and scan the season ticket QR.
+              </p>
+            )}
+          </div>
+        )
       ) : state === "failed" ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <p className="text-sm text-[var(--mist)]">{message}</p>

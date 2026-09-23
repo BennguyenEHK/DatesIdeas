@@ -165,6 +165,49 @@ describe("RoomAlbum", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("says it is getting this device in while the other screen lets it in", async () => {
+    fetchMock.mockResolvedValueOnce(response(401));
+    renderAlbum({ joining: true });
+    expect((await screen.findByRole("status")).textContent).toBe("Getting you in…");
+    expect(screen.queryByText("This device isn't on your album yet.")).toBeNull();
+  });
+
+  it("says why joining failed and asks the other screen again on Try again", async () => {
+    fetchMock.mockResolvedValueOnce(response(401));
+    const onRetryJoin = vi.fn();
+    renderAlbum({ joinError: "Could not join the album", onRetryJoin });
+    expect(await screen.findByText("Could not join the album")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetryJoin).toHaveBeenCalledOnce();
+  });
+
+  it("offers to set up an album when nobody in the room is on one", async () => {
+    fetchMock.mockResolvedValueOnce(response(401));
+    const { onClose } = renderAlbum({ canBeInvited: false });
+    expect(await screen.findByText("This device isn't on your album yet.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Set up your album" }).getAttribute("href")).toBe(
+      "/us/new",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Back to the call" }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("loads the album once this device has joined and revision rises", async () => {
+    fetchMock.mockResolvedValueOnce(response(401));
+    const { rerender } = renderAlbum({ joining: true });
+    await screen.findByText("Getting you in…");
+    rerender(
+      <RoomAlbum
+        view={{ itemId: "older", gear: "frames" }}
+        revision={1}
+        onView={vi.fn()}
+        onChanged={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(await screen.findByRole("region", { name: "Memory sky" })).toBeTruthy();
+  });
+
   it("only notifies the other screen after a love PATCH succeeds", async () => {
     fetchMock
       .mockResolvedValueOnce(response())

@@ -1029,3 +1029,81 @@ describe("a film that has only just started", () => {
     expect(lastMedia()).toBeUndefined();
   });
 });
+
+/**
+ * Skipping ten seconds is shared, like play and pause: one person jumping on
+ * their own would leave the two of you a verse apart.
+ */
+describe("seeking", () => {
+  const sent: PeerMessage[] = [];
+  beforeEach(() => {
+    sent.length = 0;
+  });
+  const send = (m: PeerMessage) => sent.push(m);
+  const lastMedia = () =>
+    [...sent].reverse().find((m) => m.t === "media") as
+      | Extract<PeerMessage, { t: "media" }>
+      | undefined;
+
+  it("moves the player and tells the other side, keeping it playing", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+    act(() => result.current.load(film("abc"), 0));
+    act(() => result.current.playPause());
+    p.calls.length = 0;
+
+    act(() => result.current.seek(70));
+
+    expect(p.calls).toContain("seek:70");
+    expect(lastMedia()?.positionSec).toBe(70);
+    expect(lastMedia()?.playing).toBe(true);
+    expect(result.current.playing).toBe(true);
+  });
+
+  it("keeps a paused film paused", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+    act(() => result.current.load(film("abc"), 20));
+    act(() => result.current.seek(10));
+
+    expect(lastMedia()?.positionSec).toBe(10);
+    expect(lastMedia()?.playing).toBe(false);
+    expect(p.calls).not.toContain("play");
+  });
+
+  it("stops at the start", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+    act(() => result.current.load(film("abc"), 4));
+    act(() => result.current.seek(-6));
+    expect(lastMedia()?.positionSec).toBe(0);
+  });
+
+  it("stops at the end when the length is known", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+    act(() =>
+      result.current.load({ videoId: "film", source: "local", durationSec: 120 }, 115),
+    );
+    act(() => result.current.seek(125));
+    expect(lastMedia()?.positionSec).toBe(120);
+  });
+
+  it("does nothing with no film loaded", () => {
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, send, 0, "watching"),
+    );
+    act(() => result.current.seek(30));
+    expect(lastMedia()).toBeUndefined();
+    expect(p.calls.some((c) => c.startsWith("seek"))).toBe(false);
+  });
+});

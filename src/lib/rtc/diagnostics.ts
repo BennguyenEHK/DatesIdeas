@@ -117,7 +117,49 @@ export interface ReportInput {
   fileChannel: string | null;
   /** The microphone, or null when karaoke was never opened. */
   mic: MicReport | null;
+  /**
+   * How often the call has been torn down and rebuilt. Optional so a report
+   * built without it still prints, with the section saying it is unknown.
+   */
+  recovery?: RecoveryReport | null;
+  /**
+   * What the other side reports about the voice we send them -- the signal the
+   * camera leash is driven by -- or null when their browser sent no report.
+   */
+  theirAudio?: { jitterMs: number | null; lossPct: number | null } | null;
+  /**
+   * Bytes queued on the files channel at the moment of the report. A song
+   * being pushed across the call shows up here, and so does the voice and the
+   * control channel it is starving.
+   */
+  fileBufferedBytes?: number;
+  /**
+   * The camera cap derived from the browser's upload estimate, kbps, or null
+   * before there is an estimate. Shown because it can bind far below the
+   * named budget, and a picture that suddenly goes small is otherwise a mystery.
+   */
+  videoCapKbps?: number | null;
 }
+
+/**
+ * The call's restarts, as the report prints them.
+ *
+ * Here because a call that drops every minute or two looks, from inside it,
+ * exactly like a bad network -- and the fix for a restart loop is the opposite
+ * of the fix for a bad network. Without a count and a reason nobody can tell
+ * which one they were living through.
+ */
+export interface RecoveryReport {
+  restarts: number;
+  /** "disconnected" | "failed" | "peer-restarted", or null when none yet. */
+  lastRestartReason: string | null;
+  sinceLastRestartMs: number | null;
+  /** The longest stretch from losing the connection to having it back. */
+  longestGapMs: number | null;
+}
+
+/** Restarts in one call at which the report stops calling them bad luck. */
+const RESTART_LOOP_COUNT = 3;
 
 const num = (v: unknown): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -311,6 +353,7 @@ export function formatReport(input: ReportInput): string {
   const topology = input.topology;
   const rates = input.rates;
   const sample = input.sample;
+  const recovery = input.recovery ?? null;
   const lines = [
     "PATH",
     `Route: ${topology === null ? "unknown" : topology.relayed ? "relayed" : "direct"}`,
@@ -330,18 +373,26 @@ export function formatReport(input: ReportInput): string {
     `Video up/down: ${whole(rates?.videoUpKbps ?? null, "kbps")} / ${whole(rates?.videoDownKbps ?? null, "kbps")}`,
     `Audio up/down: ${whole(rates?.audioUpKbps ?? null, "kbps")} / ${whole(rates?.audioDownKbps ?? null, "kbps")}`,
     `Audio loss: ${loss(rates?.audioLossPct ?? null)}`,
+    `Video cap from upload estimate: ${whole(input.videoCapKbps ?? null, "kbps")}`,
     `Video size: ${frameSize(sample)}`,
     "DELAY",
     `ICE RTT: ${whole(input.netRttMs, "ms")}`,
     `DataChannel ping: ${whole(input.pingRttMs, "ms")}`,
     `Audio jitter: ${whole(input.audioJitterMs, "ms")}`,
     `Video jitter: ${whole(input.videoJitterMs, "ms")}`,
+    `Their view of our audio: jitter ${whole(input.theirAudio?.jitterMs ?? null, "ms")}, loss ${loss(input.theirAudio?.lossPct ?? null)}`,
     `Audio codec: ${text(input.audioCodec)}`,
     `Activity: ${input.activity === null ? "none" : text(input.activity)}`,
     `Connected for: ${duration(input.connectedForMs)}`,
     "CHANNELS",
     `Sync channel: ${text(input.syncChannel)}`,
     `File channel: ${text(input.fileChannel)}`,
+    `File channel buffered: ${Math.round((input.fileBufferedBytes ?? 0) / 1024)} KB`,
+    "RECOVERY",
+    `Restarts: ${recovery === null ? "unknown" : recovery.restarts}`,
+    `Last restart reason: ${recovery === null ? "unknown" : (recovery.lastRestartReason ?? "none")}`,
+    `Time since last restart: ${recovery === null ? "unknown" : recovery.sinceLastRestartMs === null ? "never" : duration(recovery.sinceLastRestartMs)}`,
+    `Longest gap: ${recovery === null ? "unknown" : recovery.longestGapMs === null ? "none" : duration(recovery.longestGapMs)}`,
     "MICROPHONE",
     `Device: ${input.mic === null ? "not opened" : input.mic.device}`,
     `Settled as: ${input.mic === null ? "not opened" : input.mic.description}`,
@@ -370,12 +421,33 @@ export function formatReport(input: ReportInput): string {
     rates.audioLossPct < 1.0 &&
     input.audioJitterMs !== null &&
     input.audioJitterMs > 400;
-  // Only a relay can hold packets back and deliver them in order. Saying this
-  // about a direct route sent us hunting a TCP relay that was not there.
-  if (heldBack && topology?.relayed === true) {
+  // Only a relay reached over TCP can hold packets back and deliver them in
+  // order. Saying this about a direct route sent us hunting a TCP relay that
+  // was not there, and saying it about a UDP relay did the same: a 1390 ms
+  // round trip with no loss on "udp / udp" is a queue, not a retransmit.
+  const overTcp = topology?.relayProtocol === "tcp" || topology?.relayProtocol === "tls";
+  if (heldBack && topology?.relayed === true && overTcp) {
     lines.push("NOTE: heavy delay with almost no packet loss means packets are being held and reordered rather than dropped - a signature of a TCP-based relay, not a congested network.");
+  } else if (heldBack && topology?.relayed === true) {
+    lines.push("NOTE: heavy delay with almost no packet loss on a UDP relay - nothing is being retransmitted, so packets are queueing somewhere on the path; the link is being asked to carry more than it can.");
   } else if (heldBack) {
     lines.push("NOTE: heavy delay with almost no packet loss on a DIRECT route - nothing is dropping the audio, so it is being buffered. Either the path briefly stalled or the receiver is holding more than it needs.");
+  }
+  // The measured shape of a transpacific evening: direct, far, and the voice
+  // buffered for a third of a second while 2.5 Mbps of camera filled the link.
+  if (
+    topology?.relayed === false &&
+    input.netRttMs !== null &&
+    input.netRttMs > 150 &&
+    input.audioJitterMs !== null &&
+    input.audioJitterMs > 150
+  ) {
+    lines.push("NOTE: a long direct route with heavy audio buffering - the video was probably filling the smaller uplink; the camera is leashed from what the other side hears of our voice, to protect it.");
+  }
+  if (recovery !== null && recovery.restarts >= RESTART_LOOP_COUNT) {
+    lines.push(
+      `NOTE: the call has restarted ${recovery.restarts} times - the route is being torn down and rebuilt; check whether the drops line up with the video budget changes above.`,
+    );
   }
   // The three microphone findings, each of which points somewhere different.
   if (input.mic !== null && input.mic.unmet.length > 0) {

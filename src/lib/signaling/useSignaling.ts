@@ -62,9 +62,12 @@ export interface SignalingHandlers {
   onIce: (candidate: RTCIceCandidateInit) => void;
 }
 
-/** Fast while the handshake is in flight; slow once it is done. */
-const POLL_PAIRING_MS = 500;
-const POLL_IDLE_MS = 5000;
+/**
+ * Fast while a handshake is in flight -- the first one, or an ICE restart
+ * renegotiating a dropped call -- and slow once it is done.
+ */
+export const POLL_PAIRING_MS = 500;
+export const POLL_IDLE_MS = 5000;
 /** A join older than this is a leftover from a previous sitting. */
 const JOIN_FRESHNESS_MS = 2 * 60 * 1000;
 /**
@@ -90,12 +93,19 @@ const REANNOUNCE_MS = 20_000;
  * peer-to-peer and this hook goes quiet. Polling drops to a slow heartbeat
  * once paired, which is only kept at all so an ICE restart can be negotiated
  * if the network drops mid-call.
+ *
+ * `recovering` is that ICE restart. It is a handshake like the first one --
+ * an offer, an answer and a trickle of candidates -- and at the heartbeat rate
+ * each of those waited up to five seconds, so a restart that should take a
+ * second or two became ten to twenty seconds of a frozen call. While it is
+ * true the hook polls at the pairing rate even though it is paired.
  */
 export function useSignaling(
   code: string,
   handlers: SignalingHandlers,
   paired: boolean,
   mediaSettled: boolean,
+  recovering = false,
 ) {
   const [status, setStatus] = useState<SignalStatus>("connecting");
   const handlersRef = useRef(handlers);
@@ -103,6 +113,10 @@ export function useSignaling(
   const identityRef = useRef<string | null>(null);
   const seenPeerRef = useRef<PeerInfo | null>(null);
   const pairedRef = useRef(paired);
+  const recoveringRef = useRef(recovering);
+  // Cuts short a heartbeat wait that was scheduled before recovery began, or
+  // the first restart message could still sit unread for up to five seconds.
+  const wakeRef = useRef<(() => void) | null>(null);
   // Set from either the announce or a later send, so it lives outside the
   // polling effect that both of them have to be able to stop.
   const closedRef = useRef(false);
@@ -110,7 +124,12 @@ export function useSignaling(
   useEffect(() => {
     handlersRef.current = handlers;
     pairedRef.current = paired;
+    recoveringRef.current = recovering;
   });
+
+  useEffect(() => {
+    if (recovering) wakeRef.current?.();
+  }, [recovering]);
 
   const send = useCallback(
     (msg: SignalMessage) => {
@@ -159,6 +178,9 @@ export function useSignaling(
 
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
+    // True while a request is out, so waking the loop cannot start a second
+    // one alongside it; the one in flight reschedules at the new rate anyway.
+    let inFlight = false;
     let lastAnnouncedAt = 0;
     closedRef.current = false;
 
@@ -209,6 +231,7 @@ export function useSignaling(
       // Nothing can arrive in a room nobody is allowed to post to, and this
       // tab may be left open for hours.
       if (stopped || closedRef.current) return;
+      inFlight = true;
       try {
         const res = await fetch(
           `/api/signal?code=${encodeURIComponent(code)}` +
@@ -230,13 +253,15 @@ export function useSignaling(
       } catch {
         // Transient failure. Keep polling; the next tick usually succeeds.
       }
+      inFlight = false;
       if (stopped || closedRef.current) return;
       // Still alone: remind the room. This is what lets a peer that woke from
       // sleep find someone who arrived while it was out.
       if (!pairedRef.current && Date.now() - lastAnnouncedAt >= REANNOUNCE_MS) {
         void announce(false);
       }
-      timer = setTimeout(poll, pairedRef.current ? POLL_IDLE_MS : POLL_PAIRING_MS);
+      const idle = pairedRef.current && !recoveringRef.current;
+      timer = setTimeout(poll, idle ? POLL_IDLE_MS : POLL_PAIRING_MS);
     }
 
     /**
@@ -281,9 +306,16 @@ export function useSignaling(
 
     void poll();
 
+    wakeRef.current = () => {
+      if (stopped || inFlight || closedRef.current) return;
+      clearTimeout(timer);
+      void poll();
+    };
+
     return () => {
       stopped = true;
       clearTimeout(timer);
+      wakeRef.current = null;
     };
     // `status` is read but must not restart the loop; the poll re-reads it.
     // eslint-disable-next-line react-hooks/exhaustive-deps

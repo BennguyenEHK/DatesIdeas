@@ -70,7 +70,7 @@ describe("formatReport", () => {
   });
   it("reports no activity when no activity is open", () => expect(formatReport(empty)).toContain("Activity: none"));
   const heldBackRates = { videoUpKbps: null, videoDownKbps: null, audioUpKbps: null, audioDownKbps: null, audioLossPct: 0.5 };
-  const topologyWith = (relayed: boolean) => ({ relayed, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: true, hasRelay: true, relayProtocols: [] }, pairStates: {} });
+  const topologyWith = (relayed: boolean, relayProtocol: string | null = relayed ? "tcp" : null) => ({ relayed, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: true, hasRelay: true, relayProtocols: [] }, pairStates: {} });
 
   it("blames the relay for held and reordered packets, when there is a relay", () => {
     const r = formatReport({ ...empty, topology: topologyWith(true), rates: heldBackRates, audioJitterMs: 401 });
@@ -86,10 +86,101 @@ describe("formatReport", () => {
     expect(r).toContain("on a DIRECT route");
   });
 
+  it("does NOT blame a TCP relay when the relay is carried over UDP", () => {
+    // The live report that prompted this: "udp / udp", 1390 ms, no loss. A
+    // queue on the path, which the TCP note sent us looking in the wrong place for.
+    const r = formatReport({ ...empty, topology: topologyWith(true, "udp"), rates: heldBackRates, audioJitterMs: 550 });
+    expect(r).not.toContain("TCP-based relay");
+    expect(r).toContain("NOTE: heavy delay with almost no packet loss on a UDP relay");
+  });
+
+  it("blames a relay reached over TLS as it would TCP", () => {
+    const r = formatReport({ ...empty, topology: topologyWith(true, "tls"), rates: heldBackRates, audioJitterMs: 401 });
+    expect(r).toContain("a signature of a TCP-based relay");
+    expect(r).not.toContain("on a UDP relay");
+  });
+
+  it("shows what the other side hears of our voice", () => {
+    expect(formatReport({ ...empty, theirAudio: { jitterMs: 12.4, lossPct: 1.25 } })).toContain("Their view of our audio: jitter 12 ms, loss 1.3%");
+    expect(formatReport(empty)).toContain("Their view of our audio: jitter unknown, loss unknown");
+  });
+
+  it("shows the camera cap taken from the upload estimate", () => {
+    expect(formatReport({ ...empty, videoCapKbps: 80 })).toContain("Video cap from upload estimate: 80 kbps");
+    expect(formatReport(empty)).toContain("Video cap from upload estimate: unknown");
+  });
+
+  it("shows how much of a file is queued on the files channel", () => {
+    expect(formatReport({ ...empty, fileBufferedBytes: 1_048_576 })).toContain("File channel buffered: 1024 KB");
+    expect(formatReport(empty)).toContain("File channel buffered: 0 KB");
+  });
+
   it("says nothing at all when the delay is ordinary", () => {
     const r = formatReport({ ...empty, topology: topologyWith(true), rates: heldBackRates, audioJitterMs: 100 });
     expect(r).not.toContain("held and reordered");
     expect(r).not.toContain("on a DIRECT route");
+  });
+
+  describe("the recovery section", () => {
+    const recovery = { restarts: 2, lastRestartReason: "disconnected", sinceLastRestartMs: 95_000, longestGapMs: 14_000 };
+
+    it("prints every restart line", () => {
+      const r = formatReport({ ...empty, recovery });
+      expect(r).toContain("RECOVERY");
+      expect(r).toContain("Restarts: 2");
+      expect(r).toContain("Last restart reason: disconnected");
+      expect(r).toContain("Time since last restart: 1m 35s");
+      expect(r).toContain("Longest gap: 14s");
+    });
+
+    it("says so plainly when the call has never restarted", () => {
+      const r = formatReport({ ...empty, recovery: { restarts: 0, lastRestartReason: null, sinceLastRestartMs: null, longestGapMs: null } });
+      expect(r).toContain("Restarts: 0");
+      expect(r).toContain("Last restart reason: none");
+      expect(r).toContain("Time since last restart: never");
+      expect(r).toContain("Longest gap: none");
+    });
+
+    it("prints unknown when no recovery data was supplied", () => {
+      const r = formatReport(empty);
+      expect(r).toContain("Restarts: unknown");
+      expect(r).toContain("Longest gap: unknown");
+    });
+
+    it("adds the restart-loop note from the third restart", () => {
+      const r = formatReport({ ...empty, recovery: { ...recovery, restarts: 3 } });
+      expect(r).toContain("NOTE: the call has restarted 3 times - the route is being torn down and rebuilt; check whether the drops line up with the video budget changes above.");
+    });
+
+    it("leaves the note out below three restarts", () => {
+      expect(formatReport({ ...empty, recovery })).not.toContain("NOTE: the call has restarted");
+      expect(formatReport(empty)).not.toContain("NOTE: the call has restarted");
+    });
+  });
+
+  describe("the long direct route note", () => {
+    const note = "NOTE: a long direct route with heavy audio buffering";
+
+    it("appears on a far direct route with a heavily buffered voice", () => {
+      const r = formatReport({ ...empty, topology: topologyWith(false), netRttMs: 292, audioJitterMs: 314 });
+      expect(r).toContain(`${note} - the video was probably filling the smaller uplink; the camera is leashed from what the other side hears of our voice, to protect it.`);
+    });
+
+    it("stays silent on a close direct route, however buffered", () => {
+      expect(formatReport({ ...empty, topology: topologyWith(false), netRttMs: 90, audioJitterMs: 314 })).not.toContain(note);
+    });
+
+    it("stays silent on a far direct route whose voice is not buffered", () => {
+      expect(formatReport({ ...empty, topology: topologyWith(false), netRttMs: 292, audioJitterMs: 100 })).not.toContain(note);
+    });
+
+    it("stays silent on a relayed route, which has its own verdicts", () => {
+      expect(formatReport({ ...empty, topology: topologyWith(true), netRttMs: 292, audioJitterMs: 314 })).not.toContain(note);
+    });
+
+    it("stays silent when the route is not known", () => {
+      expect(formatReport({ ...empty, netRttMs: 292, audioJitterMs: 314 })).not.toContain(note);
+    });
   });
   it("adds the no-reflexive note", () => expect(formatReport({ ...empty, topology: { relayed: false, localType: null, remoteType: null, localAddress: null, remoteAddress: null, protocol: null, relayProtocol: null, availableOutgoingKbps: null, gathering: { types: [], hasReflexive: false, hasRelay: false, relayProtocols: [] }, pairStates: {} } })).toContain("NOTE: no reflexive candidate"));
   it("shows both channel states, since a song and a button do not travel together", () => {

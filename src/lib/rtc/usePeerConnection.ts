@@ -25,12 +25,36 @@ import {
   type TrafficRates,
   type MicReport,
 } from "./diagnostics";
+import { linkFrom } from "./linkFrom";
+import type { LinkSnapshot } from "./linkSnapshot";
 import {
+  readRemoteAudio,
+  remoteAudioHealth,
+  type RemoteAudioHealth,
+  type RemoteAudioSample,
+} from "./remoteAudio";
+import {
+  DISCONNECTED_GRACE_MS,
+  NO_RESTARTS,
+  RESTART_FORGIVEN_AFTER_MS,
+  restartWaitMs,
+  shouldRestart,
+  type RestartReason,
+  type Resilience,
+} from "./reconnect";
+import {
+  advanceHeadroom,
+  advanceLeashHealth,
   applyAudioPriority,
   budgetFor,
+  headroomCapBps,
+  INITIAL_LEASH_HEALTH,
+  leashChanged,
   leashSenders,
-  sameSettings,
-  type LeashSettings,
+  profileFor,
+  type AppliedLeash,
+  type LeashHealthState,
+  type LinkHealth,
   type RouteQuality,
   type VideoMode,
 } from "./videoLeash";
@@ -155,6 +179,14 @@ export interface PeerApi {
   setMicOn: (on: boolean) => void;
   setCamOn: (on: boolean) => void;
   retry: () => void;
+  /** How often this call has had to be rebuilt, and how long it was gone. */
+  resilience: Resilience;
+  /**
+   * The link as the last stats poll measured it, read on demand rather than
+   * held in state: whatever paces a bulk transfer asks many times a second,
+   * and none of those reads should cost a render.
+   */
+  readLink: () => LinkSnapshot;
 }
 
 /** ICE can migrate mid-call, so the route is re-checked rather than sampled once. */
@@ -166,24 +198,19 @@ const PATH_POLL_MS = 3000;
  */
 const ICE_SETTLE_GRACE_MS = 15_000;
 
-/**
- * How long a call may sit in "disconnected" before we go and get it.
- *
- * "disconnected" is limbo, not death: packets stopped arriving, but nothing
- * has formally broken and the browser will often heal it by itself within a
- * second or two. Restarting immediately would tear down calls that were about
- * to recover on their own.
- *
- * But the browser is also allowed to sit there indefinitely, and it does —
- * which is the call that appears frozen and never comes back. Waiting for
- * "failed" is not a plan, because on some networks that transition never
- * arrives. So: long enough for self-healing, short enough that nobody has
- * time to give up and reload the page.
- */
-const DISCONNECTED_GRACE_MS = 4000;
-
 /** How coarsely a measured round trip is bucketed before it can change a decision. */
 const RTT_BUCKET_MS = 50;
+
+/**
+ * RTCDataChannelInit's `priority` is a standard member that TypeScript's DOM
+ * library has not caught up with, so it is declared here rather than cast.
+ */
+type PrioritizedChannelInit = RTCDataChannelInit & {
+  priority?: "very-low" | "low" | "medium" | "high";
+};
+
+const SYNC_CHANNEL: PrioritizedChannelInit = { ordered: true, priority: "high" };
+const FILE_CHANNEL: PrioritizedChannelInit = { ordered: true, priority: "low" };
 
 const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
   video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
@@ -236,6 +263,13 @@ export function usePeerConnection(
   // state rather than a ref because both the camera budget and the jitter
   // buffers have to be re-applied when it changes, and ICE migrates mid-call.
   const [route, setRoute] = useState<RouteQuality | null>(null);
+  // Kept for the whole evening, across restarts and rebuilt connections: the
+  // report is about how the call has been going, not about the current pc.
+  const [resilience, setResilience] = useState<Resilience>(NO_RESTARTS);
+  // True from sending a restart offer until the connection is back. Signalling
+  // runs fast for that whole stretch so the answer and candidates are not
+  // left waiting on a five-second heartbeat.
+  const [restartPending, setRestartPending] = useState(false);
   const [audioSender, setAudioSender] = useState<RTCRtpSender | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -253,8 +287,13 @@ export function usePeerConnection(
   // What the encoder and the buffers were last actually told. The route is
   // recomputed from a wobbling measurement every three seconds; these are what
   // stop that wobble from being handed to a running encoder as if it were news.
-  const appliedLeash = useRef<LeashSettings | null>(null);
+  const appliedLeash = useRef<AppliedLeash | null>(null);
   const appliedTargets = useRef<string | null>(null);
+  // How far the call's own health has tightened the camera beyond what the
+  // route asks for. Declared up here for the same React Compiler reason as
+  // routeRef: buildConnection below resets it for a brand-new connection. An
+  // ICE restart deliberately does not -- see scheduleRestart.
+  const leashHealth = useRef<LeashHealthState>(INITIAL_LEASH_HEALTH);
   const jitterRef = useRef<JitterSample | null>(null);
   const audioRef = useRef<AudioSample | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -265,6 +304,20 @@ export function usePeerConnection(
   // Declared here, above the connection handlers that arm and cancel it: the
   // React Compiler refuses a ref first written inside a closure below it.
   const recoveryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The restart backoff's memory, declared here for the same reason. The
+  // attempt count is only forgiven after a full minute of being connected,
+  // which is what lets a route that fails every minute back off at all.
+  const restartAttempt = useRef(0);
+  const lastRestartAt = useRef<number | null>(null);
+  const forgiveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the connection was last lost, so the gap can be measured on return.
+  const lostAt = useRef<number | null>(null);
+  // The receiver report about our own voice, and the health it last gave.
+  // What the other side hears is the one measurement of our uplink.
+  const remoteAudioRef = useRef<RemoteAudioSample | null>(null);
+  const theirAudioRef = useRef<RemoteAudioHealth | null>(null);
+  // The same buffer figure as the audioJitter state, readable without a render.
+  const lastAudioJitterRef = useRef<number | null>(null);
   // Kept in refs rather than state: nothing renders from them, and a report is
   // only ever built at the instant someone asks for one.
   const topologyRef = useRef<Topology | null>(null);
@@ -395,6 +448,7 @@ export function usePeerConnection(
       iceCandidatePoolSize: 4,
     });
     pcRef.current = pc;
+    leashHealth.current = INITIAL_LEASH_HEALTH;
 
     if (localStream) {
       for (const track of localStream.getTracks()) {
@@ -438,6 +492,60 @@ export function usePeerConnection(
         });
       }
     };
+    /**
+     * Restarts ICE once the grace and the backoff both allow it.
+     *
+     * Deliberately leaves the camera budget where the call's health pushed it.
+     * Resetting it here put 2.5 Mbps straight back onto the uplink that had
+     * just choked, the voice's buffer climbed, an ICE check was missed, and the
+     * connection dropped again a minute later -- the restart was feeding the
+     * very cycle it was meant to end.
+     *
+     * A restart the backoff refuses is deferred to the moment it allows one,
+     * not skipped: a connection that is still down then still needs it.
+     */
+    const scheduleRestart = (reason: RestartReason, graceMs: number) => {
+      // Only the side that made the offer may restart, or both would
+      // renegotiate at once and collide.
+      if (!offeredRef.current) return;
+      const waitMs = restartWaitMs({
+        lastRestartAt: lastRestartAt.current,
+        now: Date.now(),
+        attempt: restartAttempt.current,
+      });
+      cancelRecovery(recoveryTimer);
+      recoveryTimer.current = setTimeout(() => {
+        recoveryTimer.current = null;
+        const check = {
+          connectionState: pc.connectionState,
+          iceConnectionState: pc.iceConnectionState,
+          offerer: offeredRef.current,
+          lastRestartAt: lastRestartAt.current,
+          now: Date.now(),
+          attempt: restartAttempt.current,
+        };
+        // Re-read the live state: the grace is long enough for the browser to
+        // have quietly fixed it, and restarting a healthy connection is the
+        // one way this can make things worse.
+        if (!shouldRestart(check)) {
+          const stillDown =
+            check.connectionState === "disconnected" ||
+            check.connectionState === "failed";
+          if (stillDown && restartWaitMs(check) > 0) scheduleRestart(reason, 0);
+          return;
+        }
+        restartAttempt.current += 1;
+        lastRestartAt.current = check.now;
+        setResilience((r) => ({
+          ...r,
+          restarts: r.restarts + 1,
+          lastRestartReason: reason,
+          lastRestartAt: check.now,
+        }));
+        setRestartPending(true);
+        void restartIce(pc, sendSignalRef.current);
+      }, Math.max(graceMs, waitMs));
+    };
     pc.oniceconnectionstatechange = () => {
       const ice = pc.iceConnectionState;
       // "completed" is the real finish line: every check is done and the final
@@ -448,39 +556,68 @@ export function usePeerConnection(
     };
     pc.onconnectionstatechange = () => {
       switch (pc.connectionState) {
-        case "connected":
+        case "connected": {
           // Whatever the blip was, it healed. Stand the rescue down before it
           // restarts a connection that is now working perfectly well.
           cancelRecovery(recoveryTimer);
+          const now = Date.now();
           // Kept from the FIRST connect, not refreshed on every recovery: the
           // report should say how long the evening has been going, not how
           // long since the last hiccup.
-          connectedAt.current ??= Date.now();
+          connectedAt.current ??= now;
+          if (lostAt.current !== null) {
+            const gap = now - lostAt.current;
+            lostAt.current = null;
+            setResilience((r) => ({
+              ...r,
+              longestGapMs: Math.max(r.longestGapMs ?? 0, gap),
+            }));
+          }
+          setRestartPending(false);
+          // Earlier restarts are forgiven only after a full minute up, so a
+          // route that drops every minute keeps its backoff.
+          cancelRecovery(forgiveTimer);
+          forgiveTimer.current = setTimeout(() => {
+            forgiveTimer.current = null;
+            if (pc.connectionState === "connected") restartAttempt.current = 0;
+          }, RESTART_FORGIVEN_AFTER_MS);
           setState("connected");
           break;
+        }
         case "disconnected":
+          cancelRecovery(forgiveTimer);
+          lostAt.current ??= Date.now();
           setState("reconnecting");
-          // Only the side that made the offer may restart, or both would
-          // renegotiate at once and collide.
-          if (!offeredRef.current || recoveryTimer.current !== null) break;
-          recoveryTimer.current = setTimeout(() => {
-            recoveryTimer.current = null;
-            // Re-read the live state: four seconds is long enough for the
-            // browser to have quietly fixed it, and restarting a healthy
-            // connection is the one way this can make things worse.
-            if (pc.connectionState !== "disconnected") return;
-            void restartIce(pc, sendSignalRef.current);
-          }, DISCONNECTED_GRACE_MS);
+          // A rescue already on its way is left alone; re-arming it on every
+          // flicker would keep pushing the restart further out.
+          if (recoveryTimer.current !== null) break;
+          scheduleRestart("disconnected", DISCONNECTED_GRACE_MS);
           break;
         case "failed":
-          cancelRecovery(recoveryTimer);
+          cancelRecovery(forgiveTimer);
+          lostAt.current ??= Date.now();
           setState("failed");
-          if (offeredRef.current) void restartIce(pc, sendSignalRef.current);
+          // "failed" does not heal by itself, so there is no grace to wait
+          // out -- only the backoff, which replaces any pending grace timer.
+          scheduleRestart("failed", 0);
           break;
       }
     };
     return pc;
   }, [localStream, wireDataChannel, wireFileChannel]);
+
+  // The other side rebuilt the call: either restarted ICE on the connection
+  // we share, or came back on a new one. Counted so this side's report shows
+  // the drops as well, not only the side that happened to be offering.
+  const countPeerRestart = useCallback(() => {
+    const now = Date.now();
+    setResilience((r) => ({
+      ...r,
+      restarts: r.restarts + 1,
+      lastRestartReason: "peer-restarted",
+      lastRestartAt: now,
+    }));
+  }, []);
 
   const signaling = useSignaling(
     code,
@@ -490,13 +627,20 @@ export function usePeerConnection(
       // they left, and no part of it can be reused -- including the flag that
       // says we already offered, which is what used to leave this side
       // certain it had done its job while the other waited forever.
-      if (restarted) dropConnection();
+      if (restarted) {
+        dropConnection();
+        countPeerRestart();
+      }
       if (!iOffer || offeredRef.current) return;
       offeredRef.current = true;
       setState("connecting");
       const pc = pcRef.current ?? (await buildConnection());
-      wireDataChannel(pc.createDataChannel("sync", { ordered: true }));
-      wireFileChannel(pc.createDataChannel("files", { ordered: true }));
+      // Both channels share one SCTP association and one congestion window.
+      // Without priorities a song being pushed across the files channel sat
+      // a megabyte deep in front of every control message, and a ping took
+      // fourteen seconds. A browser that ignores the member loses nothing.
+      wireDataChannel(pc.createDataChannel("sync", SYNC_CHANNEL));
+      wireFileChannel(pc.createDataChannel("files", FILE_CHANNEL));
       const offer = await pc.createOffer();
       // Rewritten before it is set, because there is no API for these: the
       // browser negotiates audio for a phone call and this is the only place
@@ -506,8 +650,20 @@ export function usePeerConnection(
       sendSignalRef.current({ kind: "offer", sdp: offerSdp, from: getIdentity() });
     },
     onOffer: async (sdp) => {
-      setState("connecting");
-      const pc = pcRef.current ?? (await buildConnection());
+      const existing = pcRef.current;
+      if (existing === null) {
+        setState("connecting");
+      } else {
+        // An offer on a connection that already exists is the other side's
+        // ICE restart. Counted here so the answering side's report shows the
+        // drops too. The state is deliberately NOT set to "connecting": if
+        // this side never lost the route, its connection stays "connected"
+        // through the restart, no state change ever fires, and the call would
+        // read "connecting" for the rest of the evening. The camera budget is
+        // kept for the same reason as on the offering side.
+        countPeerRestart();
+      }
+      const pc = existing ?? (await buildConnection());
       await pc.setRemoteDescription({ type: "offer", sdp });
       await drainIce(pc, pendingIce.current);
       const answer = await pc.createAnswer();
@@ -536,6 +692,12 @@ export function usePeerConnection(
     // held back by a five-second poll. Slow down only once ICE is finished.
     iceSettled,
     mediaSettled,
+    // "connecting" is included for the answering side of a rebuilt
+    // connection, which trickles its candidates while already paired.
+    state === "reconnecting" ||
+      state === "failed" ||
+      state === "connecting" ||
+      restartPending,
   );
   useEffect(() => {
     sendSignalRef.current = signaling.send;
@@ -582,9 +744,11 @@ export function usePeerConnection(
       setRoute((current) => (sameRoute(current, nextRoute) ? current : nextRoute));
 
       const traffic = readTraffic(stats);
+      let windowLoss: number | null = null;
       if (traffic) {
         ratesRef.current = trafficRates(trafficRef.current, traffic);
         trafficRef.current = traffic;
+        windowLoss = ratesRef.current.audioLossPct;
       }
 
       const sample = readJitter(stats);
@@ -594,12 +758,64 @@ export function usePeerConnection(
       }
 
       const audio = readAudio(stats);
+      let voiceBuffered: number | null = null;
       if (audio) {
-        setAudioJitter(audioJitterMs(audioRef.current, audio));
+        voiceBuffered = audioJitterMs(audioRef.current, audio);
+        setAudioJitter(voiceBuffered);
+        lastAudioJitterRef.current = voiceBuffered;
         setAudioKbps(audioBitrateKbps(audioRef.current, audio));
         audioRef.current = audio;
       }
       setAudioFormat(readAudioFormat(stats));
+
+      const remoteAudio = readRemoteAudio(stats);
+      let theirs: RemoteAudioHealth | null = null;
+      if (remoteAudio) {
+        theirs = remoteAudioHealth(remoteAudioRef.current, remoteAudio);
+        remoteAudioRef.current = remoteAudio;
+      }
+      theirAudioRef.current = theirs;
+
+      // The route rules guess from distance; this corrects from evidence --
+      // what the other side hears of our voice, because that is the only
+      // measurement of the uplink our camera shares with it. The voice
+      // arriving HERE describes their uplink, so it only stands in for a
+      // browser that sends back no receiver report.
+      const linkHealth: LinkHealth =
+        theirs !== null
+          ? {
+              audioJitterMs: theirs.jitterMs,
+              audioLossPct: theirs.lossPct,
+              source: "their-report",
+            }
+          : {
+              audioJitterMs: voiceBuffered,
+              audioLossPct: windowLoss,
+              source: "our-buffer",
+            };
+      const now = Date.now();
+      // Then the measurement the named budgets can only guess at: what the
+      // browser itself thinks this side can upload right now.
+      const health = advanceHeadroom(
+        advanceLeashHealth(leashHealth.current, linkHealth, now),
+        topologyRef.current?.availableOutgoingKbps ?? null,
+        now,
+      );
+      const moved =
+        health.level !== leashHealth.current.level ||
+        health.capKbps !== leashHealth.current.capKbps;
+      leashHealth.current = health;
+      if (moved) {
+        applyRouteDecisions(
+          pc,
+          routeRef.current,
+          modeRef.current,
+          receiversRef.current,
+          appliedLeash,
+          appliedTargets,
+          health,
+        );
+      }
     };
 
     void sample();
@@ -612,8 +828,10 @@ export function usePeerConnection(
 
   useEffect(() => {
     const pending = recoveryTimer;
+    const forgive = forgiveTimer;
     return () => {
       cancelRecovery(pending);
+      cancelRecovery(forgive);
       clockRef.current?.stop();
       dcRef.current?.close();
       fileDcRef.current?.close();
@@ -651,8 +869,34 @@ export function usePeerConnection(
           connectedAt.current === null ? null : Date.now() - connectedAt.current,
         syncChannel: dcRef.current?.readyState ?? null,
         fileChannel: fileDcRef.current?.readyState ?? null,
+        fileBufferedBytes: fileDcRef.current?.bufferedAmount ?? 0,
+        videoCapKbps: (() => {
+          const cap = headroomCapBps(leashHealth.current.capKbps);
+          return cap === null ? null : cap / 1000;
+        })(),
+        theirAudio: theirAudioRef.current,
+        recovery: {
+          restarts: resilience.restarts,
+          lastRestartReason: resilience.lastRestartReason,
+          sinceLastRestartMs:
+            resilience.lastRestartAt === null
+              ? null
+              : Date.now() - resilience.lastRestartAt,
+          longestGapMs: resilience.longestGapMs,
+        },
       }),
-    [path, rtt, audioJitter, jitterMs, audioFormat, turnDegraded],
+    [path, rtt, audioJitter, jitterMs, audioFormat, turnDegraded, resilience],
+  );
+
+  const readLink = useCallback(
+    () =>
+      linkFrom(
+        topologyRef.current,
+        ratesRef.current,
+        lastAudioJitterRef.current,
+        theirAudioRef.current,
+      ),
+    [],
   );
 
   /**
@@ -705,6 +949,7 @@ export function usePeerConnection(
       receiversRef.current,
       appliedLeash,
       appliedTargets,
+      leashHealth.current,
     );
   }, []);
 
@@ -727,6 +972,7 @@ export function usePeerConnection(
       receiversRef.current,
       appliedLeash,
       appliedTargets,
+      leashHealth.current,
     );
   }, [route]);
 
@@ -756,6 +1002,10 @@ export function usePeerConnection(
    */
   const dropConnection = useCallback(() => {
     cancelRecovery(recoveryTimer);
+    cancelRecovery(forgiveTimer);
+    restartAttempt.current = 0;
+    lastRestartAt.current = null;
+    setRestartPending(false);
     connectedAt.current = null;
     topologyRef.current = null;
     trafficRef.current = null;
@@ -774,10 +1024,14 @@ export function usePeerConnection(
     receiversRef.current = [];
     appliedLeash.current = null;
     appliedTargets.current = null;
+    leashHealth.current = INITIAL_LEASH_HEALTH;
     setAudioSender(null);
     setRoute(null);
     jitterRef.current = null;
     audioRef.current = null;
+    remoteAudioRef.current = null;
+    theirAudioRef.current = null;
+    lastAudioJitterRef.current = null;
     setRemoteStream(null);
     setPath(null);
     setJitterMs(null);
@@ -788,6 +1042,10 @@ export function usePeerConnection(
 
   const retry = useCallback(() => {
     cancelRecovery(recoveryTimer);
+    cancelRecovery(forgiveTimer);
+    restartAttempt.current = 0;
+    lastRestartAt.current = null;
+    setRestartPending(false);
     connectedAt.current = null;
     topologyRef.current = null;
     trafficRef.current = null;
@@ -803,6 +1061,7 @@ export function usePeerConnection(
     receiversRef.current = [];
     appliedLeash.current = null;
     appliedTargets.current = null;
+    leashHealth.current = INITIAL_LEASH_HEALTH;
     setAudioSender(null);
     setRoute(null);
     setRemoteStream(null);
@@ -810,6 +1069,9 @@ export function usePeerConnection(
     setJitterMs(null);
     jitterRef.current = null;
     audioRef.current = null;
+    remoteAudioRef.current = null;
+    theirAudioRef.current = null;
+    lastAudioJitterRef.current = null;
     setIceSettled(false);
     setState("idle");
     // Re-arm the media gate so the next attempt cannot announce itself
@@ -848,6 +1110,8 @@ export function usePeerConnection(
     setMicOn,
     setCamOn,
     retry,
+    resilience,
+    readLink,
   };
 }
 
@@ -899,13 +1163,20 @@ function applyRouteDecisions(
   route: RouteQuality | null,
   mode: VideoMode,
   receivers: readonly RTCRtpReceiver[],
-  appliedLeash: { current: LeashSettings | null },
+  appliedLeash: { current: AppliedLeash | null },
   appliedTargets: { current: string | null },
+  health: LeashHealthState,
 ): void {
-  const budget = budgetFor(mode, route);
-  if (appliedLeash.current === null || !sameSettings(appliedLeash.current, budget)) {
-    appliedLeash.current = budget;
-    void leashSenders(pc.getSenders(), mode, route);
+  const capBps = headroomCapBps(health.capKbps);
+  const next: AppliedLeash = {
+    profile: profileFor(mode, route, health.level),
+    settings: budgetFor(mode, route, health.level, capBps),
+  };
+  // leashChanged is sameSettings plus a tolerance for the cap: a bitrate
+  // that moved less than a fifth because the estimate wobbled is not news.
+  if (leashChanged(appliedLeash.current, next)) {
+    appliedLeash.current = next;
+    void leashSenders(pc.getSenders(), mode, route, health.level, capBps);
   }
 
   // The buffers get the same treatment, keyed on the two targets they resolve

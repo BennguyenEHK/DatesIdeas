@@ -3,6 +3,8 @@ import { renderHook, act } from "@testing-library/react";
 import { useTrackTransfer, type ReceivedTrack } from "./useTrackTransfer";
 import type { PeerMessage } from "@/lib/rtc/protocol";
 import { CHUNK_BYTES } from "@/lib/rtc/fileChannel";
+import { EMPTY_LINK, type LinkSnapshot } from "@/lib/rtc/linkSnapshot";
+import { TRANSFER_UNKNOWN_KBPS } from "./transferPacer";
 
 /**
  * Sending a track to someone who may not be there.
@@ -13,8 +15,11 @@ import { CHUNK_BYTES } from "@/lib/rtc/fileChannel";
 function setup(options: {
   chunkAccepted?: (attempt: number) => boolean;
   channelOpen?: () => boolean;
+  linkSnapshot?: () => LinkSnapshot;
 } = {}) {
   const sent: ArrayBuffer[] = [];
+  /** When each accepted chunk went, by the (possibly fake) clock. */
+  const sentAt: number[] = [];
   const messages: PeerMessage[] = [];
   const received: ReceivedTrack[] = [];
   let deliver: (chunk: ArrayBuffer) => void = () => {};
@@ -23,7 +28,10 @@ function setup(options: {
   const sendFileChunk = vi.fn((chunk: ArrayBuffer) => {
     attempt += 1;
     const ok = options.chunkAccepted ? options.chunkAccepted(attempt) : true;
-    if (ok) sent.push(chunk);
+    if (ok) {
+      sent.push(chunk);
+      sentAt.push(Date.now());
+    }
     return ok;
   });
 
@@ -39,12 +47,14 @@ function setup(options: {
         };
       },
       onReceived: (t) => received.push(t),
+      linkSnapshot: options.linkSnapshot,
     }),
   );
 
   return {
     view,
     sent,
+    sentAt,
     messages,
     received,
     sendFileChunk,
@@ -338,5 +348,100 @@ describe("receiving a track", () => {
     // The countdown belonged to the abandoned transfer; firing it here would
     // condemn the new one before a single byte of it had a chance to arrive.
     expect(t.view.result.current.error).toBeNull();
+  });
+});
+
+describe("sharing the link with the call", () => {
+  /** Ten chunks: small enough to be quick, long enough for pacing to show. */
+  const TEN_CHUNKS = 10 * CHUNK_BYTES;
+
+  it("paces the song to its share of the link rather than sending flat out", async () => {
+    // The field report: a ~700 kbps relay, and the song sent as fast as the
+    // channel would take it. The voice broke up and the sync ping sat 14.7 s
+    // behind the file. At 30% the song gets 210 kbps, so 160 KB is ~6 s.
+    vi.useFakeTimers();
+    const t = setup({
+      linkSnapshot: () => ({ ...EMPTY_LINK, outgoingKbps: 700 }),
+    });
+    const start = Date.now();
+    let outcome;
+    await act(async () => {
+      const p = t.view.result.current.sendTrack(track(TEN_CHUNKS));
+      await vi.advanceTimersByTimeAsync(60_000);
+      outcome = await p;
+    });
+
+    expect(outcome).toBe("sent");
+    expect(t.sent).toHaveLength(10);
+    const expectedMs = (TEN_CHUNKS * 8) / 210;
+    const tookMs = (t.sentAt.at(-1) ?? Number.NaN) - start;
+    expect(tookMs).toBeGreaterThanOrEqual(expectedMs * 0.75);
+    expect(tookMs).toBeLessThanOrEqual(expectedMs * 1.25);
+  });
+
+  it("sends nothing while the voice is suffering, and resumes once it recovers", async () => {
+    vi.useFakeTimers();
+    let snapshot: LinkSnapshot = {
+      ...EMPTY_LINK,
+      outgoingKbps: 700,
+      theirLossPct: 10,
+    };
+    const t = setup({ linkSnapshot: () => snapshot });
+    let outcome;
+    await act(async () => {
+      const p = t.view.result.current.sendTrack(track(TEN_CHUNKS));
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      // Held for the whole of it: the voice outranks the song.
+      expect(t.sendFileChunk).not.toHaveBeenCalled();
+      expect(t.messages.some((m) => m.t === "track-done")).toBe(false);
+
+      snapshot = { ...snapshot, theirLossPct: 0.5 };
+      await vi.advanceTimersByTimeAsync(60_000);
+      outcome = await p;
+    });
+
+    expect(outcome).toBe("sent");
+    expect(t.sent).toHaveLength(10);
+    expect(t.messages.at(-1)?.t).toBe("track-done");
+  });
+
+  it("still finishes with no link figures at all, at the relay-sized guess", async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const start = Date.now();
+    let outcome;
+    await act(async () => {
+      const p = t.view.result.current.sendTrack(track(TEN_CHUNKS));
+      await vi.advanceTimersByTimeAsync(60_000);
+      outcome = await p;
+    });
+
+    expect(outcome).toBe("sent");
+    expect(t.sent).toHaveLength(10);
+    const expectedMs = (TEN_CHUNKS * 8) / TRANSFER_UNKNOWN_KBPS;
+    const tookMs = (t.sentAt.at(-1) ?? Number.NaN) - start;
+    expect(tookMs).toBeGreaterThanOrEqual(expectedMs * 0.75);
+    expect(tookMs).toBeLessThanOrEqual(expectedMs * 1.25);
+  });
+
+  it("notices the other person leaving while the song is held", async () => {
+    vi.useFakeTimers();
+    let open = true;
+    const t = setup({
+      channelOpen: () => open,
+      linkSnapshot: () => ({ ...EMPTY_LINK, theirJitterMs: 2000 }),
+    });
+    let outcome;
+    await act(async () => {
+      const p = t.view.result.current.sendTrack(track(TEN_CHUNKS));
+      await vi.advanceTimersByTimeAsync(5_000);
+      open = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+      outcome = await p;
+    });
+
+    expect(outcome).toBe("peer-left");
+    expect(t.sendFileChunk).not.toHaveBeenCalled();
   });
 });

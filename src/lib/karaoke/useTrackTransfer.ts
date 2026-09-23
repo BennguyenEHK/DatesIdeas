@@ -7,7 +7,9 @@ import {
   createAssembler,
   type Assembler,
 } from "@/lib/rtc/fileChannel";
+import { EMPTY_LINK, type LinkSnapshot } from "@/lib/rtc/linkSnapshot";
 import type { PeerMessage } from "@/lib/rtc/protocol";
+import { nextSendAt, paceKbps, shouldHold } from "./transferPacer";
 
 /** A track that has fully arrived from the other side. */
 export interface ReceivedTrack {
@@ -98,6 +100,26 @@ const CHANNEL_OPEN_WAIT_MS = 10_000;
  */
 const AFTER_DONE_QUIET_MS = 20_000;
 
+/**
+ * How often a held send looks again at whether the voice has recovered.
+ *
+ * Often enough that the song resumes promptly, and a hold costs nothing but
+ * a timer: no bytes move while it waits.
+ */
+const HOLD_POLL_MS = 250;
+
+/**
+ * How long a pacing rate is trusted before it is read again.
+ *
+ * The estimate it comes from moves on the scale of a stats poll, not a chunk,
+ * so reading it for every one of them would only follow its noise.
+ */
+const RATE_REFRESH_MS = 500;
+
+function unknownLink(): LinkSnapshot {
+  return EMPTY_LINK;
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -118,8 +140,21 @@ export function useTrackTransfer(args: {
   onFileChunk: (handler: (chunk: ArrayBuffer) => void) => () => void;
   /** Called once a track has fully arrived and passed its integrity check. */
   onReceived: (track: ReceivedTrack) => void;
+  /**
+   * What the link can carry and how the voice is faring, read as the song is
+   * sent so it can be paced and held. Without it the song goes at a
+   * relay-sized guess, never flat out.
+   */
+  linkSnapshot?: () => LinkSnapshot;
 }): TrackTransfer {
-  const { sendMessage, sendFileChunk, fileChannelOpen, onFileChunk, onReceived } = args;
+  const {
+    sendMessage,
+    sendFileChunk,
+    fileChannelOpen,
+    onFileChunk,
+    onReceived,
+    linkSnapshot = unknownLink,
+  } = args;
 
   const [incoming, setIncoming] = useState<{
     receivedBytes: number;
@@ -290,7 +325,33 @@ export function useTrackTransfer(args: {
         chunks: chunkCount(track.media.byteLength),
       });
 
-      for (const chunk of chunkTrack(track.media)) {
+      const chunks = chunkTrack(track.media);
+      let kbps = paceKbps(linkSnapshot());
+      let rateReadAt = Date.now();
+      let sendAt = rateReadAt;
+
+      for (const [index, chunk] of chunks.entries()) {
+        // The song gives way to the voice it shares the link with. No bytes
+        // move while the call is struggling, however long that is -- a song
+        // that arrives late is fine, a call that breaks up is not.
+        let link = linkSnapshot();
+        while (shouldHold(link)) {
+          // A hold is not a reason to miss the other person leaving.
+          if (!fileChannelOpen()) {
+            setError(
+              "They dropped out part way through the song. Try loading it again.",
+            );
+            return "peer-left";
+          }
+          await wait(HOLD_POLL_MS);
+          link = linkSnapshot();
+        }
+
+        if (Date.now() - rateReadAt >= RATE_REFRESH_MS) {
+          kbps = paceKbps(link);
+          rateReadAt = Date.now();
+        }
+
         // Retries rather than queues: the channel reports when its buffer is
         // full, and pushing past that is how a data channel gets dropped.
         let waited = 0;
@@ -324,13 +385,24 @@ export function useTrackTransfer(args: {
           await wait(BACKPRESSURE_WAIT_MS);
           waited += BACKPRESSURE_WAIT_MS;
         }
+
+        // Nothing follows the last chunk, so there is nothing to make room for.
+        if (index === chunks.length - 1) break;
+
+        // Spaces the chunks out to the paced rate. Each slot counts from the
+        // previous one, so the time spent sending does not stretch the gaps --
+        // but never from further back than now, so time lost to a hold or to
+        // backpressure is not repaid afterwards as a burst.
+        const now = Date.now();
+        sendAt = Math.max(now, nextSendAt(sendAt, chunk.byteLength, kbps));
+        if (sendAt > now) await wait(sendAt - now);
       }
 
       sendMessage({ t: "track-done", requestId: track.requestId });
       setError(null);
       return "sent";
     },
-    [sendMessage, sendFileChunk, fileChannelOpen],
+    [sendMessage, sendFileChunk, fileChannelOpen, linkSnapshot],
   );
 
   return { incoming, error, handleMessage, sendTrack };

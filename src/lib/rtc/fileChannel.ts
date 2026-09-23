@@ -1,8 +1,16 @@
 /** Keeps each SCTP message comfortably below common implementation limits. */
 export const CHUNK_BYTES = 16 * 1024;
 
-/** Stops the sender from building an unbounded data-channel queue. */
-export const HIGH_WATER_BYTES = 1024 * 1024;
+/**
+ * How much of the song may sit queued in the file channel: four chunks.
+ *
+ * Every data channel on a connection shares one SCTP association, so whatever
+ * is queued here is queued ahead of the sync channel too. At a megabyte, on a
+ * 700 kbps relay, the sync channel's ping measured 14.7 seconds -- a megabyte
+ * is twelve seconds of that link. Four chunks is still enough to keep a fast
+ * link busy between sends, and too little to hold anything else up for long.
+ */
+export const HIGH_WATER_BYTES = 4 * CHUNK_BYTES;
 
 export type AssemblerFailure = "too-many-chunks" | "too-many-bytes" | "size-mismatch";
 

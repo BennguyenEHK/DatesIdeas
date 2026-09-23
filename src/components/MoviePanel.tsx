@@ -5,6 +5,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { youTubeId } from "@/lib/media/youtube";
 import { filmsMatch, type Film } from "@/lib/media/sync";
 import { formatDuration } from "@/lib/history/aggregate";
+import { Volume } from "./Volume";
 
 /**
  * The movie controls, in the bottom letterbox bar under the screen.
@@ -255,37 +256,6 @@ function FilmPicker({
         )}
       </div>
     </form>
-  );
-}
-
-function Volume({
-  value,
-  onChange,
-}: {
-  value: number;
-  onChange: (percent: number) => void;
-}) {
-  const id = useId();
-  return (
-    <div className="flex shrink-0 items-center gap-2">
-      <label htmlFor={id} className="whitespace-nowrap text-[var(--mist)]">
-        Volume
-      </label>
-      <input
-        id={id}
-        type="range"
-        min={0}
-        max={100}
-        step={5}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        aria-valuetext={value === 0 ? "Muted here" : `${value} percent`}
-        className="h-1 w-24 cursor-pointer appearance-none rounded-full bg-[var(--edge)] accent-[var(--lamp)]"
-      />
-      <span className="w-8 tabular-nums text-[var(--mist)]">
-        {value === 0 ? "off" : `${value}%`}
-      </span>
-    </div>
   );
 }
 

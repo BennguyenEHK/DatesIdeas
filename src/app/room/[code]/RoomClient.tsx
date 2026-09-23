@@ -88,8 +88,13 @@ import { useVolumeDuck } from "@/lib/media/useVolumeDuck";
 import { worthDucking } from "@/lib/media/duck";
 import { baseMimeType, uploadKeepsake, type KeepsakeKind } from "@/lib/photo/keepsake";
 import { usePair } from "@/lib/pair/usePair";
+import { useAlbumJoin } from "@/lib/pair/useAlbumJoin";
+import { JoinedNotice } from "@/components/JoinedNotice";
 import { addToAlbum } from "@/lib/album/upload";
 import { usePersistentToggle } from "@/lib/ui/usePersistentToggle";
+import { usePersistentNumber } from "@/lib/ui/usePersistentNumber";
+import { MusicBar } from "@/components/MusicBar";
+import { useMusicControls, useMusicQueue } from "@/lib/music/useMusicQueue";
 import type { MemeId, PeerMessage } from "@/lib/rtc/protocol";
 
 /**
@@ -148,6 +153,14 @@ export function RoomClient({ code }: { code: string }) {
   // result, which would make every read of it a ref read.
   const acceptMedia = useRef<((m: PeerMessage) => void) | null>(null);
   const clearMedia = useRef<(() => void) | null>(null);
+  // Tonight's music queue. Declared here, filled once the hook exists below,
+  // because applyActivity and onMessage are built before the queue is.
+  const stopMusic = useRef<(() => void) | null>(null);
+  const acceptMusic = useRef<((m: PeerMessage) => void) | null>(null);
+  const resyncMusic = useRef<(() => void) | null>(null);
+  // The activity before the one being applied, so applyActivity can tell a
+  // move between the call and the cards from a move into or out of a film.
+  const activityRef = useRef<ActivityId | null>(null);
   // Same reaching-backwards trick: the transfer needs the peer's file channel,
   // so it cannot exist until after the handler that feeds it is written.
   const acceptTrack = useRef<((m: PeerMessage) => void) | null>(null);
@@ -169,6 +182,10 @@ export function RoomClient({ code }: { code: string }) {
   // Twenty-five is the level a duet actually sits on top of; the slider is
   // right there for anyone who wants the room louder.
   const [musicVolume, setMusicVolume] = useState(25);
+  // The music bar's own loudness, apart from karaoke's: a song under a
+  // conversation sits at a different level from a backing track under a
+  // singer, and each is remembered on this device.
+  const [tuneVolume, setTuneVolume] = usePersistentNumber("datesidea.music-volume", 60);
   // A manual room answer, used only after someone overrides automatic detection.
   // It remains device-local because it configures this microphone, not theirs.
   const [noisyChoice, setNoisyChoice] = usePersistentToggle(
@@ -234,6 +251,9 @@ export function RoomClient({ code }: { code: string }) {
   // because onMessage has to be created before the peer connection is.
   const acceptShared = useRef<((m: PeerMessage) => void) | null>(null);
   const resyncShared = useRef<(() => void) | null>(null);
+  // Putting a device without a season ticket on the album of the one with it.
+  // Hears every hello as well as its own three messages.
+  const acceptAlbumJoin = useRef<((m: PeerMessage) => void) | null>(null);
   const acceptLive = useRef<((m: PeerMessage) => void) | null>(null);
   const acceptEnding = useRef<((m: PeerMessage) => void) | null>(null);
   const announceSwitches = useRef<(() => void) | null>(null);
@@ -264,21 +284,31 @@ export function RoomClient({ code }: { code: string }) {
     if (!shouldReplace(activitySwap.current, { showAt, key })) return;
     activitySwap.current = { showAt, key };
     chosenActivity.current = { id, showAt };
+    const previous = activityRef.current;
+    activityRef.current = id;
     setCurrent(id);
-    // Karaoke and movie share one player and one shared position, so the film
-    // is dropped only when leaving BOTH of them -- switching between the two
-    // still starts fresh, which is why the source is cleared either way. Done
-    // here rather than in an effect watching `current`: this is the moment the
-    // activity changes, and reacting to it afterwards is a cascading render.
+    // Karaoke, movie and the music bar all share one player and one shared
+    // position. A move INTO karaoke or the movie hands that player to the film
+    // and puts the music queue to rest; a move OUT of them drops the film. A
+    // move between the plain call and the cards touches neither, which is
+    // what lets a song carry on while the cards come out. Done here rather
+    // than in an effect watching `current`: this is the moment the activity
+    // changes, and reacting to it afterwards is a cascading render.
     // The delay belongs to karaoke alone. Carrying it into the film that comes
     // next would leave the player sitting behind the shared position with
     // nothing on screen to explain why.
+    const wasFilm = previous === "karaoke" || previous === "movie";
+    const isFilm = id === "karaoke" || id === "movie";
     if (id !== "karaoke") {
       latencySamples.current = [];
       setOffsetMs(0);
       setManualOffset(false);
     }
-    if (id !== "karaoke" && id !== "movie") {
+    if (isFilm && !wasFilm) {
+      stopMusic.current?.();
+      clearMedia.current?.();
+    }
+    if (!isFilm && wasFilm) {
       setVideoError(null);
       setFileError(null);
       setMovieFile(null);
@@ -329,6 +359,14 @@ export function RoomClient({ code }: { code: string }) {
         acceptShared.current?.(msg);
         return;
       }
+      if (
+        msg.t === "album-join-request" ||
+        msg.t === "album-join" ||
+        msg.t === "album-joined"
+      ) {
+        acceptAlbumJoin.current?.(msg);
+        return;
+      }
       if (msg.t === "recording") {
         setTheyRecord(msg.on);
         return;
@@ -359,6 +397,15 @@ export function RoomClient({ code }: { code: string }) {
         // album. Both sides do this, and the swap rule keeps the newer choice.
         const announcement = activityAnnouncement(chosenActivity.current);
         if (announcement !== null) peerRef.current?.send(announcement);
+        // And, if only one of the two devices is on the album, the other asks
+        // to join it. Asked on hello because the channel is certainly open.
+        acceptAlbumJoin.current?.(msg);
+        // And tonight's music, so a reload does not lose the queue.
+        resyncMusic.current?.();
+        return;
+      }
+      if (msg.t === "music") {
+        acceptMusic.current?.(msg);
         return;
       }
       if (
@@ -609,7 +656,9 @@ export function RoomClient({ code }: { code: string }) {
   // second apart is invisible in a film and a third of a beat is not, and on
   // YouTube every correction is a seek -- so holding a movie to the song's
   // standard bought nothing anyone could perceive and paid for it in stutters.
-  const precision: SyncPrecision = current === "movie" ? "watching" : "singing";
+  // Only singing needs the tight standard. A film, and music under a
+  // conversation, are held to the film's.
+  const precision: SyncPrecision = current === "karaoke" ? "singing" : "watching";
 
   const track = useKaraokeTrack();
   /**
@@ -716,13 +765,48 @@ export function RoomClient({ code }: { code: string }) {
     clearMedia.current = media.clear;
   });
 
+  // Tonight's music: the queue both of you add to, and the controls that put
+  // whichever song is current onto the shared player. The queue lives only in
+  // the room and is re-sent on hello, so a reload keeps it and closing loses it.
+  const music = useMusicQueue({ send: peer.send, identity: myIdentity, now: togetherNow });
+  const musicControls = useMusicControls(music, media, () => player?.currentTime() ?? 0);
+  const { accept: acceptMusicNow, resync: resyncMusicNow, stop: stopMusicNow } = music;
+  useEffect(() => {
+    acceptMusic.current = acceptMusicNow;
+    resyncMusic.current = resyncMusicNow;
+    stopMusic.current = stopMusicNow;
+  }, [acceptMusicNow, resyncMusicNow, stopMusicNow]);
+  // The bar lives under the plain call and the cards. The two films own the
+  // player everywhere else.
+  const musicBarShowing = current === null || current === "cards";
+
   // Stamped along the bottom of every strip: the evening it came from. The
   // code lasts a day and will never exist again, which is what turns a collage
   // into a keepsake.
-  // Whether this browser holds a season ticket, which decides only whether the
-  // booth offers to keep a strip in the album.
-  const { paired } = usePair();
+  // Whether this browser holds a season ticket, which decides whether the booth
+  // offers to keep a strip in the album, and which side of joining the album
+  // this device is on.
+  const { paired, known: pairKnown, refresh: refreshPair } = usePair();
   const looks = useLooks({ paired });
+
+  // Counts joins, on top of the revisions the other screen sends: a device that
+  // has just joined the album reloads the album and calendar it was refused.
+  const [joinRevision, setJoinRevision] = useState(0);
+  const onJoinedAlbum = useCallback(() => {
+    refreshPair();
+    setJoinRevision((revision) => revision + 1);
+  }, [refreshPair]);
+  const albumJoin = useAlbumJoin({
+    paired,
+    known: pairKnown,
+    send: sendToPeer,
+    connected: peer.state === "connected",
+    onJoined: onJoinedAlbum,
+  });
+  const { accept: acceptJoin } = albumJoin;
+  useEffect(() => {
+    acceptAlbumJoin.current = acceptJoin;
+  }, [acceptJoin]);
 
   const booth = useBooth({
     looks: looks.looks,
@@ -869,6 +953,9 @@ export function RoomClient({ code }: { code: string }) {
     sendFileChunk: peer.sendFileChunk,
     fileChannelOpen: peer.fileChannelOpen,
     onFileChunk: peer.onFileChunk,
+    // The song shares the link with the voice. Pacing reads the link's state
+    // through this so a song never takes more than its share of it.
+    linkSnapshot: peer.readLink,
     onReceived: (arrived) => {
       adoptTrack(arrived);
       // Their play button is locked until this reaches them. Sent before the
@@ -1041,8 +1128,8 @@ export function RoomClient({ code }: { code: string }) {
   // Applied here rather than through the sync layer: loudness is this side's
   // alone, and routing it through shared state would push it to the peer.
   useEffect(() => {
-    player?.setVolume(movie ? movieVolume : musicVolume);
-  }, [player, movie, movieVolume, musicVolume]);
+    player?.setVolume(movie ? movieVolume : musicBarShowing ? tuneVolume : musicVolume);
+  }, [player, movie, musicBarShowing, movieVolume, musicVolume, tuneVolume]);
 
   // The camera goes on a leash for karaoke and comes straight off afterwards.
   //
@@ -1421,44 +1508,41 @@ export function RoomClient({ code }: { code: string }) {
               onRecordingChange={onRecordingChange}
               onFinished={setFinishedRecording}
             />
-            {paired ? (
-              // The album and the calendar, looked at together. Their own
-              // marks -- plain outlines, unlike the lit bubbles -- because they
-              // are the two of you rather than something to do tonight. Pressing
-              // one opens it on both screens with your faces beside it, the way
-              // an activity does, and pressing it again goes back to the call.
-              // Hidden on a device with no season ticket, where neither could
-              // load anything.
-              <>
-                <button
-                  type="button"
-                  onClick={() => onSelectActivity(current === "album" ? null : "album")}
-                  aria-pressed={current === "album"}
-                  aria-label={current === "album" ? "Close our album" : "Open our album together"}
-                  title={current === "album" ? "Close our album" : "Our album"}
-                  className={topMarkClass(current === "album")}
-                >
-                  <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.7">
-                    <rect x="3" y="6" width="18" height="12" rx="1" />
-                    <path d="M3 9h18M3 15h18M7 6v3M11 6v3M15 6v3M19 6v3M7 15v3M11 15v3M15 15v3M19 15v3" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSelectActivity(current === "calendar" ? null : "calendar")}
-                  aria-pressed={current === "calendar"}
-                  aria-label={current === "calendar" ? "Close our calendar" : "Open our calendar together"}
-                  title={current === "calendar" ? "Close our calendar" : "Our calendar"}
-                  className={topMarkClass(current === "calendar")}
-                >
-                  <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.7">
-                    <rect x="3.5" y="5" width="17" height="15" rx="2" />
-                    <path d="M3.5 10h17M8 3v4M16 3v4" />
-                    <path d="M8 14h2M12 14h2M16 14h0.01M8 17h2M12 17h2" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </>
-            ) : null}
+            {/* The album and the calendar, looked at together. Their own
+                marks -- plain outlines, unlike the lit bubbles -- because they
+                are the two of you rather than something to do tonight. Pressing
+                one opens it on both screens with your faces beside it, the way
+                an activity does, and pressing it again goes back to the call.
+                Shown on every device, paired or not: a device without a season
+                ticket is let onto the album by the other screen when the two
+                of you meet, and says "Getting you in…" while that happens. */}
+            <button
+              type="button"
+              onClick={() => onSelectActivity(current === "album" ? null : "album")}
+              aria-pressed={current === "album"}
+              aria-label={current === "album" ? "Close our album" : "Open our album together"}
+              title={current === "album" ? "Close our album" : "Our album"}
+              className={topMarkClass(current === "album")}
+            >
+              <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.7">
+                <rect x="3" y="6" width="18" height="12" rx="1" />
+                <path d="M3 9h18M3 15h18M7 6v3M11 6v3M15 6v3M19 6v3M7 15v3M11 15v3M15 15v3M19 15v3" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelectActivity(current === "calendar" ? null : "calendar")}
+              aria-pressed={current === "calendar"}
+              aria-label={current === "calendar" ? "Close our calendar" : "Open our calendar together"}
+              title={current === "calendar" ? "Close our calendar" : "Our calendar"}
+              className={topMarkClass(current === "calendar")}
+            >
+              <svg aria-hidden viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current" strokeWidth="1.7">
+                <rect x="3.5" y="5" width="17" height="15" rx="2" />
+                <path d="M3.5 10h17M8 3v4M16 3v4" />
+                <path d="M8 14h2M12 14h2M16 14h0.01M8 17h2M12 17h2" strokeLinecap="round" />
+              </svg>
+            </button>
           </div>
           <ActivityBar current={current} onSelect={onSelectActivity} />
           {theyRecord ? (
@@ -1486,6 +1570,35 @@ export function RoomClient({ code }: { code: string }) {
             />
           </div>
         </header>
+        {albumJoin.joinedKeyId !== null ? (
+          <JoinedNotice
+            key={albumJoin.joinedKeyId}
+            onUndo={() => void albumJoin.undoJoined()}
+            onDismiss={albumJoin.dismissJoined}
+          />
+        ) : null}
+
+        {/* Tonight's music, under the bar and above the two of you. Both hear
+            the same song from their own copy; only the queue and the transport
+            cross the call. The films have their own player, so the bar steps
+            aside for them. */}
+        {musicBarShowing && (
+          <MusicBar
+            queue={music.state}
+            {...musicControls}
+            playing={media.playing}
+            positionSec={() => player?.currentTime() ?? 0}
+            durationSec={media.film.durationSec}
+            volume={tuneVolume}
+            onVolume={setTuneVolume}
+            playerRef={setPlayer}
+            onReady={media.correct}
+            onStarted={media.started}
+            onError={setVideoError}
+            identity={myIdentity}
+            names={{ you: "you", them: "them" }}
+          />
+        )}
 
         {/* Who has the stage. Its own row under the bar rather than inside it:
             the bar is about the room, and this is about the next few minutes.
@@ -1691,20 +1804,28 @@ export function RoomClient({ code }: { code: string }) {
                   <div className="h-full overflow-hidden">
                     <RoomAlbum
                       view={together.albumView}
-                      revision={together.albumRevision}
+                      revision={together.albumRevision + joinRevision}
                       onView={together.showAlbum}
                       onChanged={together.albumChanged}
                       onClose={() => onSelectActivity(null)}
+                      joining={albumJoin.joining}
+                      joinError={albumJoin.error}
+                      onRetryJoin={albumJoin.retry}
+                      canBeInvited={!albumJoin.unanswered}
                     />
                   </div>
                 ) : current === "calendar" ? (
                   <div className="h-full overflow-hidden">
                     <RoomCalendar
                       week={together.calendarWeek}
-                      revision={together.calendarRevision}
+                      revision={together.calendarRevision + joinRevision}
                       onWeek={together.showWeek}
                       onChanged={together.calendarChanged}
                       onClose={() => onSelectActivity(null)}
+                      joining={albumJoin.joining}
+                      joinError={albumJoin.error}
+                      onRetryJoin={albumJoin.retry}
+                      canBeInvited={!albumJoin.unanswered}
                     />
                   </div>
                 ) : (

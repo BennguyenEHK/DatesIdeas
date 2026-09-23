@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Whether this browser holds a season ticket.
@@ -13,12 +13,19 @@ import { useEffect, useState } from "react";
  * The ticket itself is HttpOnly, so this cannot be answered in the browser --
  * only the server can see the cookie. That is the whole reason this is a fetch
  * rather than a localStorage read.
+ *
+ * `refresh` asks again. The room calls it after this device has joined the
+ * album from the other screen, when the cookie changed under a page that had
+ * already been told "no". The previous answer stays up until the new one
+ * arrives, so nothing flickers back to "unknown" in between.
  */
-export function usePair(): { paired: boolean; known: boolean } {
+export function usePair(): { paired: boolean; known: boolean; refresh: () => void } {
   const [state, setState] = useState<{ paired: boolean; known: boolean }>({
     paired: false,
     known: false,
   });
+  // Bumped by refresh; the fetch below runs again whenever it changes.
+  const [asked, setAsked] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,7 +44,9 @@ export function usePair(): { paired: boolean; known: boolean } {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [asked]);
 
-  return state;
+  const refresh = useCallback(() => setAsked((count) => count + 1), []);
+
+  return { ...state, refresh };
 }
