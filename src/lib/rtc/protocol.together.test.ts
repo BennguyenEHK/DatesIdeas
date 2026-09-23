@@ -34,6 +34,34 @@ describe("album and calendar messages", () => {
     expect(decode(JSON.stringify({ t: "film", film, sentAt: 5 }))).toBeNull();
   });
 
+  it("decodes the album join handshake and refuses a malformed invitation", () => {
+    const code = "A".repeat(22);
+    expect(decode(encode({ t: "album-join-request" }))).toEqual({ t: "album-join-request" });
+    expect(decode(encode({ t: "album-join", code, expiresAt: 5 }))).toEqual({ t: "album-join", code, expiresAt: 5 });
+    expect(decode(encode({ t: "album-joined", keyId: "key-1" }))).toEqual({ t: "album-joined", keyId: "key-1" });
+    expect(decode(JSON.stringify({ t: "album-join", code: "short", expiresAt: 5 }))).toBeNull();
+    expect(decode(JSON.stringify({ t: "album-join", code, expiresAt: "soon" }))).toBeNull();
+    expect(decode(JSON.stringify({ t: "album-joined", keyId: "" }))).toBeNull();
+  });
+
+  it("decodes tonight's music queue and refuses an index off the end of it", () => {
+    const queue = [
+      { videoId: "dQw4w9WgXcQ", title: "Never Gonna Give You Up", addedBy: "ben" },
+      { videoId: "kJQP7kiw5Fk", title: null, addedBy: "k" },
+    ];
+    const message = { t: "music" as const, queue, index: 1, revision: 3, sentAt: 10 };
+    expect(decode(encode(message))).toEqual(message);
+    expect(decode(encode({ ...message, index: null }))).toEqual({ ...message, index: null });
+    expect(decode(JSON.stringify({ ...message, index: 2 }))).toBeNull();
+    expect(decode(JSON.stringify({ ...message, queue: [{ videoId: "not an id", title: null, addedBy: "k" }] }))).toBeNull();
+    // Unknown fields on a track are dropped rather than carried into state.
+    expect(decode(JSON.stringify({ ...message, index: 0, queue: [{ ...queue[0], extra: "dropped" }] }))).toEqual({
+      ...message,
+      index: 0,
+      queue: [queue[0]],
+    });
+  });
+
   it("decodes the two change notices", () => {
     expect(decode(encode({ t: "album-changed" }))).toEqual({ t: "album-changed" });
     expect(decode(encode({ t: "calendar-changed" }))).toEqual({ t: "calendar-changed" });

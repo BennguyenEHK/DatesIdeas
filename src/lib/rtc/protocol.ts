@@ -171,7 +171,46 @@ export type PeerMessage =
   // The calendar, open in the call. The week showing, as the instant it starts.
   | { t: "calendar-week"; start: string }
   // A time block was added, edited or deleted. The receiver reloads.
-  | { t: "calendar-changed" };
+  | { t: "calendar-changed" }
+  // A device that is not on the album asking the one that is to let it in.
+  // Carries nothing: the answer is decided by the server, not by this message.
+  | { t: "album-join-request" }
+  // A one-time invitation minted by the paired device. The code opens the
+  // album exactly once, for five minutes, and travels only over this channel.
+  | { t: "album-join"; code: string; expiresAt: number }
+  // The invited device has redeemed the code. The key id lets the inviter
+  // show "a new device joined" with Undo, and nothing else.
+  | { t: "album-joined"; keyId: string }
+  // Tonight's music queue, as whole state. Last writer wins by revision, then
+  // sentAt, so two people adding songs at once cannot lose either song for
+  // long: the loser's next add re-sends the merged list.
+  | { t: "music"; queue: MusicTrack[]; index: number | null; revision: number; sentAt: number };
+
+/** One song in tonight's queue. A YouTube id, never a URL. */
+export interface MusicTrack {
+  videoId: string;
+  /** Null until the title has been looked up; the id shows meanwhile. */
+  title: string | null;
+  /** The identity of whoever added it, so the list can say "added by K". */
+  addedBy: string;
+}
+
+/** A YouTube video id: 11 characters from the URL-safe alphabet. */
+export const YOUTUBE_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+/** Longer than any evening needs, short enough to keep a frame small. */
+export const MUSIC_QUEUE_MAX = 200;
+
+function isMusicTrack(v: unknown): v is MusicTrack {
+  if (typeof v !== "object" || v === null) return false;
+  const track = v as Record<string, unknown>;
+  return (
+    isStr(track.videoId) &&
+    YOUTUBE_ID_PATTERN.test(track.videoId) &&
+    (track.title === null || (isStr(track.title) && track.title.length <= 200)) &&
+    isStr(track.addedBy) &&
+    track.addedBy.length <= 64
+  );
+}
 
 /** The longest chat line that will cross, and the longest one anyone may type. */
 export const CHAT_MAX_CHARS = 500;
@@ -348,6 +387,32 @@ export function decode(raw: string): PeerMessage | null {
         : null;
     case "calendar-changed":
       return { t: "calendar-changed" };
+    case "album-join-request":
+      return { t: "album-join-request" };
+    case "album-join":
+      // The code is shaped like a season ticket: 22 base64url characters.
+      return isStr(m.code) && /^[A-Za-z0-9_-]{22}$/.test(m.code) && isNum(m.expiresAt)
+        ? { t: "album-join", code: m.code, expiresAt: m.expiresAt }
+        : null;
+    case "album-joined":
+      return isStr(m.keyId) && m.keyId.length > 0 && m.keyId.length <= 64
+        ? { t: "album-joined", keyId: m.keyId }
+        : null;
+    case "music":
+      return Array.isArray(m.queue) &&
+        m.queue.length <= MUSIC_QUEUE_MAX &&
+        m.queue.every(isMusicTrack) &&
+        (m.index === null || (isNum(m.index) && Number.isInteger(m.index) && m.index >= 0 && m.index < m.queue.length)) &&
+        isNum(m.revision) &&
+        isNum(m.sentAt)
+        ? {
+            t: "music",
+            queue: (m.queue as MusicTrack[]).map((track) => ({ videoId: track.videoId, title: track.title, addedBy: track.addedBy })),
+            index: m.index as number | null,
+            revision: m.revision,
+            sentAt: m.sentAt,
+          }
+        : null;
     default:
       return null;
   }
