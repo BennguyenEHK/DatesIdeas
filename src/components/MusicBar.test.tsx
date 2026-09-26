@@ -1,5 +1,6 @@
 import {
   act,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -363,5 +364,90 @@ describe("the layout", () => {
       .querySelector<HTMLElement>(".bg-\\[var\\(--lamp\\)\\]")!;
     await waitFor(() => expect(line.style.transform).toBe("scaleX(0.25)"));
     await waitFor(() => expect(screen.getByText("1:00 / 4:00")).toBeTruthy());
+  });
+});
+
+describe("MusicBar search", () => {
+  /** Answers /api/music/search with these songs; everything else 404s. */
+  function searchAnswers(results: Array<{ videoId: string; title: string }>) {
+    const fetchMock = vi.fn(async (url: string | URL) =>
+      String(url).startsWith("/api/music/search")
+        ? new Response(
+            JSON.stringify({
+              results: results.map((r) => ({ ...r, channel: "Channel", thumbnail: null })),
+            }),
+          )
+        : new Response("", { status: 404 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("finds songs by name and adds the one chosen", async () => {
+    searchAnswers([
+      { videoId: A, title: "First song" },
+      { videoId: B, title: "Second song" },
+    ]);
+    const onAdd = vi.fn();
+    render(<MusicBar {...props({ onAdd })} />);
+    const field = openLinkField();
+
+    fireEvent.change(field, { target: { value: "first words to find" } });
+    const add = await screen.findByRole(
+      "button",
+      { name: "Add Second song" },
+      { timeout: 2000 },
+    );
+    fireEvent.click(add);
+
+    expect(onAdd).toHaveBeenCalledWith([B]);
+    // Kept open, with the text, so several songs can be added in a row.
+    expect((field as HTMLInputElement).value).toBe("first words to find");
+    expect(screen.getByRole("button", { name: "Added Second song" })).toBeTruthy();
+  });
+
+  it("adds the top result on Enter, and never calls words a bad link", async () => {
+    searchAnswers([{ videoId: A, title: "Top song" }]);
+    const onAdd = vi.fn();
+    render(<MusicBar {...props({ onAdd })} />);
+    const field = openLinkField();
+
+    fireEvent.change(field, { target: { value: "top song words" } });
+    await screen.findByRole("button", { name: "Add Top song" }, { timeout: 2000 });
+    fireEvent.submit(field.closest("form")!);
+
+    expect(onAdd).toHaveBeenCalledWith([A]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("says search is not set up when the server has no key", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 503 })),
+    );
+    render(<MusicBar {...props()} />);
+    fireEvent.change(openLinkField(), { target: { value: "no key words here" } });
+
+    expect(
+      await screen.findByText(
+        "Search isn't set up — paste a link instead",
+        {},
+        { timeout: 2000 },
+      ),
+    ).toBeTruthy();
+  });
+
+  it("lets pasted words land in the field instead of adding anything", () => {
+    const onAdd = vi.fn();
+    render(<MusicBar {...props({ onAdd })} />);
+    const field = openLinkField();
+
+    const event = createEvent.paste(field, {
+      clipboardData: { getData: () => "some song name" },
+    });
+    fireEvent(field, event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onAdd).not.toHaveBeenCalled();
   });
 });
