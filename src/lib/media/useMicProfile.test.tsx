@@ -3,7 +3,12 @@ import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useMicProfile } from "./useMicProfile";
 import type { AudioMode } from "./micProfile";
-import { dbToGain, ECHO_SAFE_MAKEUP_GAIN_DB, MAKEUP_GAIN_DB } from "./micGain";
+import {
+  dbToGain,
+  ECHO_SAFE_MAKEUP_GAIN_DB,
+  MAKEUP_GAIN_DB,
+  SPEAKER_MAKEUP_GAIN_DB,
+} from "./micGain";
 import type { AudioSenderLike, MicSource } from "./micSwap";
 
 function fakeTrack(settings: Record<string, unknown> = {}) {
@@ -13,6 +18,14 @@ function fakeTrack(settings: Record<string, unknown> = {}) {
     getSettings: () => settings as MediaTrackSettings,
     stop,
   } as unknown as MediaStreamTrack & { stop: ReturnType<typeof vi.fn> };
+}
+
+/** The call's own microphone, named the way a wired headset's is. */
+function headsetTrack() {
+  return {
+    ...fakeTrack(),
+    label: "Headset Microphone (Realtek(R) Audio)",
+  } as unknown as MediaStreamTrack;
 }
 
 function fakeStream(track: MediaStreamTrack): MediaStream {
@@ -63,6 +76,12 @@ function stubWebAudio(processed: MediaStreamTrack) {
         release: { value: 0 },
       });
       createGain = () => gain;
+      createBiquadFilter = () => ({
+        ...node(),
+        type: "",
+        frequency: { value: 0 },
+        Q: { value: 0 },
+      });
       createMediaStreamDestination = () => ({
         stream: { getAudioTracks: () => [processed] } as MediaStream,
       });
@@ -83,7 +102,7 @@ describe("useMicProfile", () => {
     const source = fakeSource([fakeTrack()]);
 
     const { result } = renderHook(() =>
-      useMicProfile({ sender: null, mode: null, noisy: false, source }),
+      useMicProfile({ sender: null, mode: null, source }),
     );
 
     expect(source.getUserMedia).not.toHaveBeenCalled();
@@ -100,7 +119,7 @@ describe("useMicProfile", () => {
     const source = fakeSource([track]);
     const { sender, replaceTrack } = fakeSender();
     const { result } = renderHook(() =>
-      useMicProfile({ sender, mode: "headphones", noisy: false, source }),
+      useMicProfile({ sender, mode: "headphones", source }),
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(track));
@@ -112,12 +131,12 @@ describe("useMicProfile", () => {
     const source = fakeSource([fakeTrack(), fakeTrack()]);
     const { sender, replaceTrack } = fakeSender();
     const { rerender } = renderHook(
-      ({ noisy }) => useMicProfile({ sender, mode: "headphones", noisy, source }),
-      { initialProps: { noisy: false } },
+      ({ mode }) => useMicProfile({ sender, mode, source }),
+      { initialProps: { mode: "headphones" as AudioMode } },
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
-    rerender({ noisy: false });
+    rerender({ mode: "headphones" });
     expect(source.getUserMedia).toHaveBeenCalledTimes(1);
   });
 
@@ -127,7 +146,7 @@ describe("useMicProfile", () => {
     const source = fakeSource([first, second]);
     const { sender, replaceTrack } = fakeSender();
     const { rerender } = renderHook(
-      ({ mode }) => useMicProfile({ sender, mode, noisy: false, source }),
+      ({ mode }) => useMicProfile({ sender, mode, source }),
       { initialProps: { mode: "headphones" as AudioMode } },
     );
 
@@ -145,7 +164,7 @@ describe("useMicProfile", () => {
     const original = fakeTrack();
 
     renderHook(() =>
-      useMicProfile({ sender, mode: null, noisy: false, original, source }),
+      useMicProfile({ sender, mode: null, original, source }),
     );
 
     await Promise.resolve();
@@ -161,7 +180,7 @@ describe("useMicProfile", () => {
 
     const { rerender } = renderHook(
       ({ mode }: { mode: AudioMode | null }) =>
-        useMicProfile({ sender, mode, noisy: false, original, source }),
+        useMicProfile({ sender, mode, original, source }),
       { initialProps: { mode: "headphones" as AudioMode | null } },
     );
 
@@ -183,7 +202,7 @@ describe("useMicProfile", () => {
 
     const { rerender } = renderHook(
       ({ mode }: { mode: AudioMode | null }) =>
-        useMicProfile({ sender, mode, noisy: false, original: null, source }),
+        useMicProfile({ sender, mode, original: null, source }),
       { initialProps: { mode: "headphones" as AudioMode | null } },
     );
 
@@ -209,7 +228,6 @@ describe("useMicProfile", () => {
       useMicProfile({
         sender,
         mode: "headphones",
-        noisy: false,
         enabled: false,
         source,
       }),
@@ -229,7 +247,7 @@ describe("useMicProfile", () => {
 
     const { rerender } = renderHook(
       ({ mode }: { mode: AudioMode | null }) =>
-        useMicProfile({ sender, mode, noisy: false, original, source }),
+        useMicProfile({ sender, mode, original, source }),
       { initialProps: { mode: "headphones" as AudioMode | null } },
     );
 
@@ -241,57 +259,66 @@ describe("useMicProfile", () => {
     expect(captured.stop).toHaveBeenCalledOnce();
   });
 
-  it("lifts a headphone microphone by the full makeup gain", async () => {
+  it("lifts a headset microphone under headphones by the full makeup gain", async () => {
     const { gain } = stubWebAudio(fakeTrack());
     const source = fakeSource([fakeTrack()]);
     const { sender, replaceTrack } = fakeSender();
+    const original = headsetTrack();
 
     renderHook(() =>
-      useMicProfile({ sender, mode: "headphones", noisy: false, source }),
+      useMicProfile({ sender, mode: "headphones", original, source }),
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
     expect(gain.gain.value).toBeCloseTo(dbToGain(MAKEUP_GAIN_DB), 5);
+    expect(source.getUserMedia.mock.calls[0][0].audio.echoCancellation).toBe(false);
   });
 
-  it("holds a speaker microphone down to the echo-safe gain", async () => {
-    // Speakers mean echo cancellation is on, which means the compressor is
-    // sitting in front of a residual carrying the other person's voice back.
+  it("keeps cancellation on and the lift echo-safe for a laptop microphone under headphones", async () => {
+    // The laptop's own microphone hears the other person leaking out of the
+    // headphones. With cancellation off and the full lift, that leak went back
+    // to them as their own voice.
     const { gain } = stubWebAudio(fakeTrack());
     const source = fakeSource([fakeTrack()]);
     const { sender, replaceTrack } = fakeSender();
 
     renderHook(() =>
-      useMicProfile({ sender, mode: "speakers", noisy: false, source }),
+      useMicProfile({ sender, mode: "headphones", source }),
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
     expect(gain.gain.value).toBeCloseTo(dbToGain(ECHO_SAFE_MAKEUP_GAIN_DB), 5);
+    expect(source.getUserMedia.mock.calls[0][0].audio.echoCancellation).toBe(true);
+    expect(source.getUserMedia.mock.calls[0][0].audio.noiseSuppression).toBe(false);
   });
 
-  it("holds a noisy speaker microphone down too, because cancellation is still on", async () => {
+  it("adds no lift of its own on speakers", async () => {
+    // Speakers mean the canceller's leftover carries the other person's voice,
+    // and any lift here lifts that leftover with the singer.
     const { gain } = stubWebAudio(fakeTrack());
     const source = fakeSource([fakeTrack()]);
     const { sender, replaceTrack } = fakeSender();
 
     renderHook(() =>
-      useMicProfile({ sender, mode: "speakers", noisy: true, source }),
+      useMicProfile({ sender, mode: "speakers", original: headsetTrack(), source }),
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
-    expect(gain.gain.value).toBeCloseTo(dbToGain(ECHO_SAFE_MAKEUP_GAIN_DB), 5);
+    expect(gain.gain.value).toBeCloseTo(dbToGain(SPEAKER_MAKEUP_GAIN_DB), 5);
   });
 
-  it("reopens when room noise resolves to a different profile", async () => {
+  it("reopens when headphones and speakers differ only in lift", async () => {
+    // A laptop microphone asks the device for the same thing either way, so
+    // the profile key has to include the lift or the switch would do nothing.
     const source = fakeSource([fakeTrack(), fakeTrack()]);
     const { sender, replaceTrack } = fakeSender();
     const { rerender } = renderHook(
-      ({ noisy }) => useMicProfile({ sender, mode: "headphones", noisy, source }),
-      { initialProps: { noisy: false } },
+      ({ mode }) => useMicProfile({ sender, mode, source }),
+      { initialProps: { mode: "headphones" as AudioMode } },
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(1));
-    rerender({ noisy: true });
+    rerender({ mode: "speakers" });
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledTimes(2));
   });
 
@@ -305,7 +332,7 @@ describe("useMicProfile", () => {
     };
     const { sender, replaceTrack } = fakeSender();
     const { result, rerender } = renderHook(
-      ({ mode }) => useMicProfile({ sender, mode, noisy: false, source }),
+      ({ mode }) => useMicProfile({ sender, mode, source }),
       { initialProps: { mode: "headphones" as AudioMode } },
     );
 
@@ -321,7 +348,7 @@ describe("useMicProfile", () => {
     const source = fakeSource([track]);
     const { sender, replaceTrack } = fakeSender();
     const { unmount } = renderHook(() =>
-      useMicProfile({ sender, mode: "headphones", noisy: false, source }),
+      useMicProfile({ sender, mode: "headphones", source }),
     );
 
     await waitFor(() => expect(replaceTrack).toHaveBeenCalledWith(track));
@@ -342,7 +369,7 @@ describe("useMicProfile", () => {
     };
     const { sender, replaceTrack } = fakeSender();
     const { rerender } = renderHook(
-      ({ mode }) => useMicProfile({ sender, mode, noisy: false, source }),
+      ({ mode }) => useMicProfile({ sender, mode, source }),
       { initialProps: { mode: "headphones" as AudioMode } },
     );
 
@@ -373,7 +400,7 @@ describe("under StrictMode's double mount", () => {
     const { sender, replaceTrack } = fakeSender();
 
     const { result } = renderHook(
-      () => useMicProfile({ sender, mode: "headphones", noisy: false, source }),
+      () => useMicProfile({ sender, mode: "headphones", source }),
       { wrapper: StrictMode },
     );
 

@@ -24,16 +24,19 @@ export function classifyOutput(label: string): AudioMode | null {
  * Chooses the output that answers where the operating system is routing sound.
  * Chrome's default entry mirrors that route, so another labelled device must
  * not override it when both are present.
+ *
+ * Nor when the default's name says nothing. Windows often names it after the
+ * driver ("Realtek(R) Audio"), and taking the answer from some other device
+ * then -- a pair of headphones that is connected but not playing -- reads
+ * speakers as headphones. Only a browser that lists no default at all has the
+ * other devices to go on.
  */
 export function detectOutput(
   devices: readonly MediaDeviceInfo[],
 ): AudioMode | null {
   const outputs = devices.filter((device) => device.kind === "audiooutput");
   const defaultOutput = outputs.find((device) => device.deviceId === "default");
-  const defaultMode = defaultOutput
-    ? classifyOutput(defaultOutput.label)
-    : null;
-  if (defaultMode !== null) return defaultMode;
+  if (defaultOutput) return classifyOutput(defaultOutput.label);
 
   for (const device of outputs) {
     const mode = classifyOutput(device.label);

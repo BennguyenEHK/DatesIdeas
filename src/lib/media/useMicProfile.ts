@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { singingProfile, SPEECH_AUDIO, type AudioMode } from "./micProfile";
+import {
+  classifyMic,
+  singingSetup,
+  SPEECH_AUDIO,
+  type AudioMode,
+} from "./micProfile";
 import type { MicSettings } from "./micState";
 import {
   openMic,
@@ -11,31 +16,7 @@ import {
   type MicSource,
   type OpenedMic,
 } from "./micSwap";
-import {
-  boostMic,
-  ECHO_SAFE_MAKEUP_GAIN_DB,
-  MAKEUP_GAIN_DB,
-  type BoostedMic,
-} from "./micGain";
-
-/**
- * How much makeup gain this profile can safely take.
- *
- * Echo cancellation is only ever asked for when the song is coming out of
- * loudspeakers, so the flag doubles as the answer to "can this microphone hear
- * a speaker?". When it can, the compressor is sitting in front of a
- * cancellation residual containing the other person's voice, and lifting a
- * quiet residual is exactly what a compressor does best.
- *
- * Keyed on the flag rather than on the mode name so the two cannot drift
- * apart: any future profile that turns cancellation on gets the safe gain
- * without anyone having to remember this rule.
- */
-function makeupGainFor(profile: MediaTrackConstraints): number {
-  return profile.echoCancellation === true
-    ? ECHO_SAFE_MAKEUP_GAIN_DB
-    : MAKEUP_GAIN_DB;
-}
+import { boostMic, type BoostedMic } from "./micGain";
 
 /**
  * Releases a microphone this hook opened, and the processing stage on top of
@@ -97,7 +78,6 @@ export function useMicProfile(args: {
   sender: AudioSenderLike | null;
   /** null means ordinary talking; a mode means singing. */
   mode: AudioMode | null;
-  noisy: boolean;
   /**
    * The microphone the peer connection opened, to hand back when singing ends.
    *
@@ -121,9 +101,18 @@ export function useMicProfile(args: {
   source?: MicSource | null;
 }): MicProfileState {
   const [state, setState] = useState<MicProfileState>(EMPTY_STATE);
-  const profile = args.mode === null ? SPEECH_AUDIO : singingProfile(args.mode, args.noisy);
-  const profileKey = args.mode === null ? ORIGINAL_MIC : JSON.stringify(profile);
   const original = args.original ?? null;
+  // Which microphone is singing is read from the call's own, before the
+  // singing one is opened: it is the same device, and its name is what says
+  // whether it can hear what is playing.
+  const setup =
+    args.mode === null ? null : singingSetup(args.mode, classifyMic(original?.label));
+  const profile = setup === null ? SPEECH_AUDIO : setup.constraints;
+  const makeupDb = setup?.makeupDb ?? 0;
+  // The lift is part of the key. A laptop microphone asks the device for the
+  // same thing under headphones and on speakers, and without it moving from
+  // one to the other would leave the old lift in place.
+  const profileKey = setup === null ? ORIGINAL_MIC : JSON.stringify(setup);
   const source =
     args.source === undefined
       ? typeof navigator === "undefined"
@@ -284,10 +273,10 @@ export function useMicProfile(args: {
       // microphone goes on the call unchanged, because quiet karaoke is a
       // disappointment and no microphone at all is a ruined evening.
       //
-      // How much lift is safe depends on the profile: a microphone that also
-      // has to hear a loudspeaker gets much less, because the compressor would
-      // otherwise favour the echo over the voice.
-      const boost = boostMic(next.track, undefined, makeupGainFor(profile));
+      // How much lift is safe depends on what the microphone can hear: one
+      // that can hear the other person playing gets less, or none, because the
+      // compressor would otherwise favour the echo over the voice.
+      const boost = boostMic(next.track, undefined, makeupDb);
       const outgoing = boost === null ? next.track : boost.track;
 
       const swapped = await swapMicTrack(sender, outgoing);
@@ -332,7 +321,7 @@ export function useMicProfile(args: {
     };
 
     void replace();
-  }, [args.sender, original, profile, profileKey, source]);
+  }, [args.sender, original, profile, makeupDb, profileKey, source]);
 
   return state;
 }

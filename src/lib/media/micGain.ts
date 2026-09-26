@@ -3,6 +3,7 @@ export interface AudioContextLike {
   createMediaStreamSource(stream: MediaStream): AudioNodeLike;
   createDynamicsCompressor(): CompressorLike;
   createGain(): GainLike;
+  createBiquadFilter(): FilterLike;
   createMediaStreamDestination(): { stream: MediaStream };
   close(): Promise<void>;
   /**
@@ -29,6 +30,12 @@ export interface ParamLike {
 
 export interface GainLike extends AudioNodeLike {
   gain: ParamLike;
+}
+
+export interface FilterLike extends AudioNodeLike {
+  type: string;
+  frequency: ParamLike;
+  Q: ParamLike;
 }
 
 export interface CompressorLike extends AudioNodeLike {
@@ -95,6 +102,30 @@ export const MAKEUP_GAIN_DB = 10;
  */
 export const ECHO_SAFE_MAKEUP_GAIN_DB = 4;
 
+/**
+ * The lift on speakers: none of our own.
+ *
+ * On speakers the canceller's leftover is the other person's voice on its way
+ * back to them, and every decibel added here reaches it as well as the singer.
+ * The compressor still adds the automatic makeup Web Audio builds into it --
+ * roughly 5dB at these settings, and it cannot be switched off -- which is as
+ * much as that leftover can take. Only headphones make a louder voice safe.
+ */
+export const SPEAKER_MAKEUP_GAIN_DB = 0;
+
+/**
+ * Where the rumble filter starts cutting.
+ *
+ * Fans, air conditioning, traffic and a laptop's own hum live below it; the
+ * lowest notes anyone sings live above it. Removing that band is the one
+ * background reduction that cannot touch a voice, which is why it is here and
+ * a noise suppressor is not.
+ */
+export const RUMBLE_CUTOFF_HZ = 90;
+
+/** A plain second-order slope, with no bump at the corner to colour the voice. */
+const RUMBLE_Q = Math.SQRT1_2;
+
 /** Converts a decibel setting to the linear multiplier Web Audio gain parameters require. */
 export function dbToGain(db: number): number {
   return 10 ** (db / 20);
@@ -129,7 +160,8 @@ function closeContext(context: AudioContextLike): void {
 }
 
 /**
- * Adds slow compression and fixed makeup gain to a karaoke microphone.
+ * Takes the rumble out of a karaoke microphone, then adds slow compression and
+ * fixed makeup gain.
  *
  * The gain is a parameter rather than a constant because how much is safe
  * depends on what else the microphone can hear. A singer in headphones can
@@ -161,15 +193,20 @@ export function boostMic(
   }
 
   let source: AudioNodeLike | undefined;
+  let rumble: FilterLike | undefined;
   let compressor: CompressorLike | undefined;
   let gain: GainLike | undefined;
   try {
     const stream = new MediaStream([track]);
     source = context.createMediaStreamSource(stream);
+    rumble = context.createBiquadFilter();
     compressor = context.createDynamicsCompressor();
     gain = context.createGain();
     const destination = context.createMediaStreamDestination();
 
+    rumble.type = "highpass";
+    rumble.frequency.value = RUMBLE_CUTOFF_HZ;
+    rumble.Q.value = RUMBLE_Q;
     compressor.threshold.value = COMPRESSOR_THRESHOLD_DB;
     compressor.knee.value = COMPRESSOR_KNEE_DB;
     compressor.ratio.value = COMPRESSOR_RATIO;
@@ -177,13 +214,16 @@ export function boostMic(
     compressor.release.value = COMPRESSOR_RELEASE_S;
     gain.gain.value = dbToGain(makeupDb);
 
-    source.connect(compressor);
+    // Rumble out first, so the compressor never spends its effort on a fan.
+    source.connect(rumble);
+    rumble.connect(compressor);
     compressor.connect(gain);
     gain.connect(destination);
 
     const processedTrack = destination.stream.getAudioTracks()[0];
     if (processedTrack === undefined) {
       disconnect(source);
+      disconnect(rumble);
       disconnect(compressor);
       disconnect(gain);
       closeContext(context);
@@ -211,6 +251,7 @@ export function boostMic(
         if (closed) return;
         closed = true;
         disconnect(source);
+        disconnect(rumble);
         disconnect(compressor);
         disconnect(gain);
         closeContext(context);
@@ -218,6 +259,7 @@ export function boostMic(
     };
   } catch {
     if (source !== undefined) disconnect(source);
+    if (rumble !== undefined) disconnect(rumble);
     if (compressor !== undefined) disconnect(compressor);
     if (gain !== undefined) disconnect(gain);
     closeContext(context);

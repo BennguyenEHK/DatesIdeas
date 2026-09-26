@@ -186,17 +186,6 @@ export function RoomClient({ code }: { code: string }) {
   // conversation sits at a different level from a backing track under a
   // singer, and each is remembered on this device.
   const [tuneVolume, setTuneVolume] = usePersistentNumber("datesidea.music-volume", 60);
-  // A manual room answer, used only after someone overrides automatic detection.
-  // It remains device-local because it configures this microphone, not theirs.
-  const [noisyChoice, setNoisyChoice] = usePersistentToggle(
-    "datesidea.noisy-room",
-    false,
-  );
-  // Detect by default; a manual choice stays local and can be returned to auto.
-  const [noisyAuto, setNoisyAuto] = usePersistentToggle(
-    "datesidea.noisy-room-auto",
-    true,
-  );
   // What the other person last said about their own microphone and camera.
   // Assumed on until they say otherwise: a peer on a build that never sends
   // this should look like somebody whose devices are working, not like
@@ -1158,17 +1147,19 @@ export function RoomClient({ code }: { code: string }) {
   // a question standing between someone and the song is a worse way to get it.
   const audio = useOutputMode(karaoke);
 
+  // How loud the room is, for the diagnostics report only. Singing no longer
+  // changes anything for a noisy room: the one tool that could -- the
+  // browser's noise suppressor -- is the thing that faded held notes, so it
+  // stays off in every room and the reading is kept as evidence.
   const room = useRoomNoise({
-    active: karaoke && noisyAuto,
+    active: karaoke,
     listening: !media.playing && peer.micOn,
   });
-  const noisy = noisyAuto ? room.noisy : noisyChoice;
 
-  // Retune the live microphone to match how the song is being heard, and how
-  // loud the room is. On speakers echo cancellation stays on, since it is the
-  // only thing stopping the microphone sending back a second copy of the song;
-  // in a noisy room noise suppression goes back on, because otherwise the
-  // canceller is left picking a voice out of a crowd and clamps down on both.
+  // Retune the live microphone to match how the song is being heard and which
+  // microphone is singing. Echo cancellation stays on whenever the microphone
+  // can hear what is playing, since it is the only thing stopping it sending
+  // the other person's voice back to them.
   /**
    * The microphone the call is actually sending.
    *
@@ -1195,7 +1186,6 @@ export function RoomClient({ code }: { code: string }) {
   const mic = useMicProfile({
     sender: peer.audioSender,
     mode: karaoke ? audio.mode : null,
-    noisy,
     // What to hand the call back when the singing stops. Without it the hook
     // has nowhere to return the sender to, and its replacement microphone would
     // have to stay open for the rest of the evening.
@@ -1316,17 +1306,15 @@ export function RoomClient({ code }: { code: string }) {
       unmet: mic.unmet,
       error: mic.error,
       level: describeLevel(level),
-      room: noisyAuto
-        ? `auto, ${noisy ? "noisy" : "quiet"}${
-            room.reading?.snrDb != null
-              ? `, voice ${Math.round(room.reading.snrDb)} dB above the room`
-              : ", not measured yet"
-          }`
-        : `manual, ${noisy ? "noisy" : "quiet"}`,
+      room: `measured, ${room.noisy ? "noisy" : "quiet"}${
+        room.reading?.snrDb != null
+          ? `, voice ${Math.round(room.reading.snrDb)} dB above the room`
+          : ", not measured yet"
+      }`,
       dropouts: level.gates,
       voiceIsolation: mic.settings?.voiceIsolation ?? null,
     };
-  }, [mic, noisy, noisyAuto, room.reading, singing]);
+  }, [mic, room.noisy, room.reading, singing]);
 
   const turn = singingTurn(singing.mine, singing.theirs);
   // Which part this side plays when BOTH of you are singing. `turn` cannot
@@ -1963,13 +1951,6 @@ export function RoomClient({ code }: { code: string }) {
                     audioMode={audio.mode}
                     audioAuto={audio.auto}
                     onChooseAudio={audio.choose}
-                    noisy={noisy}
-                    noisyAuto={noisyAuto}
-                    onNoisy={(next) => {
-                      setNoisyAuto(false);
-                      setNoisyChoice(next);
-                    }}
-                    onNoisyAuto={() => setNoisyAuto(true)}
                     videoError={videoError}
                     musicVolume={musicVolume}
                     onMusicVolume={setMusicVolume}

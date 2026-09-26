@@ -1,13 +1,17 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   tuneMicrophone,
+  classifyMic,
+  singingSetup,
   SPEECH_AUDIO,
-  HEADPHONE_AUDIO,
-  SPEAKER_AUDIO,
-  HEADPHONE_NOISY_AUDIO,
-  SPEAKER_NOISY_AUDIO,
-  singingProfile,
+  HEADSET_AUDIO,
+  OPEN_MIC_AUDIO,
 } from "./micProfile";
+import {
+  ECHO_SAFE_MAKEUP_GAIN_DB,
+  MAKEUP_GAIN_DB,
+  SPEAKER_MAKEUP_GAIN_DB,
+} from "./micGain";
 
 function fakeStream(trackCount = 1) {
   const applied: MediaTrackConstraints[] = [];
@@ -23,102 +27,87 @@ function fakeStream(trackCount = 1) {
   };
 }
 
-describe("audio profiles", () => {
-  it("keeps echo cancellation on for speakers", () => {
-    // The whole point of the speakers profile. Without it the microphone sends
-    // the partner a second copy of the song they are already playing.
-    expect(SPEAKER_AUDIO.echoCancellation).toBe(true);
-  });
-
-  it("drops echo cancellation only in headphones", () => {
-    expect(HEADPHONE_AUDIO.echoCancellation).toBe(false);
-    expect(SPEECH_AUDIO.echoCancellation).toBe(true);
-  });
-
-  it("frees the voice from speech processing in quiet singing modes", () => {
-    // With no room noise to overcome, noise suppression and gain only treat
-    // sustained music as noise or pump across a held note.
-    for (const profile of [HEADPHONE_AUDIO, SPEAKER_AUDIO]) {
-      expect(profile.noiseSuppression).toBe(false);
-      expect(profile.autoGainControl).toBe(false);
+describe("classifyMic", () => {
+  it("knows a microphone worn at the mouth by its name", () => {
+    for (const label of [
+      "Headset Microphone (Realtek(R) Audio)",
+      "Headset (WH-1000XM4 Hands-Free AG Audio)",
+      "AirPods Pro",
+      "Galaxy Buds2 Hands-Free",
+      "USB Headphones Mic",
+    ]) {
+      expect(classifyMic(label)).toBe("headset");
     }
   });
 
-  it("selects the headphones quiet profile", () => {
-    expect(singingProfile("headphones", false)).toBe(HEADPHONE_AUDIO);
-    expect(HEADPHONE_AUDIO).toEqual({
-      channelCount: { ideal: 1 },
-      sampleRate: { ideal: 48000 },
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      voiceIsolation: false,
+  it("treats every other microphone as one that can hear the room", () => {
+    // Laptop arrays sit a few centimetres from the speakers and hear whatever
+    // leaks out of headphones. A generic name could be either, and guessing
+    // "open" only costs a canceller that has little to cancel.
+    for (const label of [
+      "Microphone Array (Realtek(R) Audio)",
+      "Microphone Array (Intel® Smart Sound Technology for Digital Microphones)",
+      "MacBook Pro Microphone",
+      "Microphone (Realtek(R) Audio)",
+      "Default",
+      "",
+    ]) {
+      expect(classifyMic(label)).toBe("open");
+    }
+    expect(classifyMic(null)).toBe("open");
+    expect(classifyMic(undefined)).toBe("open");
+  });
+});
+
+describe("singing profiles", () => {
+  it("never uses the browser's noise suppressor or automatic gain for singing", () => {
+    // Both are built for speech: the suppressor fades a held note as if it
+    // were a fan, and automatic gain pumps across it. Ordinary talking keeps
+    // them; karaoke never does, whatever the room.
+    for (const profile of [HEADSET_AUDIO, OPEN_MIC_AUDIO]) {
+      expect(profile.noiseSuppression).toBe(false);
+      expect(profile.autoGainControl).toBe(false);
+      expect((profile as { voiceIsolation?: boolean }).voiceIsolation).toBe(false);
+    }
+  });
+
+  it("drops echo cancellation only for a microphone worn at the mouth", () => {
+    expect(HEADSET_AUDIO.echoCancellation).toBe(false);
+    expect(OPEN_MIC_AUDIO.echoCancellation).toBe(true);
+  });
+
+  it("keeps cancellation on for a laptop microphone under headphones", () => {
+    // The laptop's own microphone still hears the other person leaking out of
+    // the headphones, and with cancellation off that leak went back to them.
+    expect(singingSetup("headphones", "open")).toEqual({
+      constraints: OPEN_MIC_AUDIO,
+      makeupDb: ECHO_SAFE_MAKEUP_GAIN_DB,
     });
   });
 
-  it("selects the headphones noisy profile", () => {
-    expect(singingProfile("headphones", true)).toBe(HEADPHONE_NOISY_AUDIO);
-    expect(HEADPHONE_NOISY_AUDIO.autoGainControl).toBe(false);
-    expect(HEADPHONE_NOISY_AUDIO.noiseSuppression).toBe(true);
-    expect(HEADPHONE_NOISY_AUDIO).toEqual({
-      channelCount: { ideal: 1 },
-      sampleRate: { ideal: 48000 },
-      echoCancellation: false,
-      noiseSuppression: true,
-      autoGainControl: false,
-      voiceIsolation: false,
+  it("gives the full lift only to a headset microphone under headphones", () => {
+    expect(singingSetup("headphones", "headset")).toEqual({
+      constraints: HEADSET_AUDIO,
+      makeupDb: MAKEUP_GAIN_DB,
     });
   });
 
-  it("selects the speakers quiet profile", () => {
-    expect(singingProfile("speakers", false)).toBe(SPEAKER_AUDIO);
-    expect(SPEAKER_AUDIO).toEqual({
-      channelCount: { ideal: 1 },
-      sampleRate: { ideal: 48000 },
-      echoCancellation: true,
-      noiseSuppression: false,
-      autoGainControl: false,
-      voiceIsolation: false,
-    });
-  });
-
-  it("selects the speakers noisy profile", () => {
-    expect(singingProfile("speakers", true)).toBe(SPEAKER_NOISY_AUDIO);
-    expect(SPEAKER_NOISY_AUDIO.autoGainControl).toBe(false);
-    expect(SPEAKER_NOISY_AUDIO.noiseSuppression).toBe(true);
-    expect(SPEAKER_NOISY_AUDIO).toEqual({
-      channelCount: { ideal: 1 },
-      sampleRate: { ideal: 48000 },
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: false,
-      voiceIsolation: false,
-    });
+  it("adds no lift of its own on speakers, whatever the microphone", () => {
+    // Anything lifted on speakers lifts the canceller's leftover too, which is
+    // the other person's voice coming back to them.
+    for (const mic of ["open", "headset"] as const) {
+      expect(singingSetup("speakers", mic)).toEqual({
+        constraints: OPEN_MIC_AUDIO,
+        makeupDb: SPEAKER_MAKEUP_GAIN_DB,
+      });
+    }
+    expect(SPEAKER_MAKEUP_GAIN_DB).toBe(0);
   });
 
   it("asks every singing profile for one channel at the rate everything else runs at", () => {
-    // Echo cancellation compares what the speakers played against what the
-    // microphone heard. Left unasked, the device offers its own preference --
-    // 44100 on the machine these reports come from -- and the canceller then
-    // has to resample one clock into the other and chase the drift between
-    // them. The person on speakers is the one who pays for that.
-    for (const profile of [
-      HEADPHONE_AUDIO,
-      HEADPHONE_NOISY_AUDIO,
-      SPEAKER_AUDIO,
-      SPEAKER_NOISY_AUDIO,
-    ]) {
+    for (const profile of [HEADSET_AUDIO, OPEN_MIC_AUDIO]) {
       expect(profile.channelCount).toEqual({ ideal: 1 });
       expect(profile.sampleRate).toEqual({ ideal: 48000 });
-    }
-  });
-
-  it("asks for the capture shape as a preference, never as a requirement", () => {
-    // `exact` would let a device that cannot oblige refuse to open at all,
-    // trading a slightly worse microphone for no microphone.
-    for (const profile of [HEADPHONE_AUDIO, SPEAKER_AUDIO]) {
-      expect(profile.channelCount).not.toHaveProperty("exact");
-      expect(profile.sampleRate).not.toHaveProperty("exact");
     }
   });
 
@@ -132,21 +121,21 @@ describe("audio profiles", () => {
 });
 
 describe("tuneMicrophone", () => {
-  it("applies the headphone profile", async () => {
+  it("applies the headset profile", async () => {
     const { stream, applied } = fakeStream();
-    await tuneMicrophone(stream, "headphones");
-    expect(applied).toEqual([HEADPHONE_AUDIO]);
+    await tuneMicrophone(stream, "headphones", "headset");
+    expect(applied).toEqual([HEADSET_AUDIO]);
   });
 
-  it("applies the speaker profile", async () => {
+  it("applies the open-microphone profile", async () => {
     const { stream, applied } = fakeStream();
     await tuneMicrophone(stream, "speakers");
-    expect(applied).toEqual([SPEAKER_AUDIO]);
+    expect(applied).toEqual([OPEN_MIC_AUDIO]);
   });
 
   it("returns to speech when no mode is set", async () => {
     const { stream, applied } = fakeStream();
-    await tuneMicrophone(stream, null, true);
+    await tuneMicrophone(stream, null, "headset");
     expect(applied).toEqual([SPEECH_AUDIO]);
   });
 
@@ -178,9 +167,9 @@ describe("tuneMicrophone", () => {
 
   it("switches cleanly when someone puts headphones on mid-song", async () => {
     const { stream, applied } = fakeStream();
-    await tuneMicrophone(stream, "speakers");
-    await tuneMicrophone(stream, "headphones");
-    expect(applied).toEqual([SPEAKER_AUDIO, HEADPHONE_AUDIO]);
+    await tuneMicrophone(stream, "speakers", "headset");
+    await tuneMicrophone(stream, "headphones", "headset");
+    expect(applied).toEqual([OPEN_MIC_AUDIO, HEADSET_AUDIO]);
   });
 });
 

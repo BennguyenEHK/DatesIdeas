@@ -10,6 +10,7 @@ import {
   dbToGain,
   ECHO_SAFE_MAKEUP_GAIN_DB,
   MAKEUP_GAIN_DB,
+  RUMBLE_CUTOFF_HZ,
   type AudioContextLike,
 } from "./micGain";
 
@@ -36,6 +37,11 @@ function context(destinationTracks: MediaStreamTrack[]): {
     release: { value: number };
   };
   gain: FakeNode & { gain: { value: number } };
+  rumble: FakeNode & {
+    type: string;
+    frequency: { value: number };
+    Q: { value: number };
+  };
   destination: { stream: MediaStream };
   close: ReturnType<typeof vi.fn>;
 } {
@@ -49,6 +55,12 @@ function context(destinationTracks: MediaStreamTrack[]): {
     release: { value: 0 },
   };
   const gain = { ...node(), gain: { value: 0 } };
+  const rumble = {
+    ...node(),
+    type: "",
+    frequency: { value: 0 },
+    Q: { value: 0 },
+  };
   const close = vi.fn<() => Promise<void>>().mockResolvedValue();
   const stream = { getAudioTracks: () => destinationTracks } as MediaStream;
   const destination = { stream };
@@ -58,12 +70,14 @@ function context(destinationTracks: MediaStreamTrack[]): {
       createMediaStreamSource: vi.fn(() => source),
       createDynamicsCompressor: vi.fn(() => compressor),
       createGain: vi.fn(() => gain),
+      createBiquadFilter: vi.fn(() => rumble),
       createMediaStreamDestination: vi.fn(() => destination),
       close,
     },
     source,
     compressor,
     gain,
+    rumble,
     destination,
     close,
   };
@@ -112,7 +126,8 @@ describe("boostMic", () => {
     const boosted = boostMic(sourceTrack, () => fake.context);
 
     expect(boosted?.track).toBe(processedTrack);
-    expect(fake.source.connect).toHaveBeenCalledWith(fake.compressor);
+    expect(fake.source.connect).toHaveBeenCalledWith(fake.rumble);
+    expect(fake.rumble.connect).toHaveBeenCalledWith(fake.compressor);
     expect(fake.compressor.connect).toHaveBeenCalledWith(fake.gain);
     expect(fake.gain.connect).toHaveBeenCalledWith(fake.destination);
     expect(fake.source.connect.mock.invocationCallOrder[0]).toBeLessThan(
@@ -135,6 +150,24 @@ describe("boostMic", () => {
     expect(fake.compressor.attack.value).toBe(COMPRESSOR_ATTACK_S);
     expect(fake.compressor.release.value).toBe(COMPRESSOR_RELEASE_S);
     expect(fake.gain.gain.value).toBeCloseTo(dbToGain(MAKEUP_GAIN_DB));
+    expect(fake.rumble.type).toBe("highpass");
+    expect(fake.rumble.frequency.value).toBe(RUMBLE_CUTOFF_HZ);
+  });
+
+  it("cuts rumble well below the lowest note anyone sings", () => {
+    // Fans, air conditioning and a laptop's own hum sit under 90Hz. The lowest
+    // sung notes sit above it, so nothing a singer does is touched.
+    expect(RUMBLE_CUTOFF_HZ).toBeGreaterThanOrEqual(60);
+    expect(RUMBLE_CUTOFF_HZ).toBeLessThanOrEqual(100);
+  });
+
+  it("releases the rumble filter with the rest of the graph", () => {
+    vi.stubGlobal("MediaStream", class {});
+    const fake = context([{} as MediaStreamTrack]);
+
+    boostMic(sourceTrack, () => fake.context)?.close();
+
+    expect(fake.rumble.disconnect).toHaveBeenCalledOnce();
   });
 
   it("releases the graph only once without stopping the caller's source track", () => {

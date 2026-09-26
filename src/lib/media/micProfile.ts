@@ -2,22 +2,24 @@
  * Microphone settings for talking, and for singing.
  *
  * The browser's default audio processing is built for speech. Noise
- * suppression treats sustained music as noise and ducks it, and automatic gain
- * pumps the level up and down across a held note — so a singing voice arrives
- * thin and gated. Turning them off is what makes quiet-room karaoke sound
- * like a person rather than a phone call. In a noisy room, noise suppression
- * keeps the room down and the compressor carries the voice level, so automatic
- * gain is no longer needed. That avoids automatic-gain pumping across held
- * notes and lifting room noise between phrases.
+ * suppression treats a held note as steady noise and fades it, and automatic
+ * gain pumps the level up and down across it -- so a singing voice arrives
+ * thin, gated and broken on the high notes. Singing therefore never uses
+ * either, in any room. Ordinary talking keeps both.
  *
- * How far the processing can come off depends on where the song is playing.
- * In headphones nothing but the voice reaches the microphone, so all of it can
- * go. On speakers, echo cancellation has to stay: it is the only thing
- * stopping the microphone sending back a second copy of the song, arriving a
- * fraction of a second behind the one already playing. That is why the app
- * asks which it is rather than assuming, and why answering wrongly is worse
- * than not answering at all.
+ * Echo cancellation is the one that depends on the room, and the question it
+ * answers is not "headphones or speakers?" but "can this microphone hear what
+ * is playing?". A laptop's own microphone always can: a few centimetres from
+ * its speakers, and close enough to hear headphones leak. Only a microphone
+ * worn at the mouth, with the sound in the ears, cannot. Leaving cancellation
+ * off for a laptop microphone under headphones is how the other person came to
+ * hear their own voice with nobody on speakers at all.
  */
+import {
+  ECHO_SAFE_MAKEUP_GAIN_DB,
+  MAKEUP_GAIN_DB,
+  SPEAKER_MAKEUP_GAIN_DB,
+} from "./micGain";
 import {
   readMicSettings,
   unmetRequests,
@@ -69,6 +71,23 @@ const CAPTURE_SHAPE: MediaTrackConstraints = {
 /** How the song is reaching this person's ears, which decides what is safe. */
 export type AudioMode = "headphones" | "speakers";
 
+/**
+ * Whether the microphone is worn at the mouth or sits out in the room.
+ *
+ * "open" is the safe answer, and the one given whenever a name does not say
+ * otherwise: it only costs a canceller with little to cancel, where a wrong
+ * "headset" sends the other person their own voice.
+ */
+export type MicKind = "headset" | "open";
+
+const headsetMicWords =
+  /\b(?:headsets?|hands[- ]?free|headphones?|earphones?|earbuds?|earpieces?|airpods?|buds\d*)\b/i;
+
+/** Reads the microphone's kind from the name the browser gives it. */
+export function classifyMic(label: string | null | undefined): MicKind {
+  return label && headsetMicWords.test(label) ? "headset" : "open";
+}
+
 /** Ordinary conversation. Everything on, because everything helps speech. */
 export const SPEECH_AUDIO: MediaTrackConstraints = {
   echoCancellation: true,
@@ -77,10 +96,11 @@ export const SPEECH_AUDIO: MediaTrackConstraints = {
 };
 
 /**
- * Singing in headphones. Nothing reaches the microphone but the voice, so
- * every process can come off and the voice arrives whole.
+ * Singing into a headset microphone with the sound in the ears. Nothing reaches
+ * the microphone but the voice, so every process can come off and the voice
+ * arrives whole.
  */
-export const HEADPHONE_AUDIO: SingingConstraints = {
+export const HEADSET_AUDIO: SingingConstraints = {
   ...CAPTURE_SHAPE,
   echoCancellation: false,
   noiseSuppression: false,
@@ -89,63 +109,40 @@ export const HEADPHONE_AUDIO: SingingConstraints = {
 };
 
 /**
- * Singing on speakers. Echo cancellation STAYS ON — it is the only thing
- * subtracting the song from the microphone, and without it the partner hears
- * the same song twice, a fraction apart. The other two still come off, since
- * they are what thin and gate a singing voice.
+ * Singing into a microphone that can hear what is playing: a laptop's own,
+ * under headphones or beside its speakers. Echo cancellation STAYS ON -- it is
+ * the only thing subtracting the other person's voice before it goes back to
+ * them. Under headphones it has little to do and barely touches the singer.
+ */
+export const OPEN_MIC_AUDIO: SingingConstraints = {
+  ...CAPTURE_SHAPE,
+  echoCancellation: true,
+  noiseSuppression: false,
+  autoGainControl: false,
+  voiceIsolation: false,
+};
+
+/** What the device is asked for, and how much the boost stage may lift it. */
+export interface SingingSetup {
+  constraints: SingingConstraints;
+  makeupDb: number;
+}
+
+/**
+ * Chooses the singing microphone for how the song is heard and which
+ * microphone is singing into it.
  *
- * It will not sound as good as headphones. Cancellation is a prediction, and
- * a loud speaker distorts in ways it cannot predict, so some of the song
- * always gets through. The gap it closes is between "a bit of bleed" and
- * "unlistenable", which is worth having.
+ * The lift follows the echo risk. The full lift only when the microphone
+ * cannot hear anything playing; a little under headphones, where it can hear a
+ * leak; none of our own on speakers, where it hears everything.
  */
-export const SPEAKER_AUDIO: SingingConstraints = {
-  ...CAPTURE_SHAPE,
-  echoCancellation: true,
-  noiseSuppression: false,
-  autoGainControl: false,
-  voiceIsolation: false,
-};
-
-/**
- * Singing in headphones in a noisy room. Echo cancellation can stay off
- * because the song cannot reach the microphone, while noise suppression keeps
- * the room down. The compressor carries the vocal level, so automatic gain is
- * no longer needed; leaving it off avoids pumping across held notes and
- * lifting room noise between phrases.
- */
-export const HEADPHONE_NOISY_AUDIO: SingingConstraints = {
-  ...CAPTURE_SHAPE,
-  echoCancellation: false,
-  noiseSuppression: true,
-  autoGainControl: false,
-  voiceIsolation: false,
-};
-
-/**
- * Singing on speakers in a noisy room. Echo cancellation still has to stay on
- * to subtract the song, while noise suppression gives it a cleaner signal.
- * The compressor carries the vocal level, so automatic gain is no longer
- * needed; leaving it off avoids pumping across held notes and lifting room
- * noise between phrases.
- */
-export const SPEAKER_NOISY_AUDIO: SingingConstraints = {
-  ...CAPTURE_SHAPE,
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: false,
-  voiceIsolation: false,
-};
-
-/** Selects the singing profile for the listening mode and room noise. */
-export function singingProfile(
-  mode: AudioMode,
-  noisy: boolean,
-): MediaTrackConstraints {
-  if (mode === "headphones") {
-    return noisy ? HEADPHONE_NOISY_AUDIO : HEADPHONE_AUDIO;
+export function singingSetup(mode: AudioMode, mic: MicKind): SingingSetup {
+  if (mode === "speakers") {
+    return { constraints: OPEN_MIC_AUDIO, makeupDb: SPEAKER_MAKEUP_GAIN_DB };
   }
-  return noisy ? SPEAKER_NOISY_AUDIO : SPEAKER_AUDIO;
+  return mic === "headset"
+    ? { constraints: HEADSET_AUDIO, makeupDb: MAKEUP_GAIN_DB }
+    : { constraints: OPEN_MIC_AUDIO, makeupDb: ECHO_SAFE_MAKEUP_GAIN_DB };
 }
 
 /**
@@ -180,10 +177,10 @@ export interface TuneResult {
 export async function tuneMicrophone(
   stream: MediaStream | null,
   mode: AudioMode | null,
-  noisy = false,
+  mic: MicKind = "open",
 ): Promise<TuneResult> {
   const requested =
-    mode === null ? SPEECH_AUDIO : singingProfile(mode, noisy);
+    mode === null ? SPEECH_AUDIO : singingSetup(mode, mic).constraints;
   const empty: TuneResult = { requested, settings: null, unmet: [], error: null };
   if (!stream) return empty;
 

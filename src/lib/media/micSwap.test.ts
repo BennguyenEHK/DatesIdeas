@@ -6,7 +6,7 @@ import {
   type AudioSenderLike,
   type MicSource,
 } from "./micSwap";
-import { HEADPHONE_AUDIO } from "./micProfile";
+import { HEADSET_AUDIO } from "./micProfile";
 
 function fakeTrack(settings: Record<string, unknown> = {}) {
   const stop = vi.fn();
@@ -41,19 +41,19 @@ describe("openMic", () => {
       getUserMedia: () => Promise.reject(new Error("permission denied")),
     };
 
-    await expect(openMic(source, HEADPHONE_AUDIO)).resolves.toBeNull();
+    await expect(openMic(source, HEADSET_AUDIO)).resolves.toBeNull();
   });
 
   it("returns null when the source cannot open microphones", async () => {
     const source = {} as MicSource;
 
-    await expect(openMic(source, HEADPHONE_AUDIO)).resolves.toBeNull();
+    await expect(openMic(source, HEADSET_AUDIO)).resolves.toBeNull();
   });
 
   it("does not keep a stream that contains no audio", async () => {
     const source = fakeSource(fakeStream());
 
-    await expect(openMic(source, HEADPHONE_AUDIO)).resolves.toBeNull();
+    await expect(openMic(source, HEADSET_AUDIO)).resolves.toBeNull();
   });
 
   it("opens the requested profile and reports the settled microphone", async () => {
@@ -67,7 +67,7 @@ describe("openMic", () => {
     const stream = fakeStream([track]);
     const source = fakeSource(stream);
 
-    await expect(openMic(source, HEADPHONE_AUDIO)).resolves.toEqual({
+    await expect(openMic(source, HEADSET_AUDIO)).resolves.toEqual({
       track,
       stream,
       settings: {
@@ -81,7 +81,7 @@ describe("openMic", () => {
       },
       unmet: [],
     });
-    expect(source.getUserMedia).toHaveBeenCalledWith({ audio: HEADPHONE_AUDIO });
+    expect(source.getUserMedia).toHaveBeenCalledWith({ audio: HEADSET_AUDIO });
   });
 
   it("reports a new microphone that still settled on speech processing", async () => {
@@ -92,7 +92,7 @@ describe("openMic", () => {
     });
     const source = fakeSource(fakeStream([track]));
 
-    const opened = await openMic(source, HEADPHONE_AUDIO);
+    const opened = await openMic(source, HEADSET_AUDIO);
 
     expect(opened?.unmet).toEqual([
       "echoCancellation",

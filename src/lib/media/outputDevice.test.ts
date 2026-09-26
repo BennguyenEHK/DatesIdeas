@@ -52,6 +52,18 @@ describe("detectOutput", () => {
     ).toBe("headphones");
     expect(detectOutput([device("audioinput", "Internal Microphone")])).toBeNull();
   });
+
+  it("does not guess from another device when the default's name says nothing", () => {
+    // Windows names the default by its driver ("Realtek(R) Audio"). A pair of
+    // headphones that is connected but not playing must not be taken as the
+    // answer: headphones mode trusts the room to be out of the microphone.
+    expect(
+      detectOutput([
+        device("audiooutput", "Default - Realtek(R) Audio", "default"),
+        device("audiooutput", "AirPods Pro", "airpods"),
+      ]),
+    ).toBeNull();
+  });
 });
 
 describe("useOutputMode", () => {

@@ -6,7 +6,7 @@ import {
   type MicSettings,
   type SettingsTrackLike,
 } from "./micState";
-import { HEADPHONE_AUDIO, SPEAKER_AUDIO, SPEECH_AUDIO } from "./micProfile";
+import { HEADSET_AUDIO, OPEN_MIC_AUDIO, SPEECH_AUDIO } from "./micProfile";
 
 const track = (
   settings: Record<string, unknown>,
@@ -86,7 +86,7 @@ describe("readMicSettings", () => {
 describe("unmetRequests", () => {
   it("names a processing flag the device refused to change", () => {
     expect(
-      unmetRequests(HEADPHONE_AUDIO, settings({
+      unmetRequests(HEADSET_AUDIO, settings({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
@@ -96,7 +96,7 @@ describe("unmetRequests", () => {
 
   it("is empty when the device did what it was asked", () => {
     expect(
-      unmetRequests(HEADPHONE_AUDIO, settings({
+      unmetRequests(HEADSET_AUDIO, settings({
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
@@ -106,7 +106,7 @@ describe("unmetRequests", () => {
 
   it("names only the flags that actually disagree", () => {
     expect(
-      unmetRequests(SPEAKER_AUDIO, settings({
+      unmetRequests(OPEN_MIC_AUDIO, settings({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: false,
@@ -121,7 +121,7 @@ describe("unmetRequests", () => {
   });
 
   it("has nothing to say when settings could not be read", () => {
-    expect(unmetRequests(HEADPHONE_AUDIO, null)).toEqual([]);
+    expect(unmetRequests(HEADSET_AUDIO, null)).toEqual([]);
   });
 });
 

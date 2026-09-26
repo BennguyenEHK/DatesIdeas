@@ -8,10 +8,9 @@ import {
 } from "./roomNoise";
 
 /**
- * Latches a noisy-room answer for one karaoke session.
- *
- * Noise suppression hides the room it is meant to measure, so listening only
- * happens while the song is stopped and the microphone is on its quiet mode.
+ * Latches a noisy-room answer for one karaoke session, for the diagnostics
+ * report. Listening only happens while the song is stopped, so the backing
+ * track is never mistaken for the room.
  */
 export function useRoomNoise(args: {
   /** Karaoke is open and the room switch is on automatic. */
@@ -84,8 +83,8 @@ export function useRoomNoise(args: {
     setReading(nextReading);
 
     if (nextReading.verdict === "noisy") {
-      // Suppression switches on after this answer and hides future room tone,
-      // so a noisy result is deliberately one-way until karaoke closes.
+      // One-way until karaoke closes, so the report describes the room the
+      // evening was sung in rather than whichever quiet moment came last.
       noisyRef.current = true;
       setNoisy(true);
     }
