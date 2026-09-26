@@ -281,7 +281,25 @@ export function useMusicControls(
       // way: moving on again here would skip a song nobody heard.
       if (state.index === null || state.queue[state.index]?.videoId !== videoId)
         return;
-      follow(music.next(state.index), true);
+      const moved = music.next(state.index);
+      if (moved === state) {
+        // The last song. Left as it was, the shared state goes on saying
+        // "playing" past the end, and the player is told every two seconds to
+        // play a video that has finished -- which restarts it, and the next
+        // look seeks it back past the end. Stopping keeps the list, and play
+        // starts it again from the top.
+        music.stop();
+        playback.clear();
+        return;
+      }
+      if (currentTrack(moved)?.videoId === videoId) {
+        // The same song queued twice in a row. `follow` would see it already
+        // loaded and do nothing, leaving it sitting at its end.
+        playback.seek(0);
+        if (!playback.playing) playback.playPause();
+        return;
+      }
+      follow(moved, true);
     },
   };
 }

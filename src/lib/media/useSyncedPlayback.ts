@@ -251,6 +251,13 @@ export function useSyncedPlayback(
    */
   const iStartedPlay = useRef(false);
 
+  /**
+   * Which video the player is actually showing, as opposed to asked to show.
+   *
+   * Declared above `playPause`, which reads it, for the React Compiler's sake.
+   */
+  const loadedId = useRef<string | null>(null);
+
   const playPause = useCallback(() => {
     const cur = stateRef.current;
     if (!cur.videoId) return;
@@ -258,12 +265,18 @@ export function useSyncedPlayback(
     cancelRamp();
     // Stamp from where the player actually is, not from the last stamp, or
     // every pause would rewind to wherever the previous message left off.
+    // Only a player already showing this film can say where the film is. Moving
+    // to the next song loads it and presses play in one handler, before the
+    // player has been handed it, so its playhead is still at the END of the
+    // song that finished -- and stamping that onto the new one started it
+    // minutes in, usually past its own end, so it ended again at once.
+    const showing = loadedId.current === `${cur.source}:${cur.videoId}`;
     const at = wasRamping
       // A rate correction intentionally makes the physical player disagree
       // with shared time; broadcasting that temporary disagreement would make
       // the other side adopt it as truth.
       ? targetPosition(cur, now())
-      : player.current?.isReady()
+      : showing && player.current?.isReady()
       // The player is deliberately behind shared time for voice latency, so
       // put that local accommodation back before broadcasting shared truth.
       ? player.current.currentTime() + offsetRef.current
@@ -285,9 +298,6 @@ export function useSyncedPlayback(
     cancelRamp();
     broadcast(stateAt(NO_FILM, 0, false, now()));
   }, [broadcast, cancelRamp, now]);
-
-  /** Which video the player is actually showing, as opposed to asked to show. */
-  const loadedId = useRef<string | null>(null);
 
   /**
    * The last position this player was seen at while playing, and when.

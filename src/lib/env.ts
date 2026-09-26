@@ -43,3 +43,12 @@ export function serverEnv(): ServerEnv {
 export function helperSecret(): string {
   return required("HELPER_SECRET", process.env.HELPER_SECRET);
 }
+
+/**
+ * The optional YouTube search key, kept separate so search being unconfigured
+ * cannot make the room itself fail to load.
+ */
+export function youtubeApiKey(): string | null {
+  const value = process.env.YOUTUBE_API_KEY?.trim();
+  return value || null;
+}

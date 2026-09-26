@@ -1107,3 +1107,31 @@ describe("seeking", () => {
     expect(p.calls.some((c) => c.startsWith("seek"))).toBe(false);
   });
 });
+
+describe("useSyncedPlayback, moving to the next song", () => {
+  it("THE JITTER: starts a newly loaded song at its own start, not at the last song's end", () => {
+    // Loading the next song and pressing play happen in one handler, before
+    // the player has been handed the new video. The playhead it reports is
+    // still the finished song's, and stamping that onto the new one started it
+    // minutes in -- usually past its end, so it ended again at once.
+    const sent: PeerMessage[] = [];
+    const p = fakePlayer();
+    const { result } = renderHook(() =>
+      useSyncedPlayback(p.handle, null, (m) => sent.push(m)),
+    );
+
+    act(() => result.current.load(film("aaaaaaaaaaa"), 0));
+    act(() => result.current.playPause());
+    p.setTime(214);
+
+    act(() => {
+      result.current.load(film("bbbbbbbbbbb"), 0);
+      result.current.playPause();
+    });
+
+    const last = sent.at(-1);
+    expect(last).toMatchObject({ videoId: "bbbbbbbbbbb", playing: true });
+    expect(last && last.t === "media" ? last.positionSec : null).toBe(0);
+    expect(p.calls).toContain("load:bbbbbbbbbbb@0");
+  });
+});

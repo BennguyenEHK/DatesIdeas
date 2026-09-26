@@ -255,14 +255,29 @@ describe("useMusicControls", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("stays on the last song when it ends", () => {
+  it("stops when the last song ends, keeping the list", () => {
+    // Left "playing" past its end, the shared state kept asking the player to
+    // play a finished video, which restarted it and seeked it back past the
+    // end every two seconds.
     const { playback, calls } = fakePlayback();
     const { queue, controls: c } = controls(playback);
     act(() => c().onAdd([A]));
     calls.length = 0;
     act(() => c().onEnded(A));
-    expect(calls).toEqual([]);
-    expect(queue.hook.result.current.state.index).toBe(0);
+    expect(calls).toEqual(["clear"]);
+    expect(queue.hook.result.current.state.index).toBeNull();
+    expect(queue.hook.result.current.state.queue).toHaveLength(1);
+  });
+
+  it("plays the same song again when it is queued twice in a row", () => {
+    const { playback, calls } = fakePlayback();
+    const { queue, controls: c } = controls(playback);
+    act(() => c().onAdd([A, A]));
+    playback.playing = true;
+    calls.length = 0;
+    act(() => c().onEnded(A));
+    expect(queue.hook.result.current.state.index).toBe(1);
+    expect(calls).toEqual(["seek:0"]);
   });
 
   it("skips ten seconds from where the song is", () => {

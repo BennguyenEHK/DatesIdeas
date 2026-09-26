@@ -122,17 +122,17 @@ afterEach(() => {
 });
 
 function openLinkField() {
-  fireEvent.click(screen.getByRole("button", { name: "+ link" }));
-  return screen.getByPlaceholderText("Paste a YouTube link");
+  fireEvent.click(screen.getByRole("button", { name: "+ song" }));
+  return screen.getByPlaceholderText("Search a song or paste a YouTube link");
 }
 
 describe("MusicBar when nothing is queued", () => {
   it("offers only the invitation and the link button, with no player", () => {
     render(<MusicBar {...props()} />);
     expect(
-      screen.getByText("Paste a YouTube link to play music for both of you"),
+      screen.getByText("Search or paste a song to play music for both of you"),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "+ link" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "+ song" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Play music" })).toBeNull();
     expect(screen.queryByTestId("youtube-player")).toBeNull();
     expect(fakePlayer.mounts).toBe(0);

@@ -17,7 +17,9 @@ import { Volume } from "./Volume";
 import { parseYouTubeLink } from "@/lib/music/links";
 import { currentTrack, type MusicState } from "@/lib/music/queue";
 import { useVideoInfo } from "@/lib/music/titles";
+import { useVideoSearch } from "@/lib/music/search";
 import { YOUTUBE_ID_PATTERN, type MusicTrack } from "@/lib/rtc/protocol";
+import { MusicSearchResults } from "./MusicSearchResults";
 
 export interface MusicBarProps {
   queue: MusicState;
@@ -61,6 +63,20 @@ function canReadClipboard() {
 }
 function serverCannotReadClipboard() {
   return false;
+}
+
+/**
+ * Whether pasted or typed text is meant as a link rather than as words to
+ * search for. A link that is nearly right should be told it is wrong, not
+ * quietly searched for as if it were a song title.
+ */
+function looksLikeLink(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    parseYouTubeLink(trimmed) !== null ||
+    trimmed.startsWith("http") ||
+    trimmed.includes("://")
+  );
 }
 
 function clock(seconds: number): string {
@@ -112,6 +128,7 @@ export function MusicBar(props: MusicBarProps) {
   const [upNextOpen, setUpNextOpen] = useState(false);
   const [linkText, setLinkText] = useState("");
   const [linkProblem, setLinkProblem] = useState<string | null>(null);
+  const search = useVideoSearch(linkText);
   // True while a pasted playlist is being read. The player is mounted for it
   // even before there is a queue, because it is the player that reads it.
   const [reading, setReading] = useState(false);
@@ -162,6 +179,13 @@ export function MusicBar(props: MusicBarProps) {
   function addLink(raw: string) {
     const link = parseYouTubeLink(raw);
     if (link === null) {
+      if (!looksLikeLink(raw)) {
+        // Words, not a link: Enter takes the top result, the way a search box
+        // is expected to. The text stays so the list can be picked from too.
+        const first = search.results[0];
+        if (first) onAdd([first.videoId]);
+        return;
+      }
       // The text stays, so a link that was nearly right can be fixed.
       setLinkProblem("That’s not a YouTube link");
       return;
@@ -199,9 +223,11 @@ export function MusicBar(props: MusicBarProps) {
 
   function handlePaste(event: ClipboardEvent<HTMLInputElement>) {
     const text = event.clipboardData.getData("text");
-    if (text.trim() === "") return;
-    // Pasting is the request. Waiting for Enter as well would ask for the
-    // same thing twice.
+    // Pasted words are part of a search and go in wherever the cursor is,
+    // as any paste would.
+    if (text.trim() === "" || !looksLikeLink(text)) return;
+    // Pasting a link is the request. Waiting for Enter as well would ask for
+    // the same thing twice.
     event.preventDefault();
     setLinkText(text);
     addLink(text);
@@ -211,7 +237,7 @@ export function MusicBar(props: MusicBarProps) {
     try {
       const text = await navigator.clipboard.readText();
       setLinkText(text);
-      if (text.trim() !== "") addLink(text);
+      if (looksLikeLink(text)) addLink(text);
     } catch {
       // Refused, usually because permission was declined. The field is still
       // there to paste into by hand.
@@ -271,7 +297,7 @@ export function MusicBar(props: MusicBarProps) {
       aria-controls={fieldId}
       className="shrink-0 rounded-[2px] border border-[var(--edge)] px-3 py-1 tracking-wide text-[var(--mist)] transition-colors hover:text-[var(--cream)] motion-reduce:transition-none"
     >
-      + link
+      + song
     </button>
   );
 
@@ -284,7 +310,7 @@ export function MusicBar(props: MusicBarProps) {
         {empty && !reading ? (
           <>
             <p className="min-w-0 flex-1 truncate">
-              Paste a YouTube link to play music for both of you
+              Search or paste a song to play music for both of you
             </p>
             {linkButton}
           </>
@@ -373,12 +399,12 @@ export function MusicBar(props: MusicBarProps) {
           className="flex flex-wrap items-center gap-2 px-3 pb-2"
         >
           <label htmlFor={fieldId} className="sr-only">
-            YouTube link
+            Search or paste a YouTube link
           </label>
           <input
             id={fieldId}
             type="text"
-            inputMode="url"
+            inputMode="search"
             autoComplete="off"
             spellCheck={false}
             value={linkText}
@@ -387,7 +413,7 @@ export function MusicBar(props: MusicBarProps) {
               if (linkProblem) setLinkProblem(null);
             }}
             onPaste={handlePaste}
-            placeholder="Paste a YouTube link"
+            placeholder="Search a song or paste a YouTube link"
             aria-invalid={linkProblem !== null}
             aria-describedby={problemId}
             className={`min-w-0 flex-1 rounded-[2px] border bg-[var(--dusk)] px-3 py-1.5 text-[var(--cream)] placeholder:text-[var(--mist)]/50 focus:outline-none ${
@@ -405,6 +431,11 @@ export function MusicBar(props: MusicBarProps) {
               Paste
             </button>
           ) : null}
+          <MusicSearchResults
+            status={search.status}
+            results={search.results}
+            onAdd={(videoId) => onAdd([videoId])}
+          />
           <div id={problemId} className="w-full basis-full text-[0.65rem]">
             {linkProblem ? (
               <p role="alert" className="text-[var(--cream)]">
