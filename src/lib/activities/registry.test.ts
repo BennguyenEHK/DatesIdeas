@@ -4,6 +4,7 @@ import {
   ACTIVITY_IDS,
   activity,
   activityKey,
+  showsMusicBar,
   isActivityId,
 } from "./registry";
 
@@ -81,5 +82,18 @@ describe("activity registry", () => {
     expect(new Set(keys).size).toBe(keys.length);
     // -1 is reserved for "closed"; a real key must never collide with it.
     expect(keys.every((k) => k >= 0)).toBe(true);
+  });
+});
+
+describe("showsMusicBar", () => {
+  it("keeps tonight's music in the plain call, the cards and CreateSpace", () => {
+    expect(showsMusicBar(null)).toBe(true);
+    expect(showsMusicBar("cards")).toBe(true);
+    expect(showsMusicBar("createspace")).toBe(true);
+  });
+
+  it("gives way to the two films, which own the player", () => {
+    expect(showsMusicBar("karaoke")).toBe(false);
+    expect(showsMusicBar("movie")).toBe(false);
   });
 });

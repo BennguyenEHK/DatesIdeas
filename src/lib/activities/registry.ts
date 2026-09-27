@@ -76,3 +76,15 @@ export function activity(id: ActivityId): ActivityDef {
 export function activityKey(id: ActivityId): number {
   return ACTIVITY_IDS.indexOf(id);
 }
+
+/**
+ * Where tonight's music bar shows: the plain call, the cards and CreateSpace.
+ *
+ * Absent only where the two films take the shared player. Anywhere else the
+ * bar has to stay mounted -- it holds the YouTube player the music plays
+ * through, so hiding it in an activity cut the song off there even though
+ * nothing had stopped it.
+ */
+export function showsMusicBar(id: ActivityId | null): boolean {
+  return id === null || id === "cards" || id === "createspace";
+}

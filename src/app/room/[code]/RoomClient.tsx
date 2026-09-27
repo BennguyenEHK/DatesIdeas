@@ -22,7 +22,7 @@ import { drawCard, type MoodFilter } from "@/lib/cards/draw";
 import type { Card } from "@/lib/cards/types";
 import { ActivityBar } from "@/components/ActivityBar";
 import { TakeoverStage } from "@/components/TakeoverStage";
-import { activity, activityKey, type ActivityId } from "@/lib/activities/registry";
+import { activity, activityKey, showsMusicBar, type ActivityId } from "@/lib/activities/registry";
 import { theme as themeById } from "@/lib/photo/themes";
 import { shouldReplace } from "@/lib/sync/resolveSwap";
 import {
@@ -776,9 +776,9 @@ export function RoomClient({ code }: { code: string }) {
     resyncMusic.current = resyncMusicNow;
     stopMusic.current = stopMusicNow;
   }, [acceptMusicNow, resyncMusicNow, stopMusicNow]);
-  // The bar lives under the plain call and the cards. The two films own the
-  // player everywhere else.
-  const musicBarShowing = current === null || current === "cards";
+  // The bar lives under the plain call, the cards and CreateSpace; see
+  // showsMusicBar for why it cannot simply hide inside an activity.
+  const musicBarShowing = showsMusicBar(current);
 
   // Stamped along the bottom of every strip: the evening it came from. The
   // code lasts a day and will never exist again, which is what turns a collage
