@@ -38,6 +38,9 @@ import { GameWord } from "@/components/GameWord";
 import { CreateSpace } from "@/components/CreateSpace";
 import { RoomAlbum } from "@/components/RoomAlbum";
 import { RoomCalendar } from "@/components/RoomCalendar";
+import { RoomLookbook } from "@/components/RoomLookbook";
+import { useLookbook } from "@/lib/lookbook/useLookbook";
+import type { Outfit } from "@/lib/lookbook/types";
 import { useTogether } from "@/lib/together/useTogether";
 import { useCreateSpace } from "@/lib/createspace/useCreateSpace";
 import { composeOverStrip } from "@/lib/createspace/compose";
@@ -158,6 +161,7 @@ export function RoomClient({ code }: { code: string }) {
   // because applyActivity and onMessage are built before the queue is.
   const stopMusic = useRef<(() => void) | null>(null);
   const acceptMusic = useRef<((m: PeerMessage) => void) | null>(null);
+  const acceptLookbook = useRef<((m: PeerMessage) => void) | null>(null);
   const resyncMusic = useRef<(() => void) | null>(null);
   // The activity before the one being applied, so applyActivity can tell a
   // move between the call and the cards from a move into or out of a film.
@@ -394,6 +398,14 @@ export function RoomClient({ code }: { code: string }) {
       }
       if (msg.t === "music") {
         acceptMusic.current?.(msg);
+        return;
+      }
+      if (
+        msg.t === "lookbook-place" ||
+        msg.t === "lookbook-open" ||
+        msg.t === "lookbook-changed"
+      ) {
+        acceptLookbook.current?.(msg);
         return;
       }
       if (
@@ -795,6 +807,37 @@ export function RoomClient({ code }: { code: string }) {
   useEffect(() => {
     acceptAlbumJoin.current = acceptJoin;
   }, [acceptJoin]);
+
+  // The Lookbook: a wardrobe and outfits kept across evenings, behind the same
+  // season ticket as the album. Until this device knows whether it holds one,
+  // it asks the server rather than assuming not -- the answer arrives as a 401
+  // either way, and assuming would flash the join prompt at a paired device.
+  // Joining the album changes `paired`, which reloads it by itself.
+  const lookbook = useLookbook({
+    paired: paired || !pairKnown,
+    identity: getIdentity(),
+    send: sendToPeer,
+    now: togetherNow,
+    active: current === "lookbook",
+  });
+  const { accept: acceptLookbookNow } = lookbook;
+  useEffect(() => {
+    acceptLookbook.current = acceptLookbookNow;
+  }, [acceptLookbookNow]);
+  const { albumChanged } = together;
+  const keepOutfitInAlbum = useCallback(
+    async (_outfit: Outfit, png: Blob) => {
+      const result = await addToAlbum(png, {
+        kind: "photo",
+        contentType: "image/png",
+        sourceRoom: code,
+      });
+      // The other screen's album shows it too.
+      if (result.ok) albumChanged();
+      return result.ok;
+    },
+    [albumChanged, code],
+  );
 
   const booth = useBooth({
     looks: looks.looks,
@@ -1811,6 +1854,18 @@ export function RoomClient({ code }: { code: string }) {
                       revision={together.calendarRevision + joinRevision}
                       onWeek={together.showWeek}
                       onChanged={together.calendarChanged}
+                      onClose={() => onSelectActivity(null)}
+                      joining={albumJoin.joining}
+                      joinError={albumJoin.error}
+                      onRetryJoin={albumJoin.retry}
+                      canBeInvited={!albumJoin.unanswered}
+                    />
+                  </div>
+                ) : current === "lookbook" ? (
+                  <div className="h-full overflow-auto bg-[var(--letterbox)]">
+                    <RoomLookbook
+                      view={lookbook.view}
+                      onKeepInAlbum={keepOutfitInAlbum}
                       onClose={() => onSelectActivity(null)}
                       joining={albumJoin.joining}
                       joinError={albumJoin.error}

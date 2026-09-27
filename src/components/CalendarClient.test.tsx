@@ -240,3 +240,41 @@ describe("CalendarClient", () => {
     expect(onChanged).not.toHaveBeenCalled();
   });
 });
+
+describe("CalendarClient outfits", () => {
+  it("asks the Lookbook for the week shown and marks each outfit's day", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response(true, { blocks: [] }))));
+    const listOutfits = vi.fn(async (range?: { from: string; to: string }) => {
+      void range;
+      return {
+        ok: true as const,
+        value: [
+          {
+            id: "outfit01",
+            name: "Garden party",
+            wearOn: "2026-07-16",
+            note: "",
+            createdBy: "k",
+            lovedBy: [],
+            layout: [],
+            createdAt: "",
+            updatedAt: "",
+          },
+        ],
+      };
+    });
+
+    render(<CalendarClient viewerZone="UTC" outfits={{ listOutfits }} />);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    const range = listOutfits.mock.calls[0]?.[0] ?? { from: "", to: "" };
+    expect(range.from <= "2026-07-16" && "2026-07-16" <= range.to).toBe(true);
+    expect(screen.getByText("Garden party").closest("[data-day]")?.getAttribute("data-day")).toBe(
+      "2026-07-16",
+    );
+  });
+});

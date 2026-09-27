@@ -7,7 +7,9 @@ import { CalendarWeek } from "@/components/CalendarWeek";
 import { civilDate } from "@/lib/album/occasions";
 import type { TimeBlock } from "@/lib/calendar/blocks";
 import { expand } from "@/lib/calendar/recur";
-import { weekStart } from "@/lib/calendar/week";
+import { weekDays, weekStart } from "@/lib/calendar/week";
+import { lookbookClient } from "@/lib/lookbook/client";
+import type { LookbookClient } from "@/lib/lookbook/contract";
 
 type Editor = {
   blockId: string | null;
@@ -46,6 +48,7 @@ export function CalendarClient({
   onChanged,
   compact = false,
   onUnpaired,
+  outfits = lookbookClient,
 }: {
   viewerZone?: string;
   /** A shared week position. Null leaves this calendar locally controlled. */
@@ -58,6 +61,8 @@ export function CalendarClient({
   onChanged?: () => void;
   /** Packs the controls into the in-call projection. */
   compact?: boolean;
+  /** Where the week's Lookbook outfits come from; injected in tests. */
+  outfits?: Pick<LookbookClient, "listOutfits">;
   /** Lets an embedded calendar explain a missing season ticket. */
   onUnpaired?: () => void;
 }) {
@@ -79,6 +84,31 @@ export function CalendarClient({
     [localShown, viewerZone, week],
   );
   const until = useMemo(() => nextWeek(shown, 38).toISOString(), [shown]);
+
+  // Outfits from the Lookbook on the days they are to be worn. A nicety: a
+  // device without a Lookbook, or a failed request, simply shows none.
+  const [outfitsByDay, setOutfitsByDay] = useState<ReadonlyMap<string, readonly string[]>>(
+    () => new Map(),
+  );
+  const weekFrom = useMemo(() => weekDays(shown, viewerZone)[0].date, [shown, viewerZone]);
+  const weekTo = useMemo(() => weekDays(shown, viewerZone)[6].date, [shown, viewerZone]);
+  useEffect(() => {
+    let live = true;
+    void outfits.listOutfits({ from: weekFrom, to: weekTo }).then((result) => {
+      if (!live) return;
+      const byDay = new Map<string, string[]>();
+      if (result.ok) {
+        for (const outfit of result.value) {
+          if (outfit.wearOn === null) continue;
+          byDay.set(outfit.wearOn, [...(byDay.get(outfit.wearOn) ?? []), outfit.name]);
+        }
+      }
+      setOutfitsByDay(byDay);
+    });
+    return () => {
+      live = false;
+    };
+  }, [outfits, weekFrom, weekTo, revision]);
   const occurrences = useMemo(
     () => expand(blocks, shown, nextWeek(shown, 7), viewerZone),
     [blocks, shown, viewerZone],
@@ -343,6 +373,7 @@ export function CalendarClient({
             todayDate={todayDate}
             occurrences={occurrences}
             blocks={blockMap}
+            outfitsByDay={outfitsByDay}
             onCreate={(date, hour) =>
               setEditor({ blockId: null, initial: { date, hour } })
             }

@@ -24,6 +24,7 @@ export function CalendarWeek({
   todayDate,
   occurrences,
   blocks,
+  outfitsByDay,
   onCreate,
   onEdit,
 }: {
@@ -33,6 +34,11 @@ export function CalendarWeek({
   todayDate: string;
   occurrences: Occurrence[];
   blocks: ReadonlyMap<string, { title: string; owner: string }>;
+  /**
+   * Outfit names from the Lookbook, by the `YYYY-MM-DD` day they are to be
+   * worn. Read-only here: the day is chosen in the Lookbook.
+   */
+  outfitsByDay?: ReadonlyMap<string, readonly string[]>;
   onCreate: (date: string, hour: number) => void;
   onEdit: (blockId: string) => void;
 }) {
@@ -49,6 +55,7 @@ export function CalendarWeek({
         {days.map((day) => (
           <div
             key={day.date}
+            data-day={day.date}
             className={`sticky top-0 z-10 border-b border-r border-[var(--edge)] px-2 py-2 ${
               day.date === todayDate
                 ? "bg-[var(--lamp)]/10"
@@ -61,6 +68,16 @@ export function CalendarWeek({
                 {clock(`${day.date}T12:00:00.000Z`, companionZone)} there
               </p>
             ) : null}
+            {(outfitsByDay?.get(day.date) ?? []).map((name) => (
+              <p
+                key={name}
+                title={`Outfit for this day: ${name}`}
+                className="mt-1 truncate font-sans text-[10px] text-[var(--lamp)]"
+              >
+                <span aria-hidden>👗 </span>
+                {name}
+              </p>
+            ))}
           </div>
         ))}
 

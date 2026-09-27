@@ -93,3 +93,24 @@ describe("CalendarWeek", () => {
     expect(onCreate).toHaveBeenCalledWith("2026-03-04", 7);
   });
 });
+
+describe("CalendarWeek outfits", () => {
+  it("shows an outfit on the day it is to be worn, and nowhere else", () => {
+    render(
+      <CalendarWeek
+        start={start}
+        viewerZone="UTC"
+        companionZone={null}
+        todayDate="2026-03-04"
+        occurrences={[]}
+        blocks={new Map()}
+        outfitsByDay={new Map([["2026-03-06", ["Saturday brunch"]]])}
+        onCreate={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    const chips = screen.getAllByText(/Saturday brunch/);
+    expect(chips).toHaveLength(1);
+    expect(chips[0].closest("[data-day]")?.getAttribute("data-day")).toBe("2026-03-06");
+  });
+});
