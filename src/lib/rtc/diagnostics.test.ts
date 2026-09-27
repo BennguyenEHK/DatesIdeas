@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatReport, readTopology, readTraffic, trafficRates } from "./diagnostics";
+import { formatReport, readTopology, readTraffic, trafficRates, voiceLevels } from "./diagnostics";
 import type { ReportInput, TrafficSample } from "./diagnostics";
 import { RELAY_SLOW_RTT_MS } from "./path";
 import type { StatsLike } from "./path";
@@ -10,7 +10,8 @@ const makeStats = (entries: Record<string, Record<string, unknown>>) =>
 const sample = (overrides: Partial<TrafficSample> = {}): TrafficSample => ({
   atMs: 1000, videoBytesSent: 100, videoBytesReceived: 100, audioBytesSent: 100,
   audioBytesReceived: 100, audioPacketsReceived: 10, audioPacketsLost: 1,
-  videoFramesSent: 1, frameWidth: null, frameHeight: null, ...overrides,
+  videoFramesSent: 1, frameWidth: null, frameHeight: null,
+  audioEnergyIn: 0, audioSecondsIn: 0, audioEnergyOut: 0, audioSecondsOut: 0, ...overrides,
 });
 
 describe("readTopology", () => {
@@ -259,5 +260,72 @@ describe("the microphone findings", () => {
     expect(formatReport({ ...base, mic: mic({ dropouts: 3 }) })).toContain(
       "on 3 occasion(s) while someone was clearly singing",
     );
+  });
+});
+
+describe("where a voice goes missing", () => {
+  const base: ReportInput = { topology: null, rates: null, sample: null, degraded: null, netRttMs: null, pingRttMs: null, audioJitterMs: null, videoJitterMs: null, audioCodec: null, activity: null, connectedForMs: null, syncChannel: null, fileChannel: null, mic: null };
+  const flowing = { videoUpKbps: 500, videoDownKbps: 500, audioUpKbps: 40, audioDownKbps: 40, audioLossPct: 0 };
+  const playing = { found: true, paused: false, muted: false, volume: 1, sinkId: "" };
+
+  it("reads the energy of what is sent and what arrives", () => {
+    const out = readTraffic(makeStats({
+      a: { type: "inbound-rtp", kind: "audio", totalAudioEnergy: 2, totalSamplesDuration: 10, timestamp: 1 },
+      m: { type: "media-source", kind: "audio", totalAudioEnergy: 3, totalSamplesDuration: 12 },
+    }));
+    expect(out).toMatchObject({ audioEnergyIn: 2, audioSecondsIn: 10, audioEnergyOut: 3, audioSecondsOut: 12 });
+  });
+
+  it("does not count a media source alone as traffic", () => {
+    expect(readTraffic(makeStats({ m: { type: "media-source", kind: "audio", totalAudioEnergy: 3 } }))).toBeNull();
+  });
+
+  it("turns energy over a window into a level", () => {
+    // 0.01 energy per second is an RMS of 0.1.
+    const levels = voiceLevels(
+      sample({ audioEnergyIn: 1, audioSecondsIn: 10, audioEnergyOut: 0, audioSecondsOut: 10 }),
+      sample({ atMs: 3000, audioEnergyIn: 1.02, audioSecondsIn: 12, audioEnergyOut: 0, audioSecondsOut: 12 }),
+    );
+    expect(levels.arrivingRms).toBeCloseTo(0.1, 5);
+    expect(levels.sentRms).toBe(0);
+  });
+
+  it("knows nothing without a window or after a restart", () => {
+    expect(voiceLevels(null, sample())).toEqual({ sentRms: null, arrivingRms: null });
+    expect(voiceLevels(sample({ audioSecondsIn: 5 }), sample({ atMs: 2000, audioSecondsIn: 1 })).arrivingRms).toBeNull();
+  });
+
+  it("prints both levels and how their voice is being played here", () => {
+    const out = formatReport({ ...base, rates: flowing, voices: { sentRms: 0.05, arrivingRms: 0.04 }, theirVoice: playing });
+    expect(out).toContain("Voice level sent / arriving: 0.050 / 0.040");
+    expect(out).toContain("Their voice on this screen: playing, not muted, volume 100%, output default");
+    expect(out).not.toContain("NOTE: their voice");
+  });
+
+  it("says when their voice is not arriving at all", () => {
+    const out = formatReport({ ...base, rates: { ...flowing, audioDownKbps: 0 }, theirVoice: playing });
+    expect(out).toContain("NOTE: almost none of their voice is arriving");
+  });
+
+  it("says when their voice arrives as silence", () => {
+    const out = formatReport({ ...base, rates: flowing, voices: { sentRms: 0.05, arrivingRms: 0 }, theirVoice: playing });
+    expect(out).toContain("NOTE: their voice is arriving, but as silence");
+  });
+
+  it("says when their voice arrives and this screen is not playing it", () => {
+    for (const theirVoice of [
+      { ...playing, found: false },
+      { ...playing, paused: true },
+      { ...playing, muted: true },
+      { ...playing, volume: 0 },
+    ]) {
+      const out = formatReport({ ...base, rates: flowing, voices: { sentRms: 0.05, arrivingRms: 0.04 }, theirVoice });
+      expect(out).toContain("NOTE: their voice arrives, but this screen is not playing it");
+    }
+  });
+
+  it("says when this side is sending silence", () => {
+    const out = formatReport({ ...base, rates: flowing, voices: { sentRms: 0, arrivingRms: 0.04 }, theirVoice: playing });
+    expect(out).toContain("NOTE: this side is sending silence");
   });
 });
