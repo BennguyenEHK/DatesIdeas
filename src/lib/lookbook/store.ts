@@ -200,10 +200,17 @@ export async function updateOutfit(
   sql: QueryTag,
   pairId: string,
   id: string,
-  patch: Partial<Pick<OutfitRow, "name" | "wearOn" | "note" | "layout" | "lovedBy">>,
+  patch: Partial<Pick<OutfitRow, "name" | "wearOn" | "note" | "layout">> & {
+    /**
+     * A heart given or taken back, applied by the database in this same
+     * statement. Reading the list, changing it here and writing it back let
+     * two people hearting at once each overwrite the other's heart.
+     */
+    love?: { by: string; on: boolean };
+  },
 ): Promise<OutfitRow | null> {
   const rows =
-    await sql`UPDATE lookbook_outfits SET name = COALESCE(${patch.name ?? null}, name), wear_on = CASE WHEN ${patch.wearOn !== undefined} THEN ${patch.wearOn ?? null}::date ELSE wear_on END, note = COALESCE(${patch.note ?? null}, note), layout = CASE WHEN ${patch.layout !== undefined} THEN ${JSON.stringify(patch.layout ?? [])}::jsonb ELSE layout END, loved_by = CASE WHEN ${patch.lovedBy !== undefined} THEN ${patch.lovedBy ?? []}::text[] ELSE loved_by END, updated_at = now() WHERE pair_id = ${pairId} AND id = ${id} RETURNING id, pair_id, name, to_char(wear_on, 'YYYY-MM-DD') AS wear_on, note, created_by, loved_by, layout, created_at, updated_at`;
+    await sql`UPDATE lookbook_outfits SET name = COALESCE(${patch.name ?? null}, name), wear_on = CASE WHEN ${patch.wearOn !== undefined} THEN ${patch.wearOn ?? null}::date ELSE wear_on END, note = COALESCE(${patch.note ?? null}, note), layout = CASE WHEN ${patch.layout !== undefined} THEN ${JSON.stringify(patch.layout ?? [])}::jsonb ELSE layout END, loved_by = CASE WHEN ${patch.love === undefined} THEN loved_by WHEN ${patch.love?.on ?? false} THEN (CASE WHEN ${patch.love?.by ?? ""} = ANY(loved_by) THEN loved_by ELSE array_append(loved_by, ${patch.love?.by ?? ""}::text) END) ELSE array_remove(loved_by, ${patch.love?.by ?? ""}::text) END, updated_at = now() WHERE pair_id = ${pairId} AND id = ${id} RETURNING id, pair_id, name, to_char(wear_on, 'YYYY-MM-DD') AS wear_on, note, created_by, loved_by, layout, created_at, updated_at`;
   return rowsOf(rows, readOutfit)[0] ?? null;
 }
 export async function deleteOutfit(sql: QueryTag, pairId: string, id: string): Promise<boolean> {

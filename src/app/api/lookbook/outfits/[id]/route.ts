@@ -61,23 +61,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     ))
   )
     return NextResponse.json({ error: "A board piece is not in this wardrobe." }, { status: 400 });
-  let lovedBy: string[] | undefined;
+  let love: { by: string; on: boolean } | undefined;
   if (Object.hasOwn(body, "love")) {
-    const love = record(body.love);
-    if (!love || !isPerson(love.by) || typeof love.on !== "boolean")
+    const given = record(body.love);
+    if (!given || !isPerson(given.by) || typeof given.on !== "boolean")
       return NextResponse.json({ error: "Invalid outfit update." }, { status: 400 });
-    const existing = await updateOutfit(sql, pair.id, id, {});
-    if (!existing) return NextResponse.json({ error: "not found" }, { status: 404 });
-    lovedBy = love.on
-      ? [...new Set([...existing.lovedBy, love.by])]
-      : existing.lovedBy.filter((person) => person !== love.by);
+    // Applied by the database in the same statement as everything else, so
+    // two hearts at the same moment both land.
+    love = { by: given.by, on: given.on };
   }
   const row = await updateOutfit(sql, pair.id, id, {
     name: body.name as string | undefined,
     wearOn: Object.hasOwn(body, "wearOn") ? (body.wearOn as string | null) : undefined,
     note: body.note as string | undefined,
     layout: body.layout as never,
-    lovedBy,
+    love,
   });
   if (!row) return NextResponse.json({ error: "not found" }, { status: 404 });
   return NextResponse.json({ outfit: toOutfit(row) });
