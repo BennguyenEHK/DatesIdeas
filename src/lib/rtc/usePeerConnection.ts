@@ -23,9 +23,6 @@ import {
   type Topology,
   type TrafficSample,
   type TrafficRates,
-  voiceLevels,
-  type VoiceLevels,
-  type VoicePlayback,
   type MicReport,
 } from "./diagnostics";
 import { linkFrom } from "./linkFrom";
@@ -205,35 +202,6 @@ const ICE_SETTLE_GRACE_MS = 15_000;
 const RTT_BUCKET_MS = 50;
 
 /**
- * How the other person's voice is being played on this page, read off the
- * elements themselves when a report is asked for.
- *
- * Found by stream rather than handed down from a component, because which
- * stage is showing them changes with the activity, and the question is simply
- * whether ANY element is playing their audio.
- */
-function voicePlayback(stream: MediaStream | null): VoicePlayback | null {
-  if (stream === null || typeof document === "undefined") return null;
-  const elements = Array.from(
-    document.querySelectorAll<HTMLMediaElement>("video, audio"),
-  ).filter((element) => element.srcObject === stream);
-  // A playing, audible one wins over a paused or muted copy of the same stream.
-  const element =
-    elements.find((e) => !e.paused && !e.muted && e.volume > 0) ?? elements[0];
-  if (element === undefined) {
-    return { found: false, paused: true, muted: false, volume: 0, sinkId: null };
-  }
-  const sinkId = (element as HTMLMediaElement & { sinkId?: string }).sinkId;
-  return {
-    found: true,
-    paused: element.paused,
-    muted: element.muted,
-    volume: element.volume,
-    sinkId: typeof sinkId === "string" ? sinkId : null,
-  };
-}
-
-/**
  * RTCDataChannelInit's `priority` is a standard member that TypeScript's DOM
  * library has not caught up with, so it is declared here rather than cast.
  */
@@ -355,7 +323,6 @@ export function usePeerConnection(
   const topologyRef = useRef<Topology | null>(null);
   const trafficRef = useRef<TrafficSample | null>(null);
   const ratesRef = useRef<TrafficRates | null>(null);
-  const voicesRef = useRef<VoiceLevels | null>(null);
   const connectedAt = useRef<number | null>(null);
   const onMessageRef = useRef(onMessage);
   const onFileChunkRef = useRef<((chunk: ArrayBuffer) => void) | null>(null);
@@ -780,7 +747,6 @@ export function usePeerConnection(
       let windowLoss: number | null = null;
       if (traffic) {
         ratesRef.current = trafficRates(trafficRef.current, traffic);
-        voicesRef.current = voiceLevels(trafficRef.current, traffic);
         trafficRef.current = traffic;
         windowLoss = ratesRef.current.audioLossPct;
       }
@@ -909,8 +875,6 @@ export function usePeerConnection(
           return cap === null ? null : cap / 1000;
         })(),
         theirAudio: theirAudioRef.current,
-        voices: voicesRef.current,
-        theirVoice: voicePlayback(remoteStream),
         recovery: {
           restarts: resilience.restarts,
           lastRestartReason: resilience.lastRestartReason,
@@ -921,7 +885,7 @@ export function usePeerConnection(
           longestGapMs: resilience.longestGapMs,
         },
       }),
-    [path, rtt, audioJitter, jitterMs, audioFormat, turnDegraded, resilience, remoteStream],
+    [path, rtt, audioJitter, jitterMs, audioFormat, turnDegraded, resilience],
   );
 
   const readLink = useCallback(
@@ -1046,7 +1010,6 @@ export function usePeerConnection(
     topologyRef.current = null;
     trafficRef.current = null;
     ratesRef.current = null;
-    voicesRef.current = null;
     clockRef.current?.stop();
     clockRef.current = null;
     setClock(null);
@@ -1087,7 +1050,6 @@ export function usePeerConnection(
     topologyRef.current = null;
     trafficRef.current = null;
     ratesRef.current = null;
-    voicesRef.current = null;
     clockRef.current?.stop();
     dcRef.current?.close();
     fileDcRef.current?.close();

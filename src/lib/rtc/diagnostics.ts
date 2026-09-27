@@ -43,40 +43,6 @@ export interface TrafficSample {
   /** From the inbound video report, or null. */
   frameWidth: number | null;
   frameHeight: number | null;
-  /**
-   * Cumulative audio energy and its duration, arriving (inbound-rtp) and sent
-   * (the sender's media-source). Kilobits cannot tell a voice from silence --
-   * this call sends silence at full rate -- so these are what say whether a
-   * missing voice was ever in the stream at all.
-   */
-  audioEnergyIn: number;
-  audioSecondsIn: number;
-  audioEnergyOut: number;
-  audioSecondsOut: number;
-}
-
-/** RMS level, 0-1, over the last poll window; null when it cannot be known. */
-export interface VoiceLevels {
-  sentRms: number | null;
-  arrivingRms: number | null;
-}
-
-/**
- * The element playing the other person's voice on this screen.
- *
- * The last link in the chain, and the one no network statistic can see: a
- * voice can arrive whole and still never be heard because the element that
- * should be playing it is paused, muted or turned down.
- */
-export interface VoicePlayback {
-  /** Whether any element on the page is playing their stream. */
-  found: boolean;
-  paused: boolean;
-  muted: boolean;
-  /** 0-1. */
-  volume: number;
-  /** The output device, "" for the system default, null when unknown. */
-  sinkId: string | null;
 }
 
 export interface TrafficRates {
@@ -173,10 +139,6 @@ export interface ReportInput {
    * named budget, and a picture that suddenly goes small is otherwise a mystery.
    */
   videoCapKbps?: number | null;
-  /** Voice levels over the last window, or null before there are two samples. */
-  voices?: VoiceLevels | null;
-  /** How their voice is being played on this screen, or null when unknown. */
-  theirVoice?: VoicePlayback | null;
 }
 
 /**
@@ -299,19 +261,8 @@ export function readTraffic(stats: StatsLike): TrafficSample | null {
   let videoFramesSent = 0;
   let frameWidth: number | null = null;
   let frameHeight: number | null = null;
-  let audioEnergyIn = 0;
-  let audioSecondsIn = 0;
-  let audioEnergyOut = 0;
-  let audioSecondsOut = 0;
 
   for (const report of stats.values()) {
-    // What our microphone hands the sender, after any processing. Read here
-    // but not counted as traffic: a source alone is not a call.
-    if (report.type === "media-source" && report.kind === "audio") {
-      audioEnergyOut += num(report.totalAudioEnergy) ?? 0;
-      audioSecondsOut += num(report.totalSamplesDuration) ?? 0;
-      continue;
-    }
     const inbound = report.type === "inbound-rtp";
     const outbound = report.type === "outbound-rtp";
     if (!inbound && !outbound) continue;
@@ -333,42 +284,13 @@ export function readTraffic(stats: StatsLike): TrafficSample | null {
         audioBytesReceived += num(report.bytesReceived) ?? 0;
         audioPacketsReceived += num(report.packetsReceived) ?? 0;
         audioPacketsLost += num(report.packetsLost) ?? 0;
-        audioEnergyIn += num(report.totalAudioEnergy) ?? 0;
-        audioSecondsIn += num(report.totalSamplesDuration) ?? 0;
       }
     }
   }
 
   if (!found) return null;
-  return { atMs: atMs ?? 0, videoBytesSent, videoBytesReceived, audioBytesSent, audioBytesReceived, audioPacketsReceived, audioPacketsLost, videoFramesSent, frameWidth, frameHeight, audioEnergyIn, audioSecondsIn, audioEnergyOut, audioSecondsOut };
+  return { atMs: atMs ?? 0, videoBytesSent, videoBytesReceived, audioBytesSent, audioBytesReceived, audioPacketsReceived, audioPacketsLost, videoFramesSent, frameWidth, frameHeight };
 }
-
-/** RMS from the energy gathered over a window; null for an empty or restarted one. */
-const rms = (energyBefore: number, energyNow: number, secondsBefore: number, secondsNow: number): number | null => {
-  const seconds = secondsNow - secondsBefore;
-  const energy = energyNow - energyBefore;
-  if (!(seconds > 0) || energy < 0) return null;
-  return Math.sqrt(energy / seconds);
-};
-
-/**
- * How loud the voice sent and the voice arriving were over the last window.
- *
- * Averaged over the window rather than read as one instantaneous level, which
- * is zero in every pause between words and would call a quiet talker silent.
- */
-export function voiceLevels(prev: TrafficSample | null, cur: TrafficSample): VoiceLevels {
-  if (prev === null) return { sentRms: null, arrivingRms: null };
-  return {
-    sentRms: rms(prev.audioEnergyOut, cur.audioEnergyOut, prev.audioSecondsOut, cur.audioSecondsOut),
-    arrivingRms: rms(prev.audioEnergyIn, cur.audioEnergyIn, prev.audioSecondsIn, cur.audioSecondsIn),
-  };
-}
-
-/** Below this over a whole window, a stream carries no voice at all. */
-const SILENT_RMS = 0.001;
-/** Opus at its lowest still sends several kbps; under this nothing is flowing. */
-const NO_AUDIO_KBPS = 2;
 
 const rate = (previous: number, current: number, elapsedMs: number): number | null => {
   const delta = current - previous;
@@ -426,51 +348,6 @@ const frameSize = (sample: TrafficSample | null): string => {
   return `${Math.round(w)}x${Math.round(h)}`;
 };
 
-/** A 0-1 level to three places, which is where a quiet voice still shows. */
-const level = (value: number | null): string =>
-  value === null || !Number.isFinite(value) ? "unknown" : value.toFixed(3);
-
-const playback = (voice: VoicePlayback | null): string => {
-  if (voice === null) return "unknown";
-  if (!voice.found) return "no element is playing their stream";
-  return [
-    voice.paused ? "paused" : "playing",
-    voice.muted ? "muted" : "not muted",
-    `volume ${Math.round(voice.volume * 100)}%`,
-    `output ${voice.sinkId === null ? "unknown" : voice.sinkId === "" ? "default" : voice.sinkId}`,
-  ].join(", ");
-};
-
-/**
- * Where, between their microphone and this screen's speakers, a voice that
- * nobody hears went missing. Each link is checked in the order the voice
- * travels, and only the first broken one is named: everything after it is
- * starved rather than faulty.
- */
-function voiceNotes(input: ReportInput): string[] {
-  const notes: string[] = [];
-  const sent = input.voices?.sentRms ?? null;
-  if (sent !== null && sent < SILENT_RMS) {
-    notes.push("NOTE: this side is sending silence - the microphone reaches the call as silence, so the other person hears nothing from here whatever their screen does.");
-  }
-
-  const down = input.rates?.audioDownKbps ?? null;
-  if (down !== null && down < NO_AUDIO_KBPS) {
-    notes.push("NOTE: almost none of their voice is arriving - it is lost before it reaches this browser, on their side or on the way. Their report's TRAFFIC and VOICES lines say which.");
-    return notes;
-  }
-  const arriving = input.voices?.arrivingRms ?? null;
-  if (down !== null && arriving !== null && arriving < SILENT_RMS) {
-    notes.push("NOTE: their voice is arriving, but as silence - the packets come and carry nothing, so their microphone or its processing is sending silence. Their report's \"Voice level sent\" confirms it.");
-    return notes;
-  }
-  const voice = input.theirVoice ?? null;
-  if (down !== null && voice !== null && (!voice.found || voice.paused || voice.muted || voice.volume === 0)) {
-    notes.push("NOTE: their voice arrives, but this screen is not playing it - the element that should play it is missing, paused, muted or at zero volume. Nothing on their side or on the network can fix this one.");
-  }
-  return notes;
-}
-
 /** Formats a fixed, pasteable summary so an incomplete stats snapshot is still useful. */
 export function formatReport(input: ReportInput): string {
   const topology = input.topology;
@@ -498,9 +375,6 @@ export function formatReport(input: ReportInput): string {
     `Audio loss: ${loss(rates?.audioLossPct ?? null)}`,
     `Video cap from upload estimate: ${whole(input.videoCapKbps ?? null, "kbps")}`,
     `Video size: ${frameSize(sample)}`,
-    "VOICES",
-    `Voice level sent / arriving: ${level(input.voices?.sentRms ?? null)} / ${level(input.voices?.arrivingRms ?? null)}`,
-    `Their voice on this screen: ${playback(input.theirVoice ?? null)}`,
     "DELAY",
     `ICE RTT: ${whole(input.netRttMs, "ms")}`,
     `DataChannel ping: ${whole(input.pingRttMs, "ms")}`,
@@ -532,7 +406,6 @@ export function formatReport(input: ReportInput): string {
     `Room: ${input.mic === null ? "not opened" : (input.mic.room ?? "unknown")}`,
   ];
 
-  lines.push(...voiceNotes(input));
   if (topology === null) lines.push("VERDICT: no route selected yet.");
   else if (!topology.relayed) lines.push("VERDICT: direct.");
   else if (input.netRttMs !== null && input.netRttMs > RELAY_SLOW_RTT_MS) lines.push("VERDICT: relayed and slow - the long round trip may be caused by a distant relay or a distant other person.");
