@@ -68,6 +68,7 @@ import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
 import { summarizeMic } from "@/lib/media/micState";
 import { NATURAL_VOICE_AUDIO } from "@/lib/media/naturalVoice";
 import { useNaturalVoiceDefault } from "@/lib/media/useNaturalVoiceDefault";
+import { useDuetHold } from "@/lib/media/useDuetHold";
 import { describeLevel } from "@/lib/media/inputLevel";
 import type { MicReport } from "@/lib/rtc/diagnostics";
 import { useSingingTurn } from "@/lib/media/useSingingTurn";
@@ -1314,15 +1315,18 @@ export function RoomClient({ code }: { code: string }) {
     };
   }, [peer.localStream, peer.micMode, room.noisy, room.reading, singing]);
 
-  const turn = singingTurn(singing.mine, singing.theirs);
+  // The detector, held steady through a duet so a breath is not mistaken for
+  // the end of one -- see useDuetHold. Only whose music moves reads this.
+  const held = useDuetHold(singing.mine, singing.theirs, karaoke && media.playing);
+  const turn = singingTurn(held.mine, held.theirs);
   // Which part this side plays when BOTH of you are singing. `turn` cannot
   // answer that on its own: it reports "nobody" for two people singing
   // together and for two people saying nothing, and those want opposite
   // offsets. An unknown peer answers "none" rather than guessing -- see
   // duetRoleFor for why a guess costs both sides a seek and buys nothing.
   const role = duetRoleFor(
-    singing.mine,
-    singing.theirs,
+    held.mine,
+    held.theirs,
     getIdentity(),
     theirIdentity,
   );
