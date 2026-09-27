@@ -67,6 +67,7 @@ import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
 import { summarizeMic } from "@/lib/media/micState";
 import { NATURAL_VOICE_AUDIO } from "@/lib/media/naturalVoice";
+import { useNaturalVoiceDefault } from "@/lib/media/useNaturalVoiceDefault";
 import { describeLevel } from "@/lib/media/inputLevel";
 import type { MicReport } from "@/lib/rtc/diagnostics";
 import { useSingingTurn } from "@/lib/media/useSingingTurn";
@@ -1172,8 +1173,9 @@ export function RoomClient({ code }: { code: string }) {
   );
 
   // Natural voice: this side's microphone with the noise filter off and echo
-  // removal and auto-volume kept on. Karaoke only, off by default, and
-  // put back to the call's setting whenever karaoke closes.
+  // removal and auto-volume kept on. Karaoke only: switched on as karaoke
+  // opens, turned off by the switch whenever someone wants, and put back to
+  // the call's setting whenever karaoke closes.
   const [naturalBusy, setNaturalBusy] = useState(false);
   const [naturalNotice, setNaturalNotice] = useState<string | null>(null);
   const { switchMic } = peer;
@@ -1195,6 +1197,7 @@ export function RoomClient({ code }: { code: string }) {
     },
     [switchMic],
   );
+  useNaturalVoiceDefault(karaoke, () => onNaturalVoice(true));
   useEffect(() => {
     if (karaoke) return;
     // Cleared after the effect, the way the room's other session resets are,
