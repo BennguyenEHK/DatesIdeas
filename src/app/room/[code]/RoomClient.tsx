@@ -66,6 +66,7 @@ import { useBooth } from "@/lib/photo/useBooth";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
 import { summarizeMic } from "@/lib/media/micState";
+import { NATURAL_VOICE_AUDIO } from "@/lib/media/naturalVoice";
 import { describeLevel } from "@/lib/media/inputLevel";
 import type { MicReport } from "@/lib/rtc/diagnostics";
 import { useSingingTurn } from "@/lib/media/useSingingTurn";
@@ -1159,7 +1160,48 @@ export function RoomClient({ code }: { code: string }) {
    * canceller, which is why ordinary talking never echoed. A held note may
    * fade a little under the speech processing; that beats a loop.
    */
-  const micStream = peer.localStream;
+  const micStream = useMemo(
+    // Built from the track rather than the call's stream: the meter and the
+    // singing detector bind to the track they were given, and natural voice
+    // reopens the microphone -- so they have to follow the new one.
+    () =>
+      peer.micTrack !== null && typeof MediaStream === "function"
+        ? new MediaStream([peer.micTrack])
+        : peer.localStream,
+    [peer.micTrack, peer.localStream],
+  );
+
+  // Natural voice: this side's microphone with the noise filter and
+  // auto-volume off and echo removal kept on. Karaoke only, off by default, and
+  // put back to the call's setting whenever karaoke closes.
+  const [naturalBusy, setNaturalBusy] = useState(false);
+  const [naturalNotice, setNaturalNotice] = useState<string | null>(null);
+  const { switchMic } = peer;
+  const onNaturalVoice = useCallback(
+    (on: boolean) => {
+      setNaturalBusy(true);
+      setNaturalNotice(null);
+      void switchMic(on ? "natural" : "call").then((outcome) => {
+        setNaturalBusy(false);
+        if (!on) return;
+        if (outcome === "refused") {
+          setNaturalNotice(
+            "Your laptop turned echo removal off in this mode, so the normal mic is back to stop an echo loop.",
+          );
+        } else if (outcome === "failed") {
+          setNaturalNotice("Couldn't reopen the mic in natural mode, so the normal mic is back.");
+        }
+      });
+    },
+    [switchMic],
+  );
+  useEffect(() => {
+    if (karaoke) return;
+    // Cleared after the effect, the way the room's other session resets are,
+    // so a notice from one song never greets the next karaoke.
+    queueMicrotask(() => setNaturalNotice(null));
+    if (peer.micMode === "natural") void switchMic("call");
+  }, [karaoke, peer.micMode, switchMic]);
 
   // Who is actually singing, which is the only thing that can decide whose
   // music moves. Both sides run this, and each tells the other.
@@ -1254,7 +1296,10 @@ export function RoomClient({ code }: { code: string }) {
     if (track === null) return null;
     const level = singing.readLevel();
     return {
-      ...summarizeMic(track, CALL_MIC_AUDIO),
+      ...summarizeMic(
+        track,
+        peer.micMode === "natural" ? NATURAL_VOICE_AUDIO : CALL_MIC_AUDIO,
+      ),
       error: null,
       level: describeLevel(level),
       room: `measured, ${room.noisy ? "noisy" : "quiet"}${
@@ -1264,7 +1309,7 @@ export function RoomClient({ code }: { code: string }) {
       }`,
       dropouts: level.gates,
     };
-  }, [peer.localStream, room.noisy, room.reading, singing]);
+  }, [peer.localStream, peer.micMode, room.noisy, room.reading, singing]);
 
   const turn = singingTurn(singing.mine, singing.theirs);
   // Which part this side plays when BOTH of you are singing. `turn` cannot
@@ -1898,6 +1943,10 @@ export function RoomClient({ code }: { code: string }) {
             <KaraokePanel
                     videoId={media.videoId}
                     playing={media.playing}
+                    naturalVoice={peer.micMode === "natural"}
+                    naturalBusy={naturalBusy}
+                    naturalNotice={naturalNotice}
+                    onNaturalVoice={onNaturalVoice}
                     videoError={videoError}
                     musicVolume={musicVolume}
                     onMusicVolume={setMusicVolume}

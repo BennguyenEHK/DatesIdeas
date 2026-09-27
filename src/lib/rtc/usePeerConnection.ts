@@ -6,6 +6,12 @@ import { decode, encode, type PeerMessage } from "./protocol";
 import { SyncedClock } from "@/lib/sync/SyncedClock";
 import { selectPath, type PathInfo } from "./path";
 import { preferMusicAudio } from "./sdp";
+import {
+  reopenMic,
+  swapStreamMic,
+  type MicMode,
+  type MicOutcome,
+} from "@/lib/media/naturalVoice";
 import { readJitter, jitterDelayMs, type JitterSample } from "./videoStats";
 import {
   readAudio,
@@ -153,6 +159,20 @@ export interface PeerApi {
   setVideoMode: (mode: VideoMode) => void;
   /** Whether this side's microphone is currently sending anything. */
   micOn: boolean;
+  /** Which setting the call's microphone is open with: the call's, or natural voice. */
+  micMode: MicMode;
+  /**
+   * The microphone track the call is sending right now. Changes when the
+   * microphone is reopened, so anything listening to it must follow this
+   * rather than hold on to the first one.
+   */
+  micTrack: MediaStreamTrack | null;
+  /**
+   * Reopens the call's one microphone with a different setting and puts it on
+   * the call without renegotiating. Resolves with how it went, or null when
+   * there was no microphone to switch. See naturalVoice.ts.
+   */
+  switchMic: (mode: MicMode) => Promise<MicOutcome | null>;
   /** Whether this side's camera is currently sending a picture. */
   camOn: boolean;
   /**
@@ -260,6 +280,15 @@ export function usePeerConnection(
   // A ref rather than the state value because a switch thrown while a stream is
   // being re-acquired must still find the stream that eventually arrives.
   const streamRef = useRef<MediaStream | null>(null);
+  const [micMode, setMicModeState] = useState<MicMode>("call");
+  const [micTrack, setMicTrack] = useState<MediaStreamTrack | null>(null);
+  // Refs for the reopen, which runs across awaits: it must read the mute switch
+  // and the mode as they are when it finishes, not as they were when it began.
+  const micOnRef = useRef(true);
+  const micModeRef = useRef<MicMode>("call");
+  // Reopens run one after another. Two at once would each stop the other's
+  // freshly opened microphone.
+  const micSwitchRef = useRef<Promise<unknown>>(Promise.resolve());
 
   // The route as the senders and receivers need to hear about it. Held as
   // state rather than a ref because both the camera budget and the jitter
@@ -418,6 +447,10 @@ export function usePeerConnection(
         stream = s;
         setMediaError(null);
         setLocalStream(s);
+        // A fresh stream is always the call's own setting.
+        micModeRef.current = "call";
+        setMicModeState("call");
+        setMicTrack(s.getAudioTracks()[0] ?? null);
         setMediaSettled(true);
       })
       .catch((err: DOMException) => {
@@ -425,6 +458,7 @@ export function usePeerConnection(
         // Join anyway: a receive-only session is better than a dead page.
         setMediaError(err.name === "NotAllowedError" ? "denied" : "unavailable");
         setLocalStream(null);
+        setMicTrack(null);
         // A refusal is still a decision — proceed receive-only rather than hang.
         setMediaSettled(true);
       });
@@ -913,6 +947,7 @@ export function usePeerConnection(
   // back on, which is the one failure here nobody would forgive.
   useEffect(() => {
     streamRef.current = localStream;
+    micOnRef.current = micOn;
     for (const track of localStream?.getAudioTracks() ?? []) track.enabled = micOn;
     for (const track of localStream?.getVideoTracks() ?? []) track.enabled = camOn;
   }, [localStream, micOn, camOn]);
@@ -922,6 +957,42 @@ export function usePeerConnection(
     // The stream's own microphone is the only one the call ever sends,
     // karaoke included, so this switch is its whole mute.
     for (const track of streamRef.current?.getAudioTracks() ?? []) track.enabled = on;
+  }, []);
+
+  const switchMic = useCallback((mode: MicMode): Promise<MicOutcome | null> => {
+    const run = async (): Promise<MicOutcome | null> => {
+      const stream = streamRef.current;
+      if (stream === null || typeof navigator === "undefined") return null;
+      if (micModeRef.current === mode) return "ok";
+
+      const current = stream.getAudioTracks()[0] ?? null;
+      const sender =
+        pcRef.current
+          ?.getSenders()
+          .find((s) => s.track === current || s.track?.kind === "audio") ?? null;
+      // Stopped BEFORE the new one opens. One capture at a time is the whole
+      // point: a second copy beside the first is how the canceller got refused.
+      current?.stop();
+
+      const result = await reopenMic(navigator.mediaDevices, mode, CALL_MIC_AUDIO);
+      if (streamRef.current !== stream) {
+        // The call re-acquired its media meanwhile; this microphone is orphaned.
+        result.track?.stop();
+        return null;
+      }
+      if (result.track === null) {
+        setMicTrack(null);
+        return result.outcome;
+      }
+      await swapStreamMic(stream, sender, result.track, micOnRef.current);
+      micModeRef.current = result.mode;
+      setMicModeState(result.mode);
+      setMicTrack(result.track);
+      return result.outcome;
+    };
+    const next = micSwitchRef.current.then(run, run);
+    micSwitchRef.current = next;
+    return next;
   }, []);
 
   const setCamOn = useCallback((on: boolean) => {
@@ -1098,6 +1169,9 @@ export function usePeerConnection(
     report,
     setVideoMode,
     micOn,
+    micMode,
+    micTrack,
+    switchMic,
     camOn,
     setMicOn,
     setCamOn,

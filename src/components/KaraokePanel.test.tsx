@@ -7,6 +7,10 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
     videoId: "dQw4w9WgXcQ",
     playing: true,
     videoError: null,
+    naturalVoice: false,
+    naturalBusy: false,
+    naturalNotice: null as string | null,
+    onNaturalVoice: vi.fn(),
     onLoad: vi.fn(),
     track: {
       ready: false,
@@ -54,6 +58,34 @@ describe("transport-first karaoke controls", () => {
     setup();
     expect(screen.queryByRole("button", { name: /headphones|speakers/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /(quiet|noisy) room/i })).toBeNull();
+  });
+
+  it("offers a natural voice switch, off to begin with", () => {
+    const p = setup();
+    const toggle = screen.getByRole("switch", { name: /natural voice/i });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    expect(p.onNaturalVoice).toHaveBeenCalledWith(true);
+  });
+
+  it("turns natural voice back off from the same switch", () => {
+    const p = setup({ naturalVoice: true });
+    const toggle = screen.getByRole("switch", { name: /natural voice/i });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    expect(p.onNaturalVoice).toHaveBeenCalledWith(false);
+  });
+
+  it("holds the switch while the microphone is reopening", () => {
+    setup({ naturalBusy: true });
+    expect(
+      (screen.getByRole("switch", { name: /natural voice/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("says why natural voice did not stay on", () => {
+    setup({ naturalNotice: "Your laptop kept echo removal off, so the normal mic is back." });
+    expect(screen.getByRole("status").textContent).toMatch(/normal mic is back/i);
   });
 
   it("shows the transport and choose-song action before a song is loaded", () => {

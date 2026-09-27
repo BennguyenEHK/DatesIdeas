@@ -74,6 +74,13 @@ export function KaraokePanel(props: {
   videoId: string | null;
   playing: boolean;
   videoError: number | null;
+  /** Whether this side's microphone is on its natural voice setting. */
+  naturalVoice: boolean;
+  /** True while the microphone is being reopened for a change of setting. */
+  naturalBusy: boolean;
+  /** Why natural voice did not stay on, or null. */
+  naturalNotice: string | null;
+  onNaturalVoice: (on: boolean) => void;
   onLoad: (videoId: string) => void;
   /** Everything about singing to a file you own rather than to YouTube. */
   track: TrackChoice;
@@ -100,6 +107,10 @@ export function KaraokePanel(props: {
     videoId,
     playing,
     videoError,
+    naturalVoice,
+    naturalBusy,
+    naturalNotice,
+    onNaturalVoice,
     onLoad,
     track,
     helper,
@@ -135,6 +146,10 @@ export function KaraokePanel(props: {
           videoId={videoId}
           videoError={videoError}
           playing={playing}
+          naturalVoice={naturalVoice}
+          naturalBusy={naturalBusy}
+          naturalNotice={naturalNotice}
+          onNaturalVoice={onNaturalVoice}
           musicVolume={musicVolume}
           onMusicVolume={onMusicVolume}
           turn={turn}
@@ -577,6 +592,10 @@ function Transport({
   videoId,
   videoError,
   playing,
+  naturalVoice,
+  naturalBusy,
+  naturalNotice,
+  onNaturalVoice,
   musicVolume,
   onMusicVolume,
   turn,
@@ -594,6 +613,13 @@ function Transport({
   videoId: string | null;
   videoError: number | null;
   playing: boolean;
+  /** Whether this side's microphone is on its natural voice setting. */
+  naturalVoice: boolean;
+  /** True while the microphone is being reopened for a change of setting. */
+  naturalBusy: boolean;
+  /** Why natural voice did not stay on, or null. */
+  naturalNotice: string | null;
+  onNaturalVoice: (on: boolean) => void;
   musicVolume: number;
   onMusicVolume: (percent: number) => void;
   turn: SingingTurn;
@@ -687,6 +713,12 @@ function Transport({
           onOffsetMs={onOffsetMs}
         />
 
+        <NaturalVoiceSwitch
+          on={naturalVoice}
+          busy={naturalBusy}
+          onChange={onNaturalVoice}
+        />
+
         {/* Said to everyone, because the microphone is the call's own and
             does the same thing whatever is plugged in: its echo canceller
             takes most of the speakers out, and headphones take out the rest. */}
@@ -697,6 +729,15 @@ function Transport({
           <HeadphoneIcon className="h-3.5 w-3.5 shrink-0" />
           Headphones give the clearest sound — speakers can echo.
         </p>
+
+        {naturalNotice !== null ? (
+          <p
+            role="status"
+            className="w-full basis-full text-[0.65rem] leading-tight text-[var(--cream)]"
+          >
+            {naturalNotice}
+          </p>
+        ) : null}
       </div>
 
       {/* A fetch outlives the picker that started it, so the wait has to be
@@ -768,6 +809,44 @@ function ResyncIcon() {
       <path d="M13 8A5 5 0 1 1 11.5 4.2" strokeLinecap="round" />
       <path d="M13 2.5V5.5H10" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+/**
+ * This side's microphone with the two speech filters off -- the noise
+ * suppressor that fades a held note and the automatic gain that squeezes it --
+ * and the echo canceller kept on. Only ever this person's own microphone: the
+ * other person's laptop may answer differently, and it is theirs to choose.
+ */
+function NaturalVoiceSwitch({
+  on,
+  busy,
+  onChange,
+}: {
+  on: boolean;
+  busy: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      disabled={busy}
+      onClick={() => onChange(!on)}
+      title="Turns off the noise filter and auto-volume for a more natural singing voice. Echo removal stays on. Background noise will be heard."
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-[2px] border px-2 py-1 tracking-wide transition-colors disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none ${
+        on
+          ? "border-[var(--lamp)]/60 text-[var(--cream)]"
+          : "border-[var(--edge)] text-[var(--mist)] hover:text-[var(--cream)]"
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`h-1.5 w-1.5 rounded-full ${on ? "bg-[var(--lamp)]" : "bg-[var(--mist)]/40"}`}
+      />
+      Natural voice
+    </button>
   );
 }
 
