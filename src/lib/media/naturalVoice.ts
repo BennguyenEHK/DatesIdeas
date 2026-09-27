@@ -1,11 +1,14 @@
 /**
  * The "Natural voice" switch for karaoke: the call's one microphone reopened
- * with the two speech filters off and the echo canceller kept on.
+ * with the noise suppressor off, and the echo canceller and automatic gain
+ * kept on.
  *
- * The browser's noise suppressor fades a held note as if it were a fan, and
- * its automatic gain squeezes a voice until it sounds compressed. Both are
- * only on or off, and only chosen when the device is OPENED -- so the switch
- * reopens the microphone. It is the same microphone, never a second copy
+ * The noise suppressor fades a held note as if it were a fan, which is what
+ * made high notes vanish. Automatic gain only squeezes a voice a little, and
+ * with no boost stage it is the one thing keeping a singer who steps back
+ * from the laptop audible -- a slightly compressed voice you can hear beats a
+ * natural one you cannot. These are only on or off, and only chosen when the
+ * device is OPENED, so the switch reopens the microphone. It is the same microphone, never a second copy
  * beside the first: a second copy on these laptops came back with its echo
  * canceller refused, and without one the speakers go straight back to the
  * other person as an echo loop.
@@ -18,7 +21,7 @@
 export const NATURAL_VOICE_AUDIO: MediaTrackConstraints = {
   echoCancellation: true,
   noiseSuppression: false,
-  autoGainControl: false,
+  autoGainControl: true,
 };
 
 export type MicMode = "call" | "natural";

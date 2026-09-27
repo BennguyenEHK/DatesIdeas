@@ -1171,8 +1171,8 @@ export function RoomClient({ code }: { code: string }) {
     [peer.micTrack, peer.localStream],
   );
 
-  // Natural voice: this side's microphone with the noise filter and
-  // auto-volume off and echo removal kept on. Karaoke only, off by default, and
+  // Natural voice: this side's microphone with the noise filter off and echo
+  // removal and auto-volume kept on. Karaoke only, off by default, and
   // put back to the call's setting whenever karaoke closes.
   const [naturalBusy, setNaturalBusy] = useState(false);
   const [naturalNotice, setNaturalNotice] = useState<string | null>(null);

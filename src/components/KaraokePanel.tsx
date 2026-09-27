@@ -813,10 +813,10 @@ function ResyncIcon() {
 }
 
 /**
- * This side's microphone with the two speech filters off -- the noise
- * suppressor that fades a held note and the automatic gain that squeezes it --
- * and the echo canceller kept on. Only ever this person's own microphone: the
- * other person's laptop may answer differently, and it is theirs to choose.
+ * This side's microphone with the noise suppressor off -- the filter that
+ * fades a held note -- and echo removal and auto-volume kept on. Only ever
+ * this person's own microphone: the other person's laptop may answer
+ * differently, and it is theirs to choose.
  */
 function NaturalVoiceSwitch({
   on,
@@ -834,7 +834,7 @@ function NaturalVoiceSwitch({
       aria-checked={on}
       disabled={busy}
       onClick={() => onChange(!on)}
-      title="Turns off the noise filter and auto-volume for a more natural singing voice. Echo removal stays on. Background noise will be heard."
+      title="Turns off the noise filter so high notes don't fade. Echo removal and auto-volume stay on. Background noise will be heard."
       className={`inline-flex shrink-0 items-center gap-1.5 rounded-[2px] border px-2 py-1 tracking-wide transition-colors disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none ${
         on
           ? "border-[var(--lamp)]/60 text-[var(--cream)]"

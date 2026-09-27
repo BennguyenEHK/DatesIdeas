@@ -34,13 +34,15 @@ function opener(...tracks: Array<MediaStreamTrack | null>): MicOpener & {
 }
 
 describe("the natural voice request", () => {
-  it("keeps echo cancellation on and takes the two speech filters off", () => {
+  it("keeps echo cancellation and auto-volume on, and takes the noise filter off", () => {
     // Echo cancellation is never negotiable here: without it the microphone
     // sends the speakers straight back, which is the loop this app had.
+    // Auto-volume stays too: with no boost stage, it is the only thing that
+    // keeps a singer who steps back from the laptop audible.
     expect(NATURAL_VOICE_AUDIO).toEqual({
       echoCancellation: true,
       noiseSuppression: false,
-      autoGainControl: false,
+      autoGainControl: true,
     });
   });
 });
