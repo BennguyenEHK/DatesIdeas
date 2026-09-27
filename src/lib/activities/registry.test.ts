@@ -50,6 +50,7 @@ describe("activity registry", () => {
       "gameword",
       "album",
       "calendar",
+      "lookbook",
     ]);
     expect(ACTIVITIES.filter((a) => a.kind === "companion").map((a) => a.id)).toEqual([
       "cards",

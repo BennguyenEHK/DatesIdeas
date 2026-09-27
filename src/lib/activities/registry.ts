@@ -7,6 +7,8 @@ export const ACTIVITY_IDS = [
   "gameword",
   "album",
   "calendar",
+  // Appended, never inserted: an activity's index is part of the wire format.
+  "lookbook",
 ] as const;
 export type ActivityId = (typeof ACTIVITY_IDS)[number];
 
@@ -56,6 +58,8 @@ export const ACTIVITIES: readonly ActivityDef[] = [
   // marks beside the wordmark, where they have always lived, not from bubbles.
   { id: "album", label: "Our album", icon: "📖", kind: "takeover", ready: true, bubble: false },
   { id: "calendar", label: "Our calendar", icon: "📅", kind: "takeover", ready: true, bubble: false },
+  // Kept across evenings, so like the album it needs a season ticket.
+  { id: "lookbook", label: "Lookbook", icon: "👗", kind: "takeover", ready: true },
 ];
 
 export function isActivityId(v: unknown): v is ActivityId {

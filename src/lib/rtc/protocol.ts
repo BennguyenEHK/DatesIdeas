@@ -6,6 +6,7 @@ import { isCanvasOp, type CanvasOp } from "@/lib/createspace/ops";
 import { GEARS, type Gear } from "@/lib/album/types";
 import { isCreateSession, type CreateSession } from "@/lib/createspace/session";
 import { isLookId } from "@/lib/looks/types";
+import { isLookbookId, isPerson, isPlacement, type Placement } from "@/lib/lookbook/types";
 
 export const MEME_IDS = [
   "heart",
@@ -184,7 +185,23 @@ export type PeerMessage =
   // Tonight's music queue, as whole state. Last writer wins by revision, then
   // sentAt, so two people adding songs at once cannot lose either song for
   // long: the loser's next add re-sends the merged list.
-  | { t: "music"; queue: MusicTrack[]; index: number | null; revision: number; sentAt: number };
+  | { t: "music"; queue: MusicTrack[]; index: number | null; revision: number; sentAt: number }
+  // One piece moved, resized, restacked or (place: null) taken off a Lookbook
+  // board. Last writer wins per piece by (at, by), so both boards settle on
+  // the same layout whatever order the moves cross in.
+  | {
+      t: "lookbook-place";
+      outfitId: string;
+      pieceId: string;
+      place: Omit<Placement, "pieceId"> | null;
+      at: number;
+      by: string;
+    }
+  // Which outfit is open on the board, or null for the wardrobe. The later
+  // `at` wins, so both screens show the same outfit.
+  | { t: "lookbook-open"; outfitId: string | null; at: number }
+  // A piece or outfit changed in the database. The receiver reloads.
+  | { t: "lookbook-changed" };
 
 /** One song in tonight's queue. A YouTube id, never a URL. */
 export interface MusicTrack {
@@ -387,6 +404,30 @@ export function decode(raw: string): PeerMessage | null {
         : null;
     case "calendar-changed":
       return { t: "calendar-changed" };
+    case "lookbook-place": {
+      if (!isLookbookId(m.outfitId) || !isLookbookId(m.pieceId) || !isNum(m.at) || !isPerson(m.by)) {
+        return null;
+      }
+      if (m.place === null) {
+        return { t: "lookbook-place", outfitId: m.outfitId, pieceId: m.pieceId, place: null, at: m.at, by: m.by };
+      }
+      const place = { ...(m.place as Record<string, unknown>), pieceId: m.pieceId };
+      if (typeof m.place !== "object" || !isPlacement(place)) return null;
+      return {
+        t: "lookbook-place",
+        outfitId: m.outfitId,
+        pieceId: m.pieceId,
+        place: { x: place.x, y: place.y, scale: place.scale, z: place.z },
+        at: m.at,
+        by: m.by,
+      };
+    }
+    case "lookbook-open":
+      return (m.outfitId === null || isLookbookId(m.outfitId)) && isNum(m.at)
+        ? { t: "lookbook-open", outfitId: m.outfitId === null ? null : (m.outfitId as string), at: m.at }
+        : null;
+    case "lookbook-changed":
+      return { t: "lookbook-changed" };
     case "album-join-request":
       return { t: "album-join-request" };
     case "album-join":

@@ -10,6 +10,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { isAlbumKey, isLegacyAlbumKey } from "@/lib/album/keys";
 import { isLookKeyFor } from "@/lib/looks/keys";
+import { isLookbookKeyFor } from "@/lib/lookbook/keys";
 import { DATED_PATTERN } from "./datedName";
 
 /** How long an upload link stays usable. Short: it is used immediately. */
@@ -185,7 +186,7 @@ export async function listKeys(
 }
 
 /**
- * The only two places this app ever writes. Anything else is refused outright:
+ * The only places this app ever writes. Anything else is refused outright:
  * a delete helper that would remove any key it was handed is one bad string
  * away from emptying the bucket.
  *
@@ -196,6 +197,8 @@ function mayDelete(key: string): boolean {
   if (key.includes("..") || key.includes("\\")) return false;
   const look = /^looks\/([0-9a-f-]{36})\//i.exec(key);
   if (look !== null) return isLookKeyFor(look[1], key);
+  const lookbook = /^lookbook\/([0-9a-f-]{36})\//i.exec(key);
+  if (lookbook !== null) return isLookbookKeyFor(lookbook[1], key);
   return /^(?:keepsakes|album)\/(?:\d{4}\/\d{2}\/[^/]+|[^/]+\/[^/]+)$/.test(key);
 }
 

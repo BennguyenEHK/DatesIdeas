@@ -439,3 +439,42 @@ describe("messages added for recording, CreateSpace and GameWord", () => {
     expect(decode(JSON.stringify({ t: "webgame", id: "skribbl", sentAt: 5 }))).toBeNull();
   });
 });
+
+describe("lookbook messages", () => {
+  it("round-trips a placement, a removal, an open and a change", () => {
+    const moved = {
+      t: "lookbook-place",
+      outfitId: "outfit_01",
+      pieceId: "piece_001",
+      place: { x: 0.4, y: 0.6, scale: 1.2, z: 3 },
+      at: 1_700_000_000_000,
+      by: "k-identity",
+    } as const;
+    const removed = { ...moved, place: null };
+    for (const msg of [
+      moved,
+      removed,
+      { t: "lookbook-open", outfitId: "outfit_01", at: 5 },
+      { t: "lookbook-open", outfitId: null, at: 5 },
+      { t: "lookbook-changed" },
+    ] as const) {
+      expect(decode(encode(msg))).toEqual(msg);
+    }
+  });
+
+  it("refuses a placement off the board, oversized, or from nobody", () => {
+    const base = {
+      t: "lookbook-place",
+      outfitId: "outfit_01",
+      pieceId: "piece_001",
+      place: { x: 0.4, y: 0.6, scale: 1, z: 0 },
+      at: 1,
+      by: "k-identity",
+    };
+    expect(decode(JSON.stringify({ ...base, place: { ...base.place, x: 2 } }))).toBeNull();
+    expect(decode(JSON.stringify({ ...base, place: { ...base.place, scale: 9 } }))).toBeNull();
+    expect(decode(JSON.stringify({ ...base, by: "" }))).toBeNull();
+    expect(decode(JSON.stringify({ ...base, pieceId: "../x" }))).toBeNull();
+    expect(decode(JSON.stringify({ ...base, place: "left" }))).toBeNull();
+  });
+});
