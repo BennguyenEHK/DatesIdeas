@@ -452,7 +452,11 @@ export function formatReport(input: ReportInput): string {
   // The three microphone findings, each of which points somewhere different.
   if (input.mic !== null && input.mic.unmet.length > 0) {
     lines.push(
-      `NOTE: the microphone REFUSED ${input.mic.unmet.join(", ")} - the singing profile was asked for and did not take, so this microphone is still running the processing meant for speech. That processing is built to remove a sustained tone.`,
+      `NOTE: the microphone REFUSED ${input.mic.unmet.join(", ")} - it was asked for when the microphone opened and the device did not take it.${
+        input.mic.unmet.includes("echoCancellation")
+          ? " Without echo cancellation this microphone sends back whatever the speakers play, which the other person hears as their own voice."
+          : ""
+      }`,
     );
   }
   if (input.mic?.voiceIsolation === true) {

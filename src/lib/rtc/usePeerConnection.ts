@@ -151,15 +151,6 @@ export interface PeerApi {
   report: (activity: string | null, mic: MicReport | null) => string;
   /** Caps the outgoing camera, or lets it run free. */
   setVideoMode: (mode: VideoMode) => void;
-  /**
-   * The sender carrying this side's voice, so a caller can put a different
-   * microphone on it without renegotiating.
-   *
-   * Karaoke needs this because the browser decides a microphone's processing
-   * when the device is OPENED and never afterwards -- so a singing profile can
-   * only be had by opening a second microphone and replacing the track here.
-   */
-  audioSender: RTCRtpSender | null;
   /** Whether this side's microphone is currently sending anything. */
   micOn: boolean;
   /** Whether this side's camera is currently sending a picture. */
@@ -212,11 +203,22 @@ type PrioritizedChannelInit = RTCDataChannelInit & {
 const SYNC_CHANNEL: PrioritizedChannelInit = { ordered: true, priority: "high" };
 const FILE_CHANNEL: PrioritizedChannelInit = { ordered: true, priority: "low" };
 
-const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
-  video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+/**
+ * What the call's microphone is asked for when it opens. Exported because
+ * karaoke sings into this same microphone, and the report reads it back
+ * against exactly this request.
+ */
+export const CALL_MIC_AUDIO: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
   // Two channels asked for so a stereo-capable input is not collapsed before
   // it reaches the encoder. Most microphones are mono and will ignore it.
-  audio: { echoCancellation: true, noiseSuppression: true, channelCount: 2 },
+  channelCount: 2,
+};
+
+const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
+  video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+  audio: CALL_MIC_AUDIO,
 };
 
 export function usePeerConnection(
@@ -270,7 +272,6 @@ export function usePeerConnection(
   // runs fast for that whole stretch so the answer and candidates are not
   // left waiting on a five-second heartbeat.
   const [restartPending, setRestartPending] = useState(false);
-  const [audioSender, setAudioSender] = useState<RTCRtpSender | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   // Every receiver this connection has produced, so a route change can retune
@@ -457,9 +458,6 @@ export function usePeerConnection(
         if (track.kind === "video") track.contentHint = "motion";
         pc.addTrack(track, localStream);
       }
-      setAudioSender(
-        pc.getSenders().find((s) => s.track?.kind === "audio") ?? null,
-      );
       setSending(true);
     } else {
       setSending(false);
@@ -921,12 +919,9 @@ export function usePeerConnection(
 
   const setMicOn = useCallback((on: boolean) => {
     setMicOnState(on);
+    // The stream's own microphone is the only one the call ever sends,
+    // karaoke included, so this switch is its whole mute.
     for (const track of streamRef.current?.getAudioTracks() ?? []) track.enabled = on;
-    // Deliberately only the stream's own tracks. During karaoke the sender is
-    // carrying a DIFFERENT microphone -- one opened separately so its
-    // processing could be chosen at the device -- and whoever put it there is
-    // responsible for keeping it in step with this switch. Two owners of one
-    // fact is how they end up disagreeing.
   }, []);
 
   const setCamOn = useCallback((on: boolean) => {
@@ -1025,7 +1020,6 @@ export function usePeerConnection(
     appliedLeash.current = null;
     appliedTargets.current = null;
     leashHealth.current = INITIAL_LEASH_HEALTH;
-    setAudioSender(null);
     setRoute(null);
     jitterRef.current = null;
     audioRef.current = null;
@@ -1062,7 +1056,6 @@ export function usePeerConnection(
     appliedLeash.current = null;
     appliedTargets.current = null;
     leashHealth.current = INITIAL_LEASH_HEALTH;
-    setAudioSender(null);
     setRoute(null);
     setRemoteStream(null);
     setPath(null);
@@ -1104,7 +1097,6 @@ export function usePeerConnection(
     onFileChunk,
     report,
     setVideoMode,
-    audioSender,
     micOn,
     camOn,
     setMicOn,

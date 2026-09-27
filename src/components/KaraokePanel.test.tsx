@@ -7,9 +7,6 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
     videoId: "dQw4w9WgXcQ",
     playing: true,
     videoError: null,
-    audioMode: "headphones" as const,
-    audioAuto: false,
-    onChooseAudio: vi.fn(),
     onLoad: vi.fn(),
     track: {
       ready: false,
@@ -46,24 +43,17 @@ function setup(overrides: Partial<Parameters<typeof KaraokePanel>[0]> = {}) {
 }
 
 describe("transport-first karaoke controls", () => {
-  it("warns that speakers can send the other person's voice back, and names the cure", () => {
-    setup({ audioMode: "speakers" });
-    expect(screen.getByRole("note").textContent).toMatch(
-      /they may hear their own voice back .* headphones/i,
-    );
-    // The old advice was to switch to a noisy room, which no longer changes
-    // the microphone at all.
-    expect(screen.getByRole("note").textContent).not.toMatch(/noisy/i);
-  });
-
-  it("offers no noisy-room switch, since singing never uses noise suppression", () => {
+  it("always suggests headphones, since the call's own microphone hears the speakers", () => {
     setup();
-    expect(screen.queryByRole("button", { name: /(quiet|noisy) room/i })).toBeNull();
+    expect(screen.getByRole("note").textContent).toMatch(
+      /headphones give the clearest sound .* speakers can echo/i,
+    );
   });
 
-  it("does not show the speaker warning with headphones", () => {
-    setup({ audioMode: "headphones" });
-    expect(screen.queryByRole("note")).toBeNull();
+  it("offers no headphones, speakers or room switch, since none of them changes the microphone", () => {
+    setup();
+    expect(screen.queryByRole("button", { name: /headphones|speakers/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /(quiet|noisy) room/i })).toBeNull();
   });
 
   it("shows the transport and choose-song action before a song is loaded", () => {

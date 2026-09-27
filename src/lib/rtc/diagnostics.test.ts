@@ -247,6 +247,13 @@ describe("the microphone findings", () => {
     const out = formatReport({ ...base, mic: mic({ unmet: ["noiseSuppression"] }) });
     expect(out).toContain("Requested but refused: noiseSuppression");
     expect(out).toContain("NOTE: the microphone REFUSED noiseSuppression");
+    expect(out).not.toContain("singing profile");
+  });
+
+  it("says what a refused echo canceller costs, since that is an echo loop", () => {
+    const out = formatReport({ ...base, mic: mic({ unmet: ["echoCancellation"] }) });
+    expect(out).toContain("NOTE: the microphone REFUSED echoCancellation");
+    expect(out).toContain("sends back whatever the speakers play");
   });
 
   it("names operating-system voice isolation, which points below the browser", () => {

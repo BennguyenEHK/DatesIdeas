@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { usePeerConnection } from "@/lib/rtc/usePeerConnection";
+import { CALL_MIC_AUDIO, usePeerConnection } from "@/lib/rtc/usePeerConnection";
 import { useGestureDetection } from "@/lib/vision/useGestureDetection";
 import { useSession } from "@/lib/history/useSession";
 import { Ambience } from "@/components/Ambience";
@@ -65,11 +65,9 @@ import { PhotoStrip } from "@/components/PhotoStrip";
 import { useBooth } from "@/lib/photo/useBooth";
 import { YouTubePlayer } from "@/components/YouTubePlayer";
 import { useSyncedPlayback } from "@/lib/media/useSyncedPlayback";
-import { useMicProfile } from "@/lib/media/useMicProfile";
-import { describeMic } from "@/lib/media/micState";
+import { summarizeMic } from "@/lib/media/micState";
 import { describeLevel } from "@/lib/media/inputLevel";
 import type { MicReport } from "@/lib/rtc/diagnostics";
-import { useOutputMode } from "@/lib/media/outputDevice";
 import { useSingingTurn } from "@/lib/media/useSingingTurn";
 import { useRoomNoise } from "@/lib/media/useRoomNoise";
 import {
@@ -175,12 +173,10 @@ export function RoomClient({ code }: { code: string }) {
   // the other person's voice is the reported problem, and 70 was not enough.
   //
   // Both sides hear the same song from their own copy of the video, at whatever
-  // volume they chose. The only thing crossing the link is the singing, and
-  // since the singing microphone stopped using automatic gain control that
-  // singing arrives about 14dB quieter than it used to -- measured, peak 0.50
-  // down to peak 0.10. The music did not get quieter to match, so it took over.
-  // Twenty-five is the level a duet actually sits on top of; the slider is
-  // right there for anyone who wants the room louder.
+  // volume they chose. The only thing crossing the link is the singing, so a
+  // quieter song is what lets the voice sit on top -- and on speakers, less of
+  // the song reaches the microphone for the echo canceller to take back out.
+  // The slider is right there for anyone who wants the room louder.
   const [musicVolume, setMusicVolume] = useState(25);
   // The music bar's own loudness, apart from karaoke's: a song under a
   // conversation sits at a different level from a backing track under a
@@ -1142,11 +1138,6 @@ export function RoomClient({ code }: { code: string }) {
     setVideoMode(karaoke ? "lean" : "full");
   }, [karaoke, peerState, setVideoMode]);
 
-  // Which of you is listening on what. Asked of the operating system rather
-  // than of the person: the answer is already sitting in the device list, and
-  // a question standing between someone and the song is a worse way to get it.
-  const audio = useOutputMode(karaoke);
-
   // How loud the room is, for the diagnostics report only. Singing no longer
   // changes anything for a noisy room: the one tool that could -- the
   // browser's noise suppressor -- is the thing that faded held notes, so it
@@ -1156,58 +1147,19 @@ export function RoomClient({ code }: { code: string }) {
     listening: !media.playing && peer.micOn,
   });
 
-  // Retune the live microphone to match how the song is being heard and which
-  // microphone is singing. Echo cancellation stays on whenever the microphone
-  // can hear what is playing, since it is the only thing stopping it sending
-  // the other person's voice back to them.
   /**
-   * The microphone the call is actually sending.
+   * The microphone the call is sending, which karaoke sings into as it is.
    *
-   * This used to retune the existing one with applyConstraints. A whole
-   * evening's telemetry showed why that never worked: every karaoke report came
-   * back saying "Requested but refused: noiseSuppression, autoGainControl".
-   * The browser decides a microphone's processing when the DEVICE IS OPENED and
-   * never again, so the singing profile was asked for and quietly ignored, and
-   * karaoke ran the processing built for speech -- which exists to remove a
-   * sustained tone, and a held note is a sustained tone.
-   *
-   * So a fresh microphone is opened with the profile baked in and swapped onto
-   * the sender. replaceTrack does that without renegotiating, so nothing drops.
+   * Karaoke used to open a second copy of it with the speech processing taken
+   * off and a boost on top. On these laptops that second copy came back with
+   * its echo canceller REFUSED ("aec off", stereo, 44100Hz -- the browser's
+   * processing bypassed altogether), so it heard the song and the other person
+   * through the speakers or leaking headphones, the boost lifted that, and it
+   * went round as an echo loop. The call's own microphone does get its
+   * canceller, which is why ordinary talking never echoed. A held note may
+   * fade a little under the speech processing; that beats a loop.
    */
-  /**
-   * The microphone the peer connection itself opened, which this page does not
-   * own and must never stop -- only lend out and take back.
-   */
-  const originalMic = useMemo(
-    () => peer.localStream?.getAudioTracks()[0] ?? null,
-    [peer.localStream],
-  );
-
-  const mic = useMicProfile({
-    sender: peer.audioSender,
-    mode: karaoke ? audio.mode : null,
-    // What to hand the call back when the singing stops. Without it the hook
-    // has nowhere to return the sender to, and its replacement microphone would
-    // have to stay open for the rest of the evening.
-    original: originalMic,
-    // A freshly opened microphone always arrives enabled. The hook that opened
-    // it is the only place that can put the switch back before it goes live.
-    enabled: peer.micOn,
-  });
-
-  /**
-   * What the level meter and the singing detector should listen to.
-   *
-   * The swapped track, once there is one: the original stream still holds the
-   * microphone the peer connection opened, and measuring that would report on a
-   * device no longer carrying the call.
-   */
-  const micStream = useMemo(() => {
-    if (mic.track === null || typeof MediaStream !== "function") {
-      return peer.localStream;
-    }
-    return new MediaStream([mic.track]);
-  }, [mic.track, peer.localStream]);
+  const micStream = peer.localStream;
 
   // Who is actually singing, which is the only thing that can decide whose
   // music moves. Both sides run this, and each tells the other.
@@ -1293,18 +1245,17 @@ export function RoomClient({ code }: { code: string }) {
   /**
    * The microphone half of the pasteable report, built only when asked for.
    *
-   * Null until karaoke has actually been opened, because before that nothing
-   * has tuned the microphone and a row of "unknown" would imply we looked and
-   * failed rather than that there was nothing yet to look at.
+   * Read from the call's own microphone, the only one ever sent, and null only
+   * when there is none -- a row of "unknown" would imply we looked and failed
+   * rather than that there was nothing to look at.
    */
   const micReport = useCallback((): MicReport | null => {
-    if (mic.settings === null && mic.error === null) return null;
+    const track = peer.localStream?.getAudioTracks()[0] ?? null;
+    if (track === null) return null;
     const level = singing.readLevel();
     return {
-      description: describeMic(mic.settings),
-      device: mic.settings?.label ?? "unknown",
-      unmet: mic.unmet,
-      error: mic.error,
+      ...summarizeMic(track, CALL_MIC_AUDIO),
+      error: null,
       level: describeLevel(level),
       room: `measured, ${room.noisy ? "noisy" : "quiet"}${
         room.reading?.snrDb != null
@@ -1312,9 +1263,8 @@ export function RoomClient({ code }: { code: string }) {
           : ", not measured yet"
       }`,
       dropouts: level.gates,
-      voiceIsolation: mic.settings?.voiceIsolation ?? null,
     };
-  }, [mic, room.noisy, room.reading, singing]);
+  }, [peer.localStream, room.noisy, room.reading, singing]);
 
   const turn = singingTurn(singing.mine, singing.theirs);
   // Which part this side plays when BOTH of you are singing. `turn` cannot
@@ -1948,9 +1898,6 @@ export function RoomClient({ code }: { code: string }) {
             <KaraokePanel
                     videoId={media.videoId}
                     playing={media.playing}
-                    audioMode={audio.mode}
-                    audioAuto={audio.auto}
-                    onChooseAudio={audio.choose}
                     videoError={videoError}
                     musicVolume={musicVolume}
                     onMusicVolume={setMusicVolume}

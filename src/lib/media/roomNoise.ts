@@ -11,11 +11,11 @@ export const QUIET_SNR_DB = 24;
 /**
  * A room this loud is noisy even when nobody has clearly spoken.
  *
- * Deliberately high. The meter reads the singing microphone AFTER its boost,
- * which lifts quiet sound by roughly 9dB on speakers and 15dB in headphones,
- * so an ordinary silent room can already read near 0.01 there. Only a
- * background that stays loud after that lift counts on its own; anything
- * subtler waits for a voice to compare against.
+ * Deliberately high. The meter reads the call's microphone after the
+ * browser's own processing, whose automatic gain lifts a quiet room between
+ * phrases, so an ordinary silent room can already read near 0.01. Only a
+ * background that stays loud after that counts on its own; anything subtler
+ * waits for a voice to compare against.
  */
 export const LOUD_FLOOR_RMS = 0.03;
 

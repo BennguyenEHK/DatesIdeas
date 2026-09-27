@@ -133,3 +133,31 @@ export function describeMic(settings: MicSettings | null): string {
 
   return parts.join(", ");
 }
+
+/** What the report says about a microphone: how it settled, and what it refused. */
+export interface MicSummary {
+  description: string;
+  device: string;
+  unmet: string[];
+  voiceIsolation: boolean | null;
+}
+
+/**
+ * Reads a live microphone back against what it was asked for when it opened.
+ *
+ * Karaoke sings into the call's own microphone, so this is the one place that
+ * can show whether its echo canceller actually took -- the difference between
+ * a quiet song and an echo loop.
+ */
+export function summarizeMic(
+  track: SettingsTrackLike | null,
+  requested: MediaTrackConstraints,
+): MicSummary {
+  const settings = track === null ? null : readMicSettings(track);
+  return {
+    description: describeMic(settings),
+    device: settings?.label ?? "unknown",
+    unmet: unmetRequests(requested, settings),
+    voiceIsolation: settings?.voiceIsolation ?? null,
+  };
+}

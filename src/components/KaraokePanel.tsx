@@ -3,7 +3,6 @@
 import { useId, useState, type FormEvent } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { youTubeId } from "@/lib/media/youtube";
-import type { AudioMode } from "@/lib/media/micProfile";
 import { MAX_OFFSET_MS, type SingingTurn } from "@/lib/media/singerTurn";
 
 export { MAX_OFFSET_MS };
@@ -75,9 +74,6 @@ export function KaraokePanel(props: {
   videoId: string | null;
   playing: boolean;
   videoError: number | null;
-  audioMode: AudioMode;
-  audioAuto: boolean;
-  onChooseAudio: (mode: AudioMode) => void;
   onLoad: (videoId: string) => void;
   /** Everything about singing to a file you own rather than to YouTube. */
   track: TrackChoice;
@@ -104,9 +100,6 @@ export function KaraokePanel(props: {
     videoId,
     playing,
     videoError,
-    audioMode,
-    audioAuto,
-    onChooseAudio,
     onLoad,
     track,
     helper,
@@ -142,9 +135,6 @@ export function KaraokePanel(props: {
           videoId={videoId}
           videoError={videoError}
           playing={playing}
-          audioMode={audioMode}
-          audioAuto={audioAuto}
-          onChooseAudio={onChooseAudio}
           musicVolume={musicVolume}
           onMusicVolume={onMusicVolume}
           turn={turn}
@@ -161,37 +151,6 @@ export function KaraokePanel(props: {
         />
       )}
     </section>
-  );
-}
-
-/**
- * Switches the answer mid-song, since putting headphones on is exactly the
- * thing someone does once they hear how the speakers sound.
- */
-function AudioSwitch({
-  audioMode,
-  audioAuto,
-  onChoose,
-}: {
-  audioMode: AudioMode;
-  audioAuto: boolean;
-  onChoose: (mode: AudioMode) => void;
-}) {
-  const other: AudioMode = audioMode === "headphones" ? "speakers" : "headphones";
-  return (
-    <button
-      type="button"
-      onClick={() => onChoose(other)}
-      title={
-        audioAuto
-          ? "Audio mode was detected from your audio device; choosing overrides it"
-          : `Switch to ${other}`
-      }
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-[2px] px-2 py-1 tracking-wide text-[var(--mist)] underline decoration-dotted decoration-[var(--mist)]/40 underline-offset-4 transition-colors hover:text-[var(--cream)]"
-    >
-      <HeadphoneIcon aria-hidden className="h-3.5 w-3.5" />
-      {audioMode === "headphones" ? "Headphones" : "Speakers"}
-    </button>
   );
 }
 
@@ -618,9 +577,6 @@ function Transport({
   videoId,
   videoError,
   playing,
-  audioMode,
-  audioAuto,
-  onChooseAudio,
   musicVolume,
   onMusicVolume,
   turn,
@@ -638,9 +594,6 @@ function Transport({
   videoId: string | null;
   videoError: number | null;
   playing: boolean;
-  audioMode: AudioMode;
-  audioAuto: boolean;
-  onChooseAudio: (mode: AudioMode) => void;
   musicVolume: number;
   onMusicVolume: (percent: number) => void;
   turn: SingingTurn;
@@ -734,17 +687,16 @@ function Transport({
           onOffsetMs={onOffsetMs}
         />
 
-        <AudioSwitch audioMode={audioMode} audioAuto={audioAuto} onChoose={onChooseAudio} />
-
-        {audioMode === "speakers" ? (
-          <p
-            role="note"
-            className="min-w-0 max-w-full flex-[1_1_16rem] text-[0.65rem] leading-tight text-[var(--mist)]"
-          >
-            On speakers they may hear their own voice back — keep the volume
-            down, or use headphones for the clearest sound.
-          </p>
-        ) : null}
+        {/* Said to everyone, because the microphone is the call's own and
+            does the same thing whatever is plugged in: its echo canceller
+            takes most of the speakers out, and headphones take out the rest. */}
+        <p
+          role="note"
+          className="inline-flex min-w-0 max-w-full flex-[1_1_16rem] items-center gap-1.5 text-[0.65rem] leading-tight text-[var(--mist)]"
+        >
+          <HeadphoneIcon className="h-3.5 w-3.5 shrink-0" />
+          Headphones give the clearest sound — speakers can echo.
+        </p>
       </div>
 
       {/* A fetch outlives the picker that started it, so the wait has to be

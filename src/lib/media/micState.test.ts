@@ -2,11 +2,29 @@ import { describe, it, expect } from "vitest";
 import {
   describeMic,
   readMicSettings,
+  summarizeMic,
   unmetRequests,
   type MicSettings,
   type SettingsTrackLike,
 } from "./micState";
-import { HEADSET_AUDIO, OPEN_MIC_AUDIO, SPEECH_AUDIO } from "./micProfile";
+
+// Local stand-ins for the shapes a microphone gets asked for, so these tests
+// describe the comparison rather than any one profile the app uses.
+const ALL_OFF: MediaTrackConstraints = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+const CANCEL_ONLY: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: false,
+  autoGainControl: false,
+};
+const ALL_ON: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
 
 const track = (
   settings: Record<string, unknown>,
@@ -86,7 +104,7 @@ describe("readMicSettings", () => {
 describe("unmetRequests", () => {
   it("names a processing flag the device refused to change", () => {
     expect(
-      unmetRequests(HEADSET_AUDIO, settings({
+      unmetRequests(ALL_OFF, settings({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: true,
@@ -96,7 +114,7 @@ describe("unmetRequests", () => {
 
   it("is empty when the device did what it was asked", () => {
     expect(
-      unmetRequests(HEADSET_AUDIO, settings({
+      unmetRequests(ALL_OFF, settings({
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false,
@@ -106,7 +124,7 @@ describe("unmetRequests", () => {
 
   it("names only the flags that actually disagree", () => {
     expect(
-      unmetRequests(OPEN_MIC_AUDIO, settings({
+      unmetRequests(CANCEL_ONLY, settings({
         echoCancellation: true,
         noiseSuppression: true,
         autoGainControl: false,
@@ -117,11 +135,11 @@ describe("unmetRequests", () => {
   it("does not accuse a device of refusing something it never reported", () => {
     // A browser that omits the field is silent, not disobedient. Reporting it
     // as refused would send someone chasing a fault that may not exist.
-    expect(unmetRequests(SPEECH_AUDIO, settings())).toEqual([]);
+    expect(unmetRequests(ALL_ON, settings())).toEqual([]);
   });
 
   it("has nothing to say when settings could not be read", () => {
-    expect(unmetRequests(HEADSET_AUDIO, null)).toEqual([]);
+    expect(unmetRequests(ALL_OFF, null)).toEqual([]);
   });
 });
 
@@ -170,3 +188,27 @@ describe("the device behind the settings", () => {
   });
 });
 
+
+describe("summarizeMic", () => {
+  it("describes the call's own microphone and names anything it refused", () => {
+    const summary = summarizeMic(
+      track(
+        { echoCancellation: false, noiseSuppression: true, autoGainControl: true, channelCount: 1, sampleRate: 48000 },
+        "Microphone Array (Realtek(R) Audio)",
+      ),
+      { echoCancellation: true, noiseSuppression: true },
+    );
+    expect(summary.device).toBe("Microphone Array (Realtek(R) Audio)");
+    expect(summary.description).toContain("aec off");
+    expect(summary.unmet).toEqual(["echoCancellation"]);
+  });
+
+  it("says unknown rather than guessing when there is no microphone", () => {
+    expect(summarizeMic(null, ALL_ON)).toEqual({
+      description: "unknown",
+      device: "unknown",
+      unmet: [],
+      voiceIsolation: null,
+    });
+  });
+});
