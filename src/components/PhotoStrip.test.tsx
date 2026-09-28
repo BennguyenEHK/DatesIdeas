@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 import { PhotoStrip } from "./PhotoStrip";
 
-function strip(onEdit = vi.fn()) {
+function strip(onEdit = vi.fn(), size?: "column" | "wide") {
   return render(
     <PhotoStrip
+      size={size}
       url="blob:strip"
       busy={false}
       onSave={vi.fn()}
@@ -40,5 +41,19 @@ describe("PhotoStrip editing", () => {
       />,
     );
     expect(view.queryByRole("button", { name: "Edit this strip" })).toBeNull();
+  });
+});
+
+describe("a wide strip", () => {
+  it("is held to the booth frame, so the buttons beside it stay on screen", () => {
+    const image = strip(vi.fn(), "wide").getByRole("img");
+    expect(image.className).toContain("h-full");
+    expect(image.className).toContain("min-w-0");
+  });
+
+  it("keeps the column strip's own sizing", () => {
+    const image = strip(vi.fn(), "column").getByRole("img");
+    expect(image.className).toContain("max-w-full");
+    expect(image.className).not.toContain("h-full");
   });
 });

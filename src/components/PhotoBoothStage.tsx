@@ -127,6 +127,13 @@ export function PhotoBoothStage({
         {
           "--stage-aspect": takeoverAspect(),
           "--stage-cols": `${SCREEN_FR}fr ${FACES_FR}fr`,
+          // The stage takes its width from what is in it, and beside the booth
+          // that is the strip. Moved into the frame, the strip is absolutely
+          // placed like everything else there, so nothing is left to give the
+          // stage a size and it collapses to a dot. The side strip always
+          // stretched it to the full width anyway, so the frame keeps the size
+          // it had while the photographs were being taken.
+          ...(wideStrip ? { width: "100%" } : {}),
         } as React.CSSProperties
       }
     >

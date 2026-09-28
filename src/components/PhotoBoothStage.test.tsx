@@ -102,4 +102,17 @@ describe("a finished single-shot strip", () => {
     const { getByText } = stage({ stripShots: 1 });
     expect(getByText("strip").parentElement?.className).toContain("absolute inset-0 z-20");
   });
+
+  // Everything inside the frame is absolutely placed, so with the side column
+  // gone nothing gave the stage a width and it collapsed to a dot: the strip,
+  // its Edit star and "Take another" were all there, drawn at zero size.
+  it("keeps the stage full width, so the strip does not collapse to nothing", () => {
+    const { container } = stage({ stripShots: 1 });
+    expect((container.querySelector(".stage") as HTMLElement).style.width).toBe("100%");
+  });
+
+  it("leaves the stage sized by its column while the strip sits beside the booth", () => {
+    const { container } = stage({ stripShots: 4 });
+    expect((container.querySelector(".stage") as HTMLElement).style.width).toBe("");
+  });
 });

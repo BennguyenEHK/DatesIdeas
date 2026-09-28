@@ -92,7 +92,12 @@ export function PhotoStrip({
       <img
         src={url}
         alt="The photo strip you just took"
-        className="min-h-0 w-auto max-w-full flex-1 rounded-[2px] object-contain shadow-[0_18px_60px_-30px_rgba(0,0,0,0.9)]"
+        // Wide, it sits in a row inside the booth frame, where its own size
+        // would spill past the frame and hide the buttons beside it: held to
+        // the frame's height and the width that is left, it fits whole.
+        className={`${
+          size === "wide" ? "h-full min-w-0" : "min-h-0 w-auto max-w-full"
+        } flex-1 rounded-[2px] object-contain shadow-[0_18px_60px_-30px_rgba(0,0,0,0.9)]`}
       />
       <div className="flex shrink-0 flex-col items-center gap-3 text-xs">
         <div className="flex items-center gap-2">
