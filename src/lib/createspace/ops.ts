@@ -275,3 +275,22 @@ export function isCanvasOp(value: unknown): value is CanvasOp {
 export function newItemId(): string {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/**
+ * The same marks seen from the other side of the strip.
+ *
+ * Each screen composes its strip with its own person on the left, so the two
+ * screens show horizontal mirrors of one another. Marks are shared in one
+ * frame; the screen that sees the strip flipped must draw them flipped too, or
+ * a crown placed on your own face lands on the other person's. The glyphs and
+ * ink themselves are not reversed -- only where they sit, and which way they lean.
+ */
+export function mirrorScene(scene: Scene): Scene {
+  return {
+    items: scene.items.map((item) =>
+      item.type === "sticker"
+        ? { ...item, x: 1 - item.x, rotation: item.rotation === 0 ? 0 : -item.rotation }
+        : { ...item, points: item.points.map(([x, y]): Point => [1 - x, y]) },
+    ),
+  };
+}

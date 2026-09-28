@@ -21,6 +21,7 @@ export function ArtworkCanvas({
   onImageLoad,
   onSelectedSticker,
   onOp,
+  mirrored = false,
 }: {
   aspect: number;
   imageUrl: string | null;
@@ -38,6 +39,8 @@ export function ArtworkCanvas({
   onImageLoad?: (image: HTMLImageElement) => void;
   onSelectedSticker: (id: string | null) => void;
   onOp: (op: CanvasOp) => void;
+  /** Draw the shared marks flipped, for the screen that sees the image flipped. */
+  mirrored?: boolean;
 }) {
   return (
     <div className={styles.artwork} style={{ aspectRatio: aspect }}>
@@ -64,6 +67,7 @@ export function ArtworkCanvas({
         selectedStickerId={selectedStickerId}
         onSelectedSticker={onSelectedSticker}
         onOp={onOp}
+        mirrored={mirrored}
       />
     </div>
   );

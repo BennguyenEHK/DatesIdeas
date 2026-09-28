@@ -75,3 +75,26 @@ describe("StripCanvas", () => {
     });
   });
 });
+
+describe("StripCanvas on the screen that sees the strip flipped", () => {
+  function stickerX(merge: boolean): number {
+    const onOp = vi.fn<(op: CanvasOp) => void>();
+    render(<StripCanvas {...input({ glyph: "👑", onOp, merge, mirrored: true })} />);
+    fireEvent.pointerDown(screen.getByLabelText("Photo strip drawing canvas"), {
+      clientX: 40,
+      clientY: 30,
+      pointerId: 1,
+    });
+    const op = onOp.mock.calls[0][0];
+    if (op.kind !== "sticker") throw new Error("expected a sticker");
+    return op.sticker.x;
+  }
+
+  it("flips the marks once both of you are in the panels", () => {
+    expect(stickerX(true)).toBeCloseTo(0.8);
+  });
+
+  it("keeps a bare strip in one frame, so writing reads the same on both screens", () => {
+    expect(stickerX(false)).toBeCloseTo(0.2);
+  });
+});

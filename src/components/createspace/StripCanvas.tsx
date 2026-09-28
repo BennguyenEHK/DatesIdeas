@@ -32,6 +32,8 @@ export type StripCanvasProps = {
   onSelectedSticker: (id: string | null) => void;
   onOp: (op: CanvasOp) => void;
   onBackdrop: (patch: Pick<Backdrop, "x" | "y" | "scale">) => void;
+  /** This screen sees the two of you swapped left-to-right; see CreateSpaceProps. */
+  mirrored?: boolean;
 };
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -209,6 +211,10 @@ export function StripCanvas(props: StripCanvasProps) {
         onSelectedSticker={props.onSelectedSticker}
         onOp={props.onOp}
         backdropPointer={backdropPointer}
+        // Only once your faces are in the panels. On a bare strip there is no
+        // one to land on, and a word written top-left should read top-left on
+        // both screens.
+        mirrored={props.merge && props.mirrored === true}
       />
     </div>
   );

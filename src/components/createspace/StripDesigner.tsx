@@ -191,6 +191,7 @@ export function StripDesigner(props: CreateSpaceProps) {
               selectedStickerId={tools.selectedStickerId}
               onSelectedSticker={tools.selectSticker}
               onOp={props.onOp}
+              mirrored={props.mirrored}
               onImageLoad={(loaded) => {
                 if (loaded.naturalWidth > 0 && loaded.naturalHeight > 0) {
                   setEditAspect(loaded.naturalWidth / loaded.naturalHeight);
@@ -216,6 +217,7 @@ export function StripDesigner(props: CreateSpaceProps) {
               stickerScale={tools.stickerScale}
               selectedStickerId={tools.selectedStickerId}
               backdropEditing={backdropEditing}
+              mirrored={props.mirrored}
               onSelectedSticker={tools.selectSticker}
               onOp={props.onOp}
               onBackdrop={(patch) => {

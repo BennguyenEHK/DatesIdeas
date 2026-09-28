@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   MAX_POINTS,
+  mirrorScene,
   newItemId,
   thin,
   type CanvasOp,
@@ -36,16 +37,23 @@ export type MarksLayerProps = {
   onSelectedSticker: (id: string | null) => void;
   onOp: (op: CanvasOp) => void;
   backdropPointer?: BackdropPointer;
+  /**
+   * This screen sees the strip flipped left-to-right relative to the shared
+   * frame the marks are kept in, so draw them flipped and read the pointer
+   * flipped. The ops sent out stay in the shared frame.
+   */
+  mirrored?: boolean;
 };
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function pointFromEvent(event: React.PointerEvent<HTMLCanvasElement>): Point {
+function pointFromEvent(event: React.PointerEvent<HTMLCanvasElement>, mirrored: boolean): Point {
   const rect = event.currentTarget.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return [0, 0];
-  return [clamp((event.clientX - rect.left) / rect.width), clamp((event.clientY - rect.top) / rect.height)];
+  const x = clamp((event.clientX - rect.left) / rect.width);
+  return [mirrored ? 1 - x : x, clamp((event.clientY - rect.top) / rect.height)];
 }
 
 function findSticker(scene: Scene, identity: string, point: Point): Sticker | "locked" | null {
@@ -96,10 +104,12 @@ export function MarksLayer({
   onSelectedSticker,
   onOp,
   backdropPointer,
+  mirrored = false,
 }: MarksLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pointsRef = useRef<Point[]>([]);
   const draggedStickerRef = useRef<Sticker | null>(null);
+  const shown = useMemo(() => (mirrored ? mirrorScene(scene) : scene), [mirrored, scene]);
 
   const redraw = useCallback(
     (draft: readonly Point[] = []) => {
@@ -119,31 +129,27 @@ export function MarksLayer({
 
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, rect.width, rect.height);
-      paintScene(context, scene, rect.width, rect.height);
+      paintScene(context, shown, rect.width, rect.height);
       if (draft.length > 0) {
-        paintScene(
-          context,
-          {
-            items: [
-              {
-                type: "stroke",
-                id: "draft",
-                author: identity,
-                at: 0,
-                ink,
-                tool,
-                width,
-                points: draft,
-              },
-            ],
-          },
-          rect.width,
-          rect.height,
-        );
+        const draftScene: Scene = {
+          items: [
+            {
+              type: "stroke",
+              id: "draft",
+              author: identity,
+              at: 0,
+              ink,
+              tool,
+              width,
+              points: draft,
+            },
+          ],
+        };
+        paintScene(context, mirrored ? mirrorScene(draftScene) : draftScene, rect.width, rect.height);
       }
-      paintSelection(context, scene, selectedStickerId, rect.width, rect.height);
+      paintSelection(context, shown, selectedStickerId, rect.width, rect.height);
     },
-    [identity, ink, scene, selectedStickerId, tool, width],
+    [identity, ink, mirrored, shown, selectedStickerId, tool, width],
   );
 
   useEffect(() => {
@@ -205,7 +211,7 @@ export function MarksLayer({
           return;
         }
 
-        const point = pointFromEvent(event);
+        const point = pointFromEvent(event, mirrored);
         const sticker = findSticker(scene, identity, point);
         if (sticker === "locked") return;
         if (sticker !== null) {
@@ -242,7 +248,7 @@ export function MarksLayer({
           return;
         }
 
-        const point = pointFromEvent(event);
+        const point = pointFromEvent(event, mirrored);
         if (draggedStickerRef.current !== null) {
           onOp({
             kind: "sticker",

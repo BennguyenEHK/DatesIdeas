@@ -17,7 +17,6 @@ function stage(props: {
   count?: number | null;
   flashing?: boolean;
   review?: { shotIndex: number; frame: { canvas: HTMLCanvasElement } | null } | null;
-  stripShots?: 1 | 2 | 3 | 4 | null;
 }) {
   return render(
     <PhotoBoothStage
@@ -33,7 +32,6 @@ function stage(props: {
       localVideoRef={createRef<HTMLVideoElement>()}
       remoteVideoRef={createRef<HTMLVideoElement>()}
       filmCanvasRef={createRef<HTMLCanvasElement>()}
-      stripShots={props.stripShots}
     >
       <div>strip</div>
     </PhotoBoothStage>,
@@ -97,22 +95,19 @@ describe("the booth flash", () => {
   });
 });
 
-describe("a finished single-shot strip", () => {
-  it("takes over the whole booth frame instead of remaining in the side column", () => {
-    const { getByText } = stage({ stripShots: 1 });
-    expect(getByText("strip").parentElement?.className).toContain("absolute inset-0 z-20");
+describe("the finished strip", () => {
+  // A one-shot strip used to be laid over the whole booth frame until "Take
+  // another", so coming back from editing it hid the live pair of you -- and
+  // the overlay was 95% opaque, so the other camera ghosted through behind the
+  // photograph. Every strip now develops in the column beside the booth.
+  it("sits in the side column beside the booth, never inside the frame", () => {
+    const { getByText, container } = stage({});
+    const frame = container.querySelector(".stage")?.firstElementChild as HTMLElement;
+    expect(frame.contains(getByText("strip"))).toBe(false);
   });
 
-  // Everything inside the frame is absolutely placed, so with the side column
-  // gone nothing gave the stage a width and it collapsed to a dot: the strip,
-  // its Edit star and "Take another" were all there, drawn at zero size.
-  it("keeps the stage full width, so the strip does not collapse to nothing", () => {
-    const { container } = stage({ stripShots: 1 });
-    expect((container.querySelector(".stage") as HTMLElement).style.width).toBe("100%");
-  });
-
-  it("leaves the stage sized by its column while the strip sits beside the booth", () => {
-    const { container } = stage({ stripShots: 4 });
-    expect((container.querySelector(".stage") as HTMLElement).style.width).toBe("");
+  it("leaves nothing covering the live booth", () => {
+    const { container } = stage({});
+    expect(container.querySelector(".z-20")).toBeNull();
   });
 });

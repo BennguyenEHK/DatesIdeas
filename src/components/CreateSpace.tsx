@@ -26,6 +26,13 @@ export type CreateSpaceProps = {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   paired: boolean;
+  /**
+   * Each screen puts its own person on the left of the strip, so the two
+   * screens are mirror images of each other. The marks are shared in one
+   * frame; exactly one of the pair sees them flipped, or a crown on your face
+   * lands on theirs.
+   */
+  mirrored?: boolean;
   onLookSaved?: (look: CustomLook) => void;
 };
 

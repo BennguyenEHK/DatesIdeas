@@ -4,6 +4,7 @@ import {
   MAX_POINTS,
   applyOp,
   isCanvasOp,
+  mirrorScene,
   replay,
   thin,
   undoTarget,
@@ -156,5 +157,30 @@ describe("isCanvasOp, on what the other browser sent", () => {
     for (const value of [null, 1, "clear", {}, { kind: "explode" }, { kind: "remove" }]) {
       expect(isCanvasOp(value)).toBe(false);
     }
+  });
+});
+
+describe("mirrorScene", () => {
+  it("moves every mark to the other side and leans stickers the other way", () => {
+    const mirrored = mirrorScene({
+      items: [
+        { type: "sticker", ...sticker("s", "a", 1, 0.2), rotation: 30 },
+        { type: "stroke", ...stroke("t", "a", 2) },
+      ],
+    });
+    const [s, t] = mirrored.items;
+    expect(s).toMatchObject({ x: 0.8, y: 0.5, rotation: -30, glyph: "❤️" });
+    if (t.type !== "stroke") throw new Error("expected a stroke");
+    expect(t.points[0][0]).toBeCloseTo(0.9);
+    expect(t.points[0][1]).toBeCloseTo(0.1);
+    expect(t.points[1][0]).toBeCloseTo(0.8);
+  });
+
+  it("is its own inverse, so both screens agree on the shared frame", () => {
+    const scene = { items: [{ type: "sticker" as const, ...sticker("s", "a", 1, 0.3), rotation: 12 }] };
+    const back = mirrorScene(mirrorScene(scene)).items[0];
+    if (back.type !== "sticker") throw new Error("expected a sticker");
+    expect(back.x).toBeCloseTo(0.3);
+    expect(back.rotation).toBe(12);
   });
 });

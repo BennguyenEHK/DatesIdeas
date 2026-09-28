@@ -44,7 +44,7 @@ import type { Outfit } from "@/lib/lookbook/types";
 import { useTogether } from "@/lib/together/useTogether";
 import { useCreateSpace } from "@/lib/createspace/useCreateSpace";
 import { composeOverStrip } from "@/lib/createspace/compose";
-import type { Scene } from "@/lib/createspace/ops";
+import { mirrorScene, type Scene } from "@/lib/createspace/ops";
 import { DEFAULT_PAPER } from "@/lib/createspace/session";
 import { useLooks } from "@/lib/looks/useLooks";
 import { newRecordingId, putRecording } from "@/lib/recording/store";
@@ -859,15 +859,21 @@ export function RoomClient({ code }: { code: string }) {
 
   // Each screen draws the shared marks over the strip IT developed, so the
   // edited strip never has to cross the connection any more than the original.
+  //
+  // Each strip has its own person on the left, so the two strips are mirror
+  // images; the marks are kept in the frame of the one whose identity sorts
+  // first, and the other screen flips them onto its strip. Without that, a crown
+  // placed on your own face was drawn over the other person's.
+  const marksMirrored = theirIdentity !== null && myIdentity > theirIdentity;
   const { stripUrl, replaceStrip } = booth;
   useEffect(() => {
     finishEdit.current = (scene) => {
       if (stripUrl === null) return;
-      void composeOverStrip(stripUrl, scene).then((blob) => {
+      void composeOverStrip(stripUrl, marksMirrored ? mirrorScene(scene) : scene).then((blob) => {
         if (blob !== null) replaceStrip(blob);
       });
     };
-  }, [replaceStrip, stripUrl]);
+  }, [marksMirrored, replaceStrip, stripUrl]);
 
   /**
    * Sends one keepsake away so a QR code has something to point at.
@@ -1673,13 +1679,10 @@ export function RoomClient({ code }: { code: string }) {
                 localVideoRef={localVideo}
                 remoteVideoRef={remoteVideo}
                 filmCanvasRef={booth.filmCanvasRef}
-                stripShots={booth.stripShots}
-                running={booth.running}
                 lookBackdropUrl={booth.lookBackdropUrl}
                 lookShots={booth.lookShots ?? undefined}
               >
                 <PhotoStrip
-                  size={booth.stripShots === 1 ? "wide" : "column"}
                   onEdit={() => {
                     createSpace.apply({ kind: "clear" });
                     createSpace.setSession({
@@ -1822,6 +1825,7 @@ export function RoomClient({ code }: { code: string }) {
                       localStream={peer.localStream}
                       remoteStream={peer.remoteStream}
                       paired={paired}
+                      mirrored={marksMirrored}
                       onLookSaved={looks.added}
                     />
                   </div>

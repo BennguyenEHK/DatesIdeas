@@ -43,8 +43,6 @@ export function PhotoBoothStage({
   localVideoRef,
   remoteVideoRef,
   filmCanvasRef,
-  stripShots,
-  running = false,
   lookBackdropUrl = null,
   lookShots = 1,
   children,
@@ -64,10 +62,6 @@ export function PhotoBoothStage({
   remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
   /** The off-screen surface the live photo is filmed from. */
   filmCanvasRef: React.RefObject<HTMLCanvasElement | null>;
-  /** Lets a one-shot keepsake take over the full 16:9 booth once it is ready. */
-  stripShots?: ShotCount | null;
-  /** A sitting is under way, so the stage belongs to the countdown. */
-  running?: boolean;
   /** The selected designed look's paper layer, shown behind the live couple. */
   lookBackdropUrl?: string | null;
   /** Panel count of the selected designed look. */
@@ -79,9 +73,6 @@ export function PhotoBoothStage({
   const reviewCanvasRef = useRef<HTMLCanvasElement>(null);
   const backdropReady = useBackdropReady(theme);
   const lookReady = useLookImageReady(lookBackdropUrl);
-  // Only while nothing is being taken: a new sitting needs the frame back for
-  // its countdown, and the old one-shot strip would otherwise cover it.
-  const wideStrip = stripShots === 1 && !running;
 
   useEffect(() => {
     const destination = reviewCanvasRef.current;
@@ -127,13 +118,6 @@ export function PhotoBoothStage({
         {
           "--stage-aspect": takeoverAspect(),
           "--stage-cols": `${SCREEN_FR}fr ${FACES_FR}fr`,
-          // The stage takes its width from what is in it, and beside the booth
-          // that is the strip. Moved into the frame, the strip is absolutely
-          // placed like everything else there, so nothing is left to give the
-          // stage a size and it collapses to a dot. The side strip always
-          // stretched it to the full width anyway, so the frame keeps the size
-          // it had while the photographs were being taken.
-          ...(wideStrip ? { width: "100%" } : {}),
         } as React.CSSProperties
       }
     >
@@ -242,14 +226,14 @@ export function PhotoBoothStage({
           />
         )}
       </AnimatePresence>
-      {wideStrip && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--night)]/95 p-3">
-          {children}
-        </div>
-      )}
       </div>
 
-      {!wideStrip && <div className="min-h-0 md:content-center">{children}</div>}
+      {/* Every strip, one shot or four, develops in this column beside the
+          booth. A one-shot strip used to be laid over the booth frame instead,
+          which hid the live pair of you until "Take another" -- including on
+          the way back from editing it -- and let the other camera ghost
+          through its 95% backdrop. */}
+      <div className="min-h-0 md:content-center">{children}</div>
 
       {/* Where the live photo is actually painted and filmed.
           Kept in the DOM rather than detached, because a canvas that has never
