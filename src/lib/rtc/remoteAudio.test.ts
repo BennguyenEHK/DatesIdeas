@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { StatsLike } from "./path";
 import {
   readRemoteAudio,
+  remoteAudioHasAdvanced,
   remoteAudioHealth,
+  remoteAudioIsStale,
   type RemoteAudioSample,
 } from "./remoteAudio";
 
@@ -12,6 +14,7 @@ const makeStats = (entries: Record<string, Record<string, unknown>>) =>
 const sample = (
   overrides: Partial<RemoteAudioSample> = {},
 ): RemoteAudioSample => ({
+  timestampMs: 1000,
   jitterMs: 10,
   fractionLostPct: null,
   packetsLost: 0,
@@ -26,6 +29,7 @@ describe("readRemoteAudio", () => {
         type: "remote-inbound-rtp",
         kind: "audio",
         jitter: 0.042,
+        timestamp: 12_345,
         fractionLost: 0.053,
         packetsLost: 12,
       },
@@ -34,6 +38,7 @@ describe("readRemoteAudio", () => {
     const read = readRemoteAudio(stats);
     expect(read).not.toBeNull();
     expect(read?.jitterMs).toBeCloseTo(42);
+    expect(read?.timestampMs).toBe(12_345);
     expect(read?.fractionLostPct).toBeCloseTo(5.3);
     expect(read?.packetsLost).toBe(12);
     expect(read?.packetsSent).toBe(900);
@@ -52,11 +57,30 @@ describe("readRemoteAudio", () => {
       makeStats({ r: { type: "remote-inbound-rtp", kind: "audio" } }),
     );
     expect(read).toEqual({
+      timestampMs: null,
       jitterMs: null,
       fractionLostPct: null,
       packetsLost: null,
       packetsSent: null,
     });
+  });
+});
+
+describe("remoteAudioIsStale", () => {
+  it("marks an unchanged receiver report as stale", () => {
+    const prev = sample({ timestampMs: 1_000, packetsSent: 100 });
+    const cur = sample({ timestampMs: 1_000, packetsSent: 100 });
+    expect(remoteAudioIsStale(prev, cur)).toBe(true);
+  });
+
+  it("keeps a newly arrived report fresh until there is a prior poll", () => {
+    expect(remoteAudioIsStale(null, sample())).toBe(false);
+  });
+
+  it("uses advancing packet counters when timestamps are unavailable", () => {
+    const prev = sample({ timestampMs: null, packetsSent: 100 });
+    const cur = sample({ timestampMs: null, packetsSent: 101 });
+    expect(remoteAudioHasAdvanced(prev, cur)).toBe(true);
   });
 });
 

@@ -22,8 +22,18 @@ export const RESTART_FORGIVEN_AFTER_MS = 60_000;
 /** The longest a failing connection waits between two restarts. */
 export const MAX_RESTART_BACKOFF_MS = 60_000;
 
+/**
+ * A restart can lose its offer or answer without producing another connection
+ * state change. Check it again after this long, so recovery never gives up.
+ */
+export const RESTART_WATCHDOG_MS = 20_000;
+
 /** Why the connection was last rebuilt, as the report prints it. */
-export type RestartReason = "disconnected" | "failed" | "peer-restarted";
+export type RestartReason =
+  | "disconnected"
+  | "failed"
+  | "peer-asked"
+  | "peer-restarted";
 
 /** What the report needs to know about the call's recoveries. */
 export interface Resilience {
@@ -64,6 +74,8 @@ export interface RestartCheck {
   lastRestartAt: number | null;
   now: number;
   attempt: number;
+  /** True after an ICE-restart offer was sent and before the route comes back. */
+  restartPending: boolean;
 }
 
 /** Milliseconds until the backoff allows another restart; 0 when it already does. */
@@ -86,10 +98,11 @@ export function restartWaitMs(
  */
 export function shouldRestart(check: RestartCheck): boolean {
   if (!check.offerer) return false;
-  const lost =
-    check.connectionState === "disconnected" ||
-    check.connectionState === "failed";
+  const lost = connectionIsStillDown(check);
   if (!lost) return false;
+  // Once a restart offer is outstanding, ICE can say it found a pair while
+  // signalling is still lost. Only a connected peer has actually recovered.
+  if (check.restartPending) return restartWaitMs(check) === 0;
   if (
     check.iceConnectionState === "connected" ||
     check.iceConnectionState === "completed"
@@ -97,4 +110,24 @@ export function shouldRestart(check: RestartCheck): boolean {
     return false;
   }
   return restartWaitMs(check) === 0;
+}
+
+/**
+ * Whether a connection remains down for a recovery that is already in flight.
+ * New and connecting are normal during the first join, but after a restart
+ * offer they mean the replacement handshake has not reached a usable route.
+ */
+export function connectionIsStillDown(
+  check: Pick<RestartCheck, "connectionState" | "restartPending">,
+): boolean {
+  if (
+    check.connectionState === "disconnected" ||
+    check.connectionState === "failed"
+  ) {
+    return true;
+  }
+  return (
+    check.restartPending &&
+    (check.connectionState === "new" || check.connectionState === "connecting")
+  );
 }

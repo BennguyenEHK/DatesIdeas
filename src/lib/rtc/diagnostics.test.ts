@@ -110,6 +110,12 @@ describe("formatReport", () => {
     expect(formatReport(empty)).toContain("Video cap from upload estimate: unknown");
   });
 
+  it("names the active video rung and its human meaning", () => {
+    expect(formatReport({ ...empty, videoRung: 3 })).toContain(
+      "Video rung: 3 (tiny)",
+    );
+  });
+
   it("shows how much of a file is queued on the files channel", () => {
     expect(formatReport({ ...empty, fileBufferedBytes: 1_048_576 })).toContain("File channel buffered: 1024 KB");
     expect(formatReport(empty)).toContain("File channel buffered: 0 KB");
@@ -122,19 +128,35 @@ describe("formatReport", () => {
   });
 
   describe("the recovery section", () => {
-    const recovery = { restarts: 2, lastRestartReason: "disconnected", sinceLastRestartMs: 95_000, longestGapMs: 14_000 };
+    const recovery = {
+      restarts: 2,
+      lastRestartReason: "disconnected",
+      attemptsSinceHealthy: 2,
+      sinceLastRestartMs: 95_000,
+      longestGapMs: 14_000,
+    };
 
     it("prints every restart line", () => {
       const r = formatReport({ ...empty, recovery });
       expect(r).toContain("RECOVERY");
       expect(r).toContain("Restarts: 2");
+      expect(r).toContain("Recovery attempts since last healthy: 2");
       expect(r).toContain("Last restart reason: disconnected");
       expect(r).toContain("Time since last restart: 1m 35s");
       expect(r).toContain("Longest gap: 14s");
     });
 
     it("says so plainly when the call has never restarted", () => {
-      const r = formatReport({ ...empty, recovery: { restarts: 0, lastRestartReason: null, sinceLastRestartMs: null, longestGapMs: null } });
+      const r = formatReport({
+        ...empty,
+        recovery: {
+          restarts: 0,
+          lastRestartReason: null,
+          attemptsSinceHealthy: 0,
+          sinceLastRestartMs: null,
+          longestGapMs: null,
+        },
+      });
       expect(r).toContain("Restarts: 0");
       expect(r).toContain("Last restart reason: none");
       expect(r).toContain("Time since last restart: never");
@@ -144,12 +166,21 @@ describe("formatReport", () => {
     it("prints unknown when no recovery data was supplied", () => {
       const r = formatReport(empty);
       expect(r).toContain("Restarts: unknown");
+      expect(r).toContain("Recovery attempts since last healthy: unknown");
       expect(r).toContain("Longest gap: unknown");
     });
 
     it("adds the restart-loop note from the third restart", () => {
       const r = formatReport({ ...empty, recovery: { ...recovery, restarts: 3 } });
       expect(r).toContain("NOTE: the call has restarted 3 times - the route is being torn down and rebuilt; check whether the drops line up with the video budget changes above.");
+    });
+
+    it("prints peer-asked when the other side requested recovery", () => {
+      const r = formatReport({
+        ...empty,
+        recovery: { ...recovery, lastRestartReason: "peer-asked" },
+      });
+      expect(r).toContain("Last restart reason: peer-asked");
     });
 
     it("leaves the note out below three restarts", () => {

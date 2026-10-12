@@ -35,6 +35,7 @@ import { linkFrom } from "./linkFrom";
 import type { LinkSnapshot } from "./linkSnapshot";
 import {
   readRemoteAudio,
+  remoteAudioIsStale,
   remoteAudioHealth,
   type RemoteAudioHealth,
   type RemoteAudioSample,
@@ -43,6 +44,8 @@ import {
   DISCONNECTED_GRACE_MS,
   NO_RESTARTS,
   RESTART_FORGIVEN_AFTER_MS,
+  RESTART_WATCHDOG_MS,
+  connectionIsStillDown,
   restartWaitMs,
   shouldRestart,
   type RestartReason,
@@ -55,6 +58,8 @@ import {
   budgetFor,
   headroomCapBps,
   INITIAL_LEASH_HEALTH,
+  carryLeashHealth,
+  leashOnLinkLost,
   leashChanged,
   leashSenders,
   profileFor,
@@ -334,10 +339,25 @@ export function usePeerConnection(
   // Declared here, above the connection handlers that arm and cancel it: the
   // React Compiler refuses a ref first written inside a closure below it.
   const recoveryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A lost restart offer produces no later state transition, so it needs its
+  // own clock rather than relying on onconnectionstatechange to notice again.
+  const restartWatchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The answerer cannot restart ICE, but it must keep asking its offerer while
+  // its own route stays down. This is deliberately separate from the offerer's
+  // counter because either side can miss a different part of the outage.
+  const restartRequestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restartRequestAttempt = useRef(0);
+  const lastRestartRequestAt = useRef<number | null>(null);
+  const restartRequestPendingRef = useRef(false);
+  const restartPendingRef = useRef(false);
   // The restart backoff's memory, declared here for the same reason. The
   // attempt count is only forgiven after a full minute of being connected,
   // which is what lets a route that fails every minute back off at all.
   const restartAttempt = useRef(0);
+  // Kept apart from restartAttempt: the latter stays after a brief recovery
+  // to preserve backoff, while this one truthfully reports attempts since the
+  // route was last usable.
+  const recoveryAttemptsSinceHealthy = useRef(0);
   const lastRestartAt = useRef<number | null>(null);
   const forgiveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // When the connection was last lost, so the gap can be measured on return.
@@ -360,6 +380,16 @@ export function usePeerConnection(
     onMessageRef.current = onMessage;
   });
   const sendSignalRef = useRef<(m: SignalMessage) => void>(() => {});
+  const scheduleRestartRef = useRef<
+    ((reason: RestartReason, graceMs: number) => void) | null
+  >(null);
+  const wireDataChannelRef = useRef<((dc: RTCDataChannel) => void) | null>(null);
+  const wireFileChannelRef = useRef<((dc: RTCDataChannel) => void) | null>(null);
+  const dropConnectionRef = useRef<(() => void) | null>(null);
+  const offerConnectionRef = useRef<(() => Promise<void>) | null>(null);
+  const rebuildingRef = useRef(false);
+  const channelRevivingRef = useRef({ sync: false, files: false });
+  const unmountingRef = useRef(false);
 
   const send = useCallback((m: PeerMessage) => {
     const dc = dcRef.current;
@@ -387,6 +417,47 @@ export function usePeerConnection(
     };
   }, []);
 
+  const reviveDataChannel = useCallback((label: "sync" | "files") => {
+    const pc = pcRef.current;
+    if (
+      unmountingRef.current ||
+      !pc ||
+      pc.connectionState !== "connected" ||
+      !offeredRef.current ||
+      channelRevivingRef.current[label]
+    ) {
+      return;
+    }
+    channelRevivingRef.current[label] = true;
+    const init = label === "sync" ? SYNC_CHANNEL : FILE_CHANNEL;
+    if (pc.sctp?.state === "connected") {
+      // A data channel is opened in-band over SCTP, so replacing just this
+      // one needs no offer and does not interrupt the working media route.
+      const replacement = pc.createDataChannel(label, init);
+      if (label === "sync") wireDataChannelRef.current?.(replacement);
+      else wireFileChannelRef.current?.(replacement);
+      channelRevivingRef.current[label] = false;
+      return;
+    }
+
+    // SCTP itself is gone. One fresh connection repairs both labels, while a
+    // single in-flight guard prevents their two close events rebuilding twice.
+    if (rebuildingRef.current) return;
+    rebuildingRef.current = true;
+    sendSignalRef.current({ kind: "rebuild", from: getIdentity() });
+    const drop = dropConnectionRef.current;
+    const offer = offerConnectionRef.current;
+    if (!drop || !offer) {
+      rebuildingRef.current = false;
+      return;
+    }
+    drop();
+    offeredRef.current = true;
+    void offer().catch(() => {
+      rebuildingRef.current = false;
+    });
+  }, []);
+
   const wireDataChannel = useCallback((dc: RTCDataChannel) => {
     dcRef.current = dc;
     dc.onopen = () => {
@@ -412,11 +483,14 @@ export function usePeerConnection(
       onMessageRef.current(msg);
     };
     dc.onclose = () => {
+      if (dcRef.current !== dc) return;
       clockRef.current?.stop();
       clockRef.current = null;
+      dcRef.current = null;
       setClock(null);
+      reviveDataChannel("sync");
     };
-  }, [send]);
+  }, [reviveDataChannel, send]);
 
   const wireFileChannel = useCallback((dc: RTCDataChannel) => {
     dc.binaryType = "arraybuffer";
@@ -428,9 +502,16 @@ export function usePeerConnection(
       onFileChunkRef.current?.(e.data);
     };
     dc.onclose = () => {
-      if (fileDcRef.current === dc) fileDcRef.current = null;
+      if (fileDcRef.current !== dc) return;
+      fileDcRef.current = null;
+      reviveDataChannel("files");
     };
-  }, []);
+  }, [reviveDataChannel]);
+
+  useEffect(() => {
+    wireDataChannelRef.current = wireDataChannel;
+    wireFileChannelRef.current = wireFileChannel;
+  }, [wireDataChannel, wireFileChannel]);
 
   // Acquire local media once per attempt.
   useEffect(() => {
@@ -483,7 +564,7 @@ export function usePeerConnection(
       iceCandidatePoolSize: 4,
     });
     pcRef.current = pc;
-    leashHealth.current = INITIAL_LEASH_HEALTH;
+    leashHealth.current = carryLeashHealth(leashHealth.current, Date.now());
 
     if (localStream) {
       for (const track of localStream.getTracks()) {
@@ -536,6 +617,25 @@ export function usePeerConnection(
      * A restart the backoff refuses is deferred to the moment it allows one,
      * not skipped: a connection that is still down then still needs it.
      */
+    const armRestartWatchdog = (reason: RestartReason) => {
+      cancelRecovery(restartWatchdog);
+      restartWatchdog.current = setTimeout(() => {
+        restartWatchdog.current = null;
+        if (unmountingRef.current || pcRef.current !== pc) return;
+        if (pc.connectionState === "closed") return;
+        if (pc.connectionState === "connected") {
+          // A restart asked for by the other side, on a connection this side
+          // never saw drop, fires no state change when it lands. Without this
+          // the restart would stay "pending" -- and signalling at its fast
+          // rate -- for the rest of the evening.
+          restartPendingRef.current = false;
+          setRestartPending(false);
+          return;
+        }
+        scheduleRestart(reason, 0);
+      }, RESTART_WATCHDOG_MS);
+    };
+
     const scheduleRestart = (reason: RestartReason, graceMs: number) => {
       // Only the side that made the offer may restart, or both would
       // renegotiate at once and collide.
@@ -555,18 +655,28 @@ export function usePeerConnection(
           lastRestartAt: lastRestartAt.current,
           now: Date.now(),
           attempt: restartAttempt.current,
+          restartPending: restartPendingRef.current,
         };
         // Re-read the live state: the grace is long enough for the browser to
         // have quietly fixed it, and restarting a healthy connection is the
         // one way this can make things worse.
-        if (!shouldRestart(check)) {
-          const stillDown =
-            check.connectionState === "disconnected" ||
-            check.connectionState === "failed";
+        // The other side asked because ITS route is down. Ours can still look
+        // connected -- each side judges from what it receives -- and a
+        // request ignored for that reason is repeated forever while their
+        // picture stays frozen. So a request restarts whenever the backoff
+        // allows, whatever this side thinks of the connection.
+        const asked =
+          reason === "peer-asked" &&
+          check.offerer &&
+          check.connectionState !== "closed" &&
+          restartWaitMs(check) === 0;
+        if (!asked && !shouldRestart(check)) {
+          const stillDown = connectionIsStillDown(check);
           if (stillDown && restartWaitMs(check) > 0) scheduleRestart(reason, 0);
           return;
         }
         restartAttempt.current += 1;
+        recoveryAttemptsSinceHealthy.current += 1;
         lastRestartAt.current = check.now;
         setResilience((r) => ({
           ...r,
@@ -574,10 +684,47 @@ export function usePeerConnection(
           lastRestartReason: reason,
           lastRestartAt: check.now,
         }));
+        restartPendingRef.current = true;
         setRestartPending(true);
         void restartIce(pc, sendSignalRef.current);
+        armRestartWatchdog(reason);
       }, Math.max(graceMs, waitMs));
     };
+    const scheduleRestartRequest = (reason: RestartReason, graceMs: number) => {
+      if (offeredRef.current) return;
+      const waitMs = restartWaitMs({
+        lastRestartAt: lastRestartRequestAt.current,
+        now: Date.now(),
+        attempt: restartRequestAttempt.current,
+      });
+      cancelRecovery(restartRequestTimer);
+      restartRequestTimer.current = setTimeout(() => {
+        restartRequestTimer.current = null;
+        const check = {
+          connectionState: pc.connectionState,
+          restartPending: restartRequestPendingRef.current,
+        };
+        if (!connectionIsStillDown(check)) return;
+        const now = Date.now();
+        const nextWait = restartWaitMs({
+          lastRestartAt: lastRestartRequestAt.current,
+          now,
+          attempt: restartRequestAttempt.current,
+        });
+        if (nextWait > 0) {
+          scheduleRestartRequest(reason, 0);
+          return;
+        }
+        restartRequestAttempt.current += 1;
+        lastRestartRequestAt.current = now;
+        restartRequestPendingRef.current = true;
+        sendSignalRef.current({ kind: "restart-request", from: getIdentity() });
+        // A request can be lost exactly like an offer. Keep asking at the
+        // restart backoff cadence until the answerer's own route is healthy.
+        scheduleRestartRequest(reason, 0);
+      }, Math.max(graceMs, waitMs));
+    };
+    scheduleRestartRef.current = scheduleRestart;
     pc.oniceconnectionstatechange = () => {
       const ice = pc.iceConnectionState;
       // "completed" is the real finish line: every check is done and the final
@@ -592,6 +739,8 @@ export function usePeerConnection(
           // Whatever the blip was, it healed. Stand the rescue down before it
           // restarts a connection that is now working perfectly well.
           cancelRecovery(recoveryTimer);
+          cancelRecovery(restartWatchdog);
+          cancelRecovery(restartRequestTimer);
           const now = Date.now();
           // Kept from the FIRST connect, not refreshed on every recovery: the
           // report should say how long the evening has been going, not how
@@ -606,6 +755,18 @@ export function usePeerConnection(
             }));
           }
           setRestartPending(false);
+          restartPendingRef.current = false;
+          restartRequestPendingRef.current = false;
+          restartRequestAttempt.current = 0;
+          recoveryAttemptsSinceHealthy.current = 0;
+          lastRestartRequestAt.current = null;
+          rebuildingRef.current = false;
+          // A channel that closed while the route was down could not be
+          // replaced then -- there was nothing to open it over. Now there is.
+          if (offeredRef.current) {
+            if (dcRef.current === null) reviveDataChannel("sync");
+            if (fileDcRef.current === null) reviveDataChannel("files");
+          }
           // Earlier restarts are forgiven only after a full minute up, so a
           // route that drops every minute keeps its backoff.
           cancelRecovery(forgiveTimer);
@@ -620,29 +781,55 @@ export function usePeerConnection(
           cancelRecovery(forgiveTimer);
           lostAt.current ??= Date.now();
           setState("reconnecting");
+          leashHealth.current = leashOnLinkLost(leashHealth.current, Date.now());
+          applyRouteDecisions(
+            pc,
+            routeRef.current,
+            modeRef.current,
+            receiversRef.current,
+            appliedLeash,
+            appliedTargets,
+            leashHealth.current,
+          );
           // A rescue already on its way is left alone; re-arming it on every
           // flicker would keep pushing the restart further out.
-          if (recoveryTimer.current !== null) break;
-          scheduleRestart("disconnected", DISCONNECTED_GRACE_MS);
+          if (offeredRef.current) {
+            if (recoveryTimer.current !== null) break;
+            scheduleRestart("disconnected", DISCONNECTED_GRACE_MS);
+          } else if (restartRequestTimer.current === null) {
+            scheduleRestartRequest("disconnected", DISCONNECTED_GRACE_MS);
+          }
           break;
         case "failed":
           cancelRecovery(forgiveTimer);
           lostAt.current ??= Date.now();
           setState("failed");
+          leashHealth.current = leashOnLinkLost(leashHealth.current, Date.now());
+          applyRouteDecisions(
+            pc,
+            routeRef.current,
+            modeRef.current,
+            receiversRef.current,
+            appliedLeash,
+            appliedTargets,
+            leashHealth.current,
+          );
           // "failed" does not heal by itself, so there is no grace to wait
           // out -- only the backoff, which replaces any pending grace timer.
-          scheduleRestart("failed", 0);
+          if (offeredRef.current) scheduleRestart("failed", 0);
+          else scheduleRestartRequest("failed", 0);
           break;
       }
     };
     return pc;
-  }, [localStream, wireDataChannel, wireFileChannel]);
+  }, [localStream, reviveDataChannel, wireDataChannel, wireFileChannel]);
 
   // The other side rebuilt the call: either restarted ICE on the connection
   // we share, or came back on a new one. Counted so this side's report shows
   // the drops as well, not only the side that happened to be offering.
   const countPeerRestart = useCallback(() => {
     const now = Date.now();
+    recoveryAttemptsSinceHealthy.current += 1;
     setResilience((r) => ({
       ...r,
       restarts: r.restarts + 1,
@@ -650,6 +837,32 @@ export function usePeerConnection(
       lastRestartAt: now,
     }));
   }, []);
+
+  const offerConnection = useCallback(async () => {
+    if (!offeredRef.current || unmountingRef.current) return;
+    setState("connecting");
+    const pc = pcRef.current ?? (await buildConnection());
+    if (unmountingRef.current || pcRef.current !== pc || !offeredRef.current) {
+      return;
+    }
+    // Both channels share one SCTP association and one congestion window.
+    // Without priorities a song being pushed across the files channel sat
+    // a megabyte deep in front of every control message, and a ping took
+    // fourteen seconds. A browser that ignores the member loses nothing.
+    wireDataChannel(pc.createDataChannel("sync", SYNC_CHANNEL));
+    wireFileChannel(pc.createDataChannel("files", FILE_CHANNEL));
+    const offer = await pc.createOffer();
+    // Rewritten before it is set, because there is no API for these: the
+    // browser negotiates audio for a phone call and this is the only place
+    // to ask it for music instead.
+    const offerSdp = preferMusicAudio(offer.sdp!);
+    await pc.setLocalDescription({ type: "offer", sdp: offerSdp });
+    sendSignalRef.current({ kind: "offer", sdp: offerSdp, from: getIdentity() });
+  }, [buildConnection, wireDataChannel, wireFileChannel]);
+
+  useEffect(() => {
+    offerConnectionRef.current = offerConnection;
+  }, [offerConnection]);
 
   const signaling = useSignaling(
     code,
@@ -665,21 +878,7 @@ export function usePeerConnection(
       }
       if (!iOffer || offeredRef.current) return;
       offeredRef.current = true;
-      setState("connecting");
-      const pc = pcRef.current ?? (await buildConnection());
-      // Both channels share one SCTP association and one congestion window.
-      // Without priorities a song being pushed across the files channel sat
-      // a megabyte deep in front of every control message, and a ping took
-      // fourteen seconds. A browser that ignores the member loses nothing.
-      wireDataChannel(pc.createDataChannel("sync", SYNC_CHANNEL));
-      wireFileChannel(pc.createDataChannel("files", FILE_CHANNEL));
-      const offer = await pc.createOffer();
-      // Rewritten before it is set, because there is no API for these: the
-      // browser negotiates audio for a phone call and this is the only place
-      // to ask it for music instead.
-      const offerSdp = preferMusicAudio(offer.sdp!);
-      await pc.setLocalDescription({ type: "offer", sdp: offerSdp });
-      sendSignalRef.current({ kind: "offer", sdp: offerSdp, from: getIdentity() });
+      await offerConnection();
     },
     onOffer: async (sdp) => {
       const existing = pcRef.current;
@@ -718,6 +917,25 @@ export function usePeerConnection(
       }
       await pc.addIceCandidate(candidate).catch(() => {});
     },
+    onRestartRequest: () => {
+      // The answerer may see the outage first, but it may not restart ICE:
+      // two restart offers collide. Its request only wakes the original offerer.
+      if (
+        !offeredRef.current ||
+        recoveryTimer.current !== null ||
+        restartPendingRef.current
+      ) {
+        return;
+      }
+      scheduleRestartRef.current?.("peer-asked", 0);
+    },
+    onRebuild: () => {
+      // A rebuild message is only acted on by the answering side. Keeping the
+      // offerer unchanged avoids both peers starting a fresh offer at once.
+      if (offeredRef.current || unmountingRef.current) return;
+      dropConnectionRef.current?.();
+      countPeerRestart();
+    },
     },
     // Not `state === "connected"`: ICE keeps hunting for a better route after
     // the first one succeeds, and a late-arriving direct candidate must not be
@@ -743,14 +961,20 @@ export function usePeerConnection(
   }, [state, iceSettled]);
 
   useEffect(() => {
-    if (state !== "connected") return;
+    if (
+      state !== "connected" &&
+      state !== "reconnecting" &&
+      state !== "failed"
+    ) {
+      return;
+    }
     let cancelled = false;
 
     const sample = async () => {
       const pc = pcRef.current;
       if (!pc) return;
       const stats = await pc.getStats();
-      if (cancelled) return;
+      if (cancelled || pc !== pcRef.current) return;
       const pathNow = selectPath(stats);
       setPath(pathNow);
 
@@ -802,8 +1026,10 @@ export function usePeerConnection(
 
       const remoteAudio = readRemoteAudio(stats);
       let theirs: RemoteAudioHealth | null = null;
+      let remoteAudioStale = false;
       if (remoteAudio) {
         theirs = remoteAudioHealth(remoteAudioRef.current, remoteAudio);
+        remoteAudioStale = remoteAudioIsStale(remoteAudioRef.current, remoteAudio);
         remoteAudioRef.current = remoteAudio;
       }
       theirAudioRef.current = theirs;
@@ -819,6 +1045,7 @@ export function usePeerConnection(
               audioJitterMs: theirs.jitterMs,
               audioLossPct: theirs.lossPct,
               source: "their-report",
+              stale: remoteAudioStale,
             }
           : {
               audioJitterMs: voiceBuffered,
@@ -860,9 +1087,15 @@ export function usePeerConnection(
 
   useEffect(() => {
     const pending = recoveryTimer;
+    const watchdog = restartWatchdog;
+    const request = restartRequestTimer;
     const forgive = forgiveTimer;
+    unmountingRef.current = false;
     return () => {
+      unmountingRef.current = true;
       cancelRecovery(pending);
+      cancelRecovery(watchdog);
+      cancelRecovery(request);
       cancelRecovery(forgive);
       clockRef.current?.stop();
       dcRef.current?.close();
@@ -906,9 +1139,11 @@ export function usePeerConnection(
           const cap = headroomCapBps(leashHealth.current.capKbps);
           return cap === null ? null : cap / 1000;
         })(),
+        videoRung: leashHealth.current.level,
         theirAudio: theirAudioRef.current,
         recovery: {
           restarts: resilience.restarts,
+          attemptsSinceHealthy: recoveryAttemptsSinceHealthy.current,
           lastRestartReason: resilience.lastRestartReason,
           sinceLastRestartMs:
             resilience.lastRestartAt === null
@@ -1068,10 +1303,17 @@ export function usePeerConnection(
    */
   const dropConnection = useCallback(() => {
     cancelRecovery(recoveryTimer);
+    cancelRecovery(restartWatchdog);
+    cancelRecovery(restartRequestTimer);
     cancelRecovery(forgiveTimer);
     restartAttempt.current = 0;
+    recoveryAttemptsSinceHealthy.current = 0;
     lastRestartAt.current = null;
     setRestartPending(false);
+    restartPendingRef.current = false;
+    restartRequestPendingRef.current = false;
+    restartRequestAttempt.current = 0;
+    lastRestartRequestAt.current = null;
     connectedAt.current = null;
     topologyRef.current = null;
     trafficRef.current = null;
@@ -1090,7 +1332,8 @@ export function usePeerConnection(
     receiversRef.current = [];
     appliedLeash.current = null;
     appliedTargets.current = null;
-    leashHealth.current = INITIAL_LEASH_HEALTH;
+    leashHealth.current = carryLeashHealth(leashHealth.current, Date.now());
+    channelRevivingRef.current = { sync: false, files: false };
     setRoute(null);
     jitterRef.current = null;
     audioRef.current = null;
@@ -1105,12 +1348,24 @@ export function usePeerConnection(
     setState("connecting");
   }, []);
 
+  useEffect(() => {
+    dropConnectionRef.current = dropConnection;
+  }, [dropConnection]);
+
   const retry = useCallback(() => {
     cancelRecovery(recoveryTimer);
+    cancelRecovery(restartWatchdog);
+    cancelRecovery(restartRequestTimer);
     cancelRecovery(forgiveTimer);
     restartAttempt.current = 0;
+    recoveryAttemptsSinceHealthy.current = 0;
     lastRestartAt.current = null;
     setRestartPending(false);
+    restartPendingRef.current = false;
+    restartRequestPendingRef.current = false;
+    restartRequestAttempt.current = 0;
+    lastRestartRequestAt.current = null;
+    rebuildingRef.current = false;
     connectedAt.current = null;
     topologyRef.current = null;
     trafficRef.current = null;
@@ -1126,7 +1381,8 @@ export function usePeerConnection(
     receiversRef.current = [];
     appliedLeash.current = null;
     appliedTargets.current = null;
-    leashHealth.current = INITIAL_LEASH_HEALTH;
+    leashHealth.current = carryLeashHealth(leashHealth.current, Date.now());
+    channelRevivingRef.current = { sync: false, files: false };
     setRoute(null);
     setRemoteStream(null);
     setPath(null);

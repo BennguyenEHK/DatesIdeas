@@ -139,6 +139,8 @@ export interface ReportInput {
    * named budget, and a picture that suddenly goes small is otherwise a mystery.
    */
   videoCapKbps?: number | null;
+  /** The active camera leash rung, from full picture through voice only. */
+  videoRung?: number | null;
 }
 
 /**
@@ -151,8 +153,10 @@ export interface ReportInput {
  */
 export interface RecoveryReport {
   restarts: number;
-  /** "disconnected" | "failed" | "peer-restarted", or null when none yet. */
+  /** "disconnected" | "failed" | "peer-asked" | "peer-restarted", or null. */
   lastRestartReason: string | null;
+  /** ICE recovery attempts since the route was most recently healthy. */
+  attemptsSinceHealthy: number;
   sinceLastRestartMs: number | null;
   /** The longest stretch from losing the connection to having it back. */
   longestGapMs: number | null;
@@ -327,6 +331,13 @@ const whole = (value: number | null, suffix: string): string =>
 const loss = (value: number | null): string =>
   value === null || !Number.isFinite(value) ? "unknown" : `${value.toFixed(1)}%`;
 
+const videoRung = (value: number | null | undefined): string => {
+  const names = ["full", "constrained", "squeezed", "tiny", "voice only"];
+  return value !== null && value !== undefined && value >= 0 && value <= 4
+    ? `${value} (${names[value]})`
+    : "unknown";
+};
+
 /**
  * A call runs for tens of minutes, and this report is read by a person rather
  * than a machine. "2400000 ms" is technically the answer and practically not
@@ -374,6 +385,7 @@ export function formatReport(input: ReportInput): string {
     `Audio up/down: ${whole(rates?.audioUpKbps ?? null, "kbps")} / ${whole(rates?.audioDownKbps ?? null, "kbps")}`,
     `Audio loss: ${loss(rates?.audioLossPct ?? null)}`,
     `Video cap from upload estimate: ${whole(input.videoCapKbps ?? null, "kbps")}`,
+    `Video rung: ${videoRung(input.videoRung)}`,
     `Video size: ${frameSize(sample)}`,
     "DELAY",
     `ICE RTT: ${whole(input.netRttMs, "ms")}`,
@@ -390,6 +402,9 @@ export function formatReport(input: ReportInput): string {
     `File channel buffered: ${Math.round((input.fileBufferedBytes ?? 0) / 1024)} KB`,
     "RECOVERY",
     `Restarts: ${recovery === null ? "unknown" : recovery.restarts}`,
+    `Recovery attempts since last healthy: ${
+      recovery === null ? "unknown" : recovery.attemptsSinceHealthy
+    }`,
     `Last restart reason: ${recovery === null ? "unknown" : (recovery.lastRestartReason ?? "none")}`,
     `Time since last restart: ${recovery === null ? "unknown" : recovery.sinceLastRestartMs === null ? "never" : duration(recovery.sinceLastRestartMs)}`,
     `Longest gap: ${recovery === null ? "unknown" : recovery.longestGapMs === null ? "none" : duration(recovery.longestGapMs)}`,

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   DISCONNECTED_GRACE_MS,
   MAX_RESTART_BACKOFF_MS,
+  RESTART_WATCHDOG_MS,
+  connectionIsStillDown,
   restartBackoffMs,
   restartWaitMs,
   shouldRestart,
@@ -15,6 +17,7 @@ const check = (overrides: Partial<RestartCheck> = {}): RestartCheck => ({
   lastRestartAt: null,
   now: 100_000,
   attempt: 0,
+  restartPending: false,
   ...overrides,
 });
 
@@ -23,6 +26,12 @@ describe("DISCONNECTED_GRACE_MS", () => {
     // A single missed ICE check on a 290 ms path reads as "disconnected" and
     // usually heals within five to fifteen seconds. Four was too short.
     expect(DISCONNECTED_GRACE_MS).toBe(12_000);
+  });
+});
+
+describe("RESTART_WATCHDOG_MS", () => {
+  it("checks a lost restart handshake after twenty seconds", () => {
+    expect(RESTART_WATCHDOG_MS).toBe(20_000);
   });
 });
 
@@ -113,5 +122,29 @@ describe("shouldRestart", () => {
     expect(
       shouldRestart(check({ lastRestartAt: 80_000, now: 100_000, attempt: 1 })),
     ).toBe(true);
+  });
+
+  it("restarts a pending handshake that remains connecting", () => {
+    expect(
+      shouldRestart(
+        check({ connectionState: "connecting", restartPending: true }),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("connectionIsStillDown", () => {
+  it("counts every non-connected state while a restart is pending", () => {
+    for (const connectionState of ["new", "connecting", "disconnected", "failed"] as const) {
+      expect(connectionIsStillDown({ connectionState, restartPending: true })).toBe(
+        true,
+      );
+    }
+  });
+
+  it("does not treat the first connection's connecting state as a failure", () => {
+    expect(
+      connectionIsStillDown({ connectionState: "connecting", restartPending: false }),
+    ).toBe(false);
   });
 });

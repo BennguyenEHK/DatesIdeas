@@ -10,6 +10,8 @@ import type { StatsLike } from "./path";
  * problem and leaves the side that is untouched.
  */
 export interface RemoteAudioSample {
+  /** When the browser produced this receiver report, ms. */
+  timestampMs: number | null;
   /** RTP interarrival jitter at their end, ms. */
   jitterMs: number | null;
   /** Loss over the last report interval, percent 0-100, when reported. */
@@ -52,11 +54,43 @@ export function readRemoteAudio(stats: StatsLike): RemoteAudioSample | null {
   const jitterSeconds = num(remote.jitter);
   const fraction = num(remote.fractionLost);
   return {
+    timestampMs: num(remote.timestamp),
     jitterMs: jitterSeconds === null ? null : jitterSeconds * 1000,
     fractionLostPct: fraction === null ? null : fraction * 100,
     packetsLost: num(remote.packetsLost),
     packetsSent,
   };
+}
+
+/**
+ * Whether the receiver report progressed between polls. A report that remains
+ * frozen while the connection is down is evidence in its own right: treating
+ * it as healthy makes the camera leash relax precisely when it must not.
+ */
+export function remoteAudioHasAdvanced(
+  prev: RemoteAudioSample | null,
+  cur: RemoteAudioSample,
+): boolean {
+  if (prev === null) return true;
+  if (prev.timestampMs !== null && cur.timestampMs !== null) {
+    return cur.timestampMs > prev.timestampMs;
+  }
+  return (
+    (prev.packetsLost !== null &&
+      cur.packetsLost !== null &&
+      cur.packetsLost !== prev.packetsLost) ||
+    (prev.packetsSent !== null &&
+      cur.packetsSent !== null &&
+      cur.packetsSent !== prev.packetsSent)
+  );
+}
+
+/** A report is stale only after a previous report gave us something to compare. */
+export function remoteAudioIsStale(
+  prev: RemoteAudioSample | null,
+  cur: RemoteAudioSample,
+): boolean {
+  return prev !== null && !remoteAudioHasAdvanced(prev, cur);
 }
 
 /**
