@@ -25,7 +25,19 @@ export type SignalMessage =
     }
   | { kind: "offer"; sdp: string; from: string }
   | { kind: "answer"; sdp: string; from: string }
-  | { kind: "ice"; candidate: RTCIceCandidateInit; from: string };
+  | { kind: "ice"; candidate: RTCIceCandidateInit; from: string }
+  /**
+   * Sent by the side that may NOT restart ICE (the answerer) when its own
+   * connection has stayed down past the grace: only the offerer may restart,
+   * and an offerer whose page cannot see the drop would otherwise never do it.
+   */
+  | { kind: "restart-request"; from: string }
+  /**
+   * Sent by the offerer when the connection's data link itself has died and
+   * cannot be reopened: both sides throw their connection away and the
+   * offerer offers a brand new one, keeping who offers unchanged.
+   */
+  | { kind: "rebuild"; from: string };
 
 /**
  * Exactly one peer must create the offer, or both stall waiting for an
@@ -60,6 +72,10 @@ export interface SignalingHandlers {
   onOffer: (sdp: string) => void;
   onAnswer: (sdp: string) => void;
   onIce: (candidate: RTCIceCandidateInit) => void;
+  /** The answerer asks the offerer to restart ICE. */
+  onRestartRequest?: () => void;
+  /** The offerer asks both sides to rebuild the connection from scratch. */
+  onRebuild?: () => void;
 }
 
 /**
@@ -84,6 +100,13 @@ const JOIN_FRESHNESS_MS = 2 * 60 * 1000;
  * playback state is broadcast whole rather than as events.
  */
 const REANNOUNCE_MS = 20_000;
+const SEND_RETRY_INITIAL_MS = 500;
+const SEND_RETRY_MAX_MS = 8_000;
+
+interface OutboxEntry {
+  message: SignalMessage;
+  retryDelay: number;
+}
 
 /**
  * WebRTC signalling over a polled Postgres table.
@@ -120,6 +143,10 @@ export function useSignaling(
   // Set from either the announce or a later send, so it lives outside the
   // polling effect that both of them have to be able to stop.
   const closedRef = useRef(false);
+  const mountedRef = useRef(false);
+  const outboxRef = useRef<OutboxEntry[]>([]);
+  const sendingRef = useRef(false);
+  const sendTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     handlersRef.current = handlers;
@@ -131,31 +158,104 @@ export function useSignaling(
     if (recovering) wakeRef.current?.();
   }, [recovering]);
 
+  // The drain re-schedules itself; it reaches itself through this ref because
+  // a callback may not name itself before its own declaration has finished.
+  const drainRef = useRef<() => void>(() => {});
+  const drainOutbox = useCallback(() => {
+    if (!mountedRef.current || closedRef.current || sendingRef.current) return;
+    const head = outboxRef.current[0];
+    const from = identityRef.current;
+    if (!head || !from) return;
+
+    sendingRef.current = true;
+    void fetch("/api/signal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, from, payload: head.message }),
+      keepalive: true,
+    })
+      .then((res) => {
+        // Cleared here and not in a finally: the success branch below starts
+        // the next request, and a finally running after it would mark that
+        // one as not in flight and let a second POST overtake it.
+        sendingRef.current = false;
+        if (!mountedRef.current || closedRef.current) return;
+        if (res.status === 410) {
+          closedRef.current = true;
+          outboxRef.current = [];
+          setStatus("closed");
+          return;
+        }
+        if (res.status === 429 || res.status >= 500) {
+          sendTimerRef.current = setTimeout(() => drainRef.current(), head.retryDelay);
+          head.retryDelay = Math.min(head.retryDelay * 2, SEND_RETRY_MAX_MS);
+          return;
+        }
+        outboxRef.current.shift();
+        drainRef.current();
+      })
+      .catch(() => {
+        sendingRef.current = false;
+        if (!mountedRef.current || closedRef.current) return;
+        sendTimerRef.current = setTimeout(() => drainRef.current(), head.retryDelay);
+        head.retryDelay = Math.min(head.retryDelay * 2, SEND_RETRY_MAX_MS);
+      });
+  }, [code]);
+
+  useEffect(() => {
+    drainRef.current = drainOutbox;
+  }, [drainOutbox]);
+
+  useEffect(() => {
+    const retryNow = () => {
+      if (sendTimerRef.current !== null) {
+        clearTimeout(sendTimerRef.current);
+        sendTimerRef.current = null;
+      }
+      drainOutbox();
+    };
+    mountedRef.current = true;
+    window.addEventListener("online", retryNow);
+
+    return () => {
+      mountedRef.current = false;
+      outboxRef.current = [];
+      sendingRef.current = false;
+      if (sendTimerRef.current !== null) {
+        clearTimeout(sendTimerRef.current);
+        sendTimerRef.current = null;
+      }
+      window.removeEventListener("online", retryNow);
+    };
+  }, [drainOutbox]);
+
   const send = useCallback(
     (msg: SignalMessage) => {
-      const from = identityRef.current;
-      if (!from) return;
-      void fetch("/api/signal", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, from, payload: msg }),
-        keepalive: true,
-      })
-        .then((res) => {
-          // The room can run out mid-handshake: joined at 23:59, offered at
-          // 00:00. Only an explicit Gone counts — a failed request is not an
-          // expiry, and treating it as one would send someone off to make a
-          // new room over a flicker of wifi.
-          if (res.status === 410) {
-            closedRef.current = true;
-            setStatus("closed");
-          }
-        })
-        .catch(() => {
-          /* a dropped signal is retried by the peer's next poll */
-        });
+      if (!mountedRef.current || closedRef.current || !identityRef.current) return;
+
+      const queuedStart = sendingRef.current ? 1 : 0;
+      const inFlight = outboxRef.current.slice(0, queuedStart);
+      const queued = outboxRef.current.slice(queuedStart);
+      if (msg.kind === "offer" || msg.kind === "answer") {
+        outboxRef.current = [...inFlight, ...queued.filter(
+          ({ message }) =>
+            message.kind !== "offer" &&
+            message.kind !== "answer" &&
+            message.kind !== "ice",
+        )];
+      } else if (msg.kind === "restart-request") {
+        outboxRef.current = [...inFlight, ...queued.filter(
+          ({ message }) => message.kind !== "restart-request",
+        )];
+      }
+
+      outboxRef.current.push({
+        message: msg,
+        retryDelay: SEND_RETRY_INITIAL_MS,
+      });
+      drainOutbox();
     },
-    [code],
+    [drainOutbox],
   );
 
   useEffect(() => {
@@ -223,6 +323,12 @@ export function useSignaling(
           break;
         case "ice":
           handlersRef.current.onIce(msg.candidate);
+          break;
+        case "restart-request":
+          handlersRef.current.onRestartRequest?.();
+          break;
+        case "rebuild":
+          handlersRef.current.onRebuild?.();
           break;
       }
     }
