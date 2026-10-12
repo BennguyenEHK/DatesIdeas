@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ORPHAN_GRACE_MS, keepsakeRoom, runCleanup, type CleanupDeps } from "./cleanup";
+import { KARAOKE_MAX_AGE_MS, ORPHAN_GRACE_MS, keepsakeRoom, runCleanup, type CleanupDeps } from "./cleanup";
 
 const NOW = new Date("2026-09-13T09:00:00.000Z");
 const old = new Date(NOW.getTime() - ORPHAN_GRACE_MS - 60_000);
@@ -154,5 +154,81 @@ describe("album files no entry uses", () => {
     });
     await expect(runCleanup(d)).rejects.toThrow(/refusing to delete/);
     expect(deleted).toEqual([]);
+  });
+});
+
+describe("karaoke songs", () => {
+  const token = "0123456789abcdef0123456789abcdef";
+  const song = (room: string) => `karaoke/${room}/${token}.mp4`;
+
+  it("deletes a song whose room has closed, even a brand new one", async () => {
+    const { deps: d, deleted } = deps({ bucket: { [song("SHUT34")]: fresh } });
+    const report = await runCleanup(d);
+    expect(deleted).toEqual([song("SHUT34")]);
+    expect(report.karaokeFilesDeleted).toBe(1);
+  });
+
+  it("keeps a recent song from a room that is still open", async () => {
+    const { deps: d, deleted } = deps({
+      bucket: { [song("OPEN12")]: fresh },
+      openRoomCodes: async () => new Set(["OPEN12"]),
+    });
+    const report = await runCleanup(d);
+    expect(deleted).toEqual([]);
+    expect(report.karaokeFilesDeleted).toBe(0);
+  });
+
+  it("deletes a song more than a day old even if its room is still listed open", async () => {
+    const stale = new Date(NOW.getTime() - KARAOKE_MAX_AGE_MS - 60_000);
+    const { deps: d, deleted } = deps({
+      bucket: { [song("OPEN12")]: stale },
+      openRoomCodes: async () => new Set(["OPEN12"]),
+    });
+    const report = await runCleanup(d);
+    expect(deleted).toEqual([song("OPEN12")]);
+    expect(report.karaokeFilesDeleted).toBe(1);
+  });
+
+  it("spares an open room's song whose age the bucket did not report", async () => {
+    const { deps: d, deleted } = deps({
+      bucket: { [song("OPEN12")]: null },
+      openRoomCodes: async () => new Set(["OPEN12"]),
+    });
+    await runCleanup(d);
+    expect(deleted).toEqual([]);
+  });
+
+  it("never deletes a karaoke key it cannot place in a room", async () => {
+    const { deps: d, deleted } = deps({
+      bucket: {
+        "karaoke/notes.txt": old,
+        "karaoke/SHUT34/not-a-token.mp4": old,
+        [`karaoke/SHUT34/sub/${token}.mp4`]: old,
+        [`karaoke/shut34/${token}.mp4`]: old,
+      },
+    });
+    const report = await runCleanup(d);
+    expect(deleted).toEqual([]);
+    expect(report.karaokeFilesDeleted).toBe(0);
+  });
+
+  it("asks which rooms are open once when booth files and songs are both present", async () => {
+    const openRoomCodes = vi.fn(async () => new Set<string>());
+    const { deps: d } = deps({
+      bucket: {
+        "keepsakes/2026/09/12_20-00-00_strip_SHUT34_bbbbbbbb.png": fresh,
+        [song("SHUT34")]: fresh,
+      },
+      openRoomCodes,
+    });
+    await runCleanup(d);
+    expect(openRoomCodes).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask which rooms are open when there are no songs", async () => {
+    const openRoomCodes = vi.fn(async () => new Set<string>());
+    const { deps: d } = deps({ openRoomCodes });
+    await runCleanup(d);
+    expect(openRoomCodes).not.toHaveBeenCalled();
   });
 });

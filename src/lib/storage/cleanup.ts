@@ -1,3 +1,4 @@
+import { karaokeRoom } from "@/lib/karaoke/keys";
 import type { StoredObject } from "./objects";
 
 /**
@@ -19,12 +20,19 @@ import type { StoredObject } from "./objects";
  *      is never deleted because a room closed.
  *   3. An album file that no album entry uses goes -- but only once it is more
  *      than a day old, so an upload still in progress can never be caught.
+ *   4. A karaoke song goes once its room has closed, or once it is more than a
+ *      day old, whichever comes first. A song is only ever needed while the two
+ *      of them are singing, and a room lives for a day at most, so a song older
+ *      than that belongs to a room that is over or was never closed properly.
+ *      A key the cleanup cannot place in a room is never deleted.
  *
  * The room itself is never deleted. The home page's "past evenings" reads it.
  */
 
 /** How long an album file with no entry is left alone before it counts as stuck. */
 export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
+/** How long a karaoke song may sit in the bucket, even for a room that is still open. */
+export const KARAOKE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 export interface CleanupDeps {
   now: Date;
@@ -56,9 +64,15 @@ export interface CleanupReport {
   keepsakeFilesDeleted: number;
   keepsakeRowsDeleted: number;
   albumOrphansDeleted: number;
+  karaokeFilesDeleted: number;
 }
 
 export async function runCleanup(deps: CleanupDeps): Promise<CleanupReport> {
+  // Steps 1 and 4 both need to know which rooms are open. Asked at most once,
+  // and only if a step actually has something to judge: it is a database read.
+  let openRooms: Promise<Set<string>> | null = null;
+  const open = () => (openRooms ??= deps.openRoomCodes());
+
   // ---- 1. closed rooms' photo booth files, whichever month folder they are in
   const keepsakeObjects = await deps.listKeys("keepsakes/");
   const byRoom = new Map<string, string[]>();
@@ -73,8 +87,8 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupReport> {
   let closedRooms: string[] = [];
   let keepsakeFilesDeleted = 0;
   if (byRoom.size > 0) {
-    const open = await deps.openRoomCodes();
-    closedRooms = [...byRoom.keys()].filter((room) => !open.has(room)).sort();
+    const openNow = await open();
+    closedRooms = [...byRoom.keys()].filter((room) => !openNow.has(room)).sort();
     const doomed = closedRooms.flatMap((room) => byRoom.get(room) ?? []);
     keepsakeFilesDeleted = await deps.deleteKeys(doomed);
   }
@@ -107,5 +121,31 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupReport> {
     albumOrphansDeleted = await deps.deleteKeys(orphans);
   }
 
-  return { closedRooms, keepsakeFilesDeleted, keepsakeRowsDeleted, albumOrphansDeleted };
+  // ---- 4. karaoke songs from closed rooms, or older than a day
+  const karaokeObjects = (await deps.listKeys("karaoke/")).flatMap((object) => {
+    const room = karaokeRoom(object.key);
+    return room === null ? [] : [{ ...object, room }];
+  });
+  let karaokeFilesDeleted = 0;
+  if (karaokeObjects.length > 0) {
+    const openNow = await open();
+    const doomed = karaokeObjects
+      .filter(
+        (object) =>
+          !openNow.has(object.room) ||
+          // An age the bucket did not report cannot condemn a song on its own.
+          (object.lastModified !== null &&
+            deps.now.getTime() - object.lastModified.getTime() > KARAOKE_MAX_AGE_MS),
+      )
+      .map((object) => object.key);
+    karaokeFilesDeleted = await deps.deleteKeys(doomed);
+  }
+
+  return {
+    closedRooms,
+    keepsakeFilesDeleted,
+    keepsakeRowsDeleted,
+    albumOrphansDeleted,
+    karaokeFilesDeleted,
+  };
 }

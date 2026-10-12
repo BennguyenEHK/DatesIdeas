@@ -9,6 +9,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { isAlbumKey, isLegacyAlbumKey } from "@/lib/album/keys";
+import { isKaraokeKey } from "@/lib/karaoke/keys";
 import { isLookKeyFor } from "@/lib/looks/keys";
 import { isLookbookKeyFor } from "@/lib/lookbook/keys";
 import { DATED_PATTERN } from "./datedName";
@@ -195,6 +196,9 @@ export async function listKeys(
  */
 function mayDelete(key: string): boolean {
   if (key.includes("..") || key.includes("\\")) return false;
+  // Only a key shaped exactly as a song's slot is minted: the cleanup lists the
+  // whole karaoke/ folder, and anything else in it must be left alone.
+  if (isKaraokeKey(key)) return true;
   const look = /^looks\/([0-9a-f-]{36})\//i.exec(key);
   if (look !== null) return isLookKeyFor(look[1], key);
   const lookbook = /^lookbook\/([0-9a-f-]{36})\//i.exec(key);

@@ -159,4 +159,18 @@ describe("deleteKeys", () => {
     const { deleteKeys } = await import("./objects");
     expect(await deleteKeys(["keepsakes/ROOM/strip-a.png"], null)).toBe(0);
   });
+
+  it("deletes a well-formed karaoke key and refuses a malformed one in that folder", async () => {
+    const { S3Client } = await import("@aws-sdk/client-s3");
+    const send = vi.spyOn(S3Client.prototype, "send").mockResolvedValue({} as never);
+    const { deleteKeys } = await import("./objects");
+    const token = "0123456789abcdef0123456789abcdef";
+    const deleted = await deleteKeys(
+      [`karaoke/KW3KDD/${token}.mp4`, "karaoke/KW3KDD/notes.txt", `karaoke/../album/${token}.mp4`],
+      config,
+    );
+    expect(deleted).toBe(1);
+    expect(send).toHaveBeenCalledTimes(1);
+    send.mockRestore();
+  });
 });
