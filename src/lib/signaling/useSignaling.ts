@@ -102,10 +102,29 @@ const JOIN_FRESHNESS_MS = 2 * 60 * 1000;
 const REANNOUNCE_MS = 20_000;
 const SEND_RETRY_INITIAL_MS = 500;
 const SEND_RETRY_MAX_MS = 8_000;
+/**
+ * How long one POST may take before it is abandoned and retried. The outbox
+ * sends one message at a time, so a request that simply never answers -- which
+ * bad wifi produces far more often than a clean error -- would otherwise hold
+ * every later offer, answer and restart behind it for good.
+ */
+export const SEND_TIMEOUT_MS = 8_000;
 
 interface OutboxEntry {
   message: SignalMessage;
   retryDelay: number;
+  /**
+   * Stamped once and kept across retries. A POST abandoned on timeout may
+   * still have landed, so its retry can arrive twice; the receiver drops the
+   * second copy by this id rather than renegotiating or rebuilding again.
+   */
+  sid: string;
+}
+
+function newSignalId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 /**
@@ -168,13 +187,17 @@ export function useSignaling(
     if (!head || !from) return;
 
     sendingRef.current = true;
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(), SEND_TIMEOUT_MS);
     void fetch("/api/signal", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, from, payload: head.message }),
+      body: JSON.stringify({ code, from, payload: { ...head.message, sid: head.sid } }),
       keepalive: true,
+      signal: abort.signal,
     })
       .then((res) => {
+        clearTimeout(timeout);
         // Cleared here and not in a finally: the success branch below starts
         // the next request, and a finally running after it would mark that
         // one as not in flight and let a second POST overtake it.
@@ -195,6 +218,7 @@ export function useSignaling(
         drainRef.current();
       })
       .catch(() => {
+        clearTimeout(timeout);
         sendingRef.current = false;
         if (!mountedRef.current || closedRef.current) return;
         sendTimerRef.current = setTimeout(() => drainRef.current(), head.retryDelay);
@@ -252,6 +276,7 @@ export function useSignaling(
       outboxRef.current.push({
         message: msg,
         retryDelay: SEND_RETRY_INITIAL_MS,
+        sid: newSignalId(),
       });
       drainOutbox();
     },
@@ -282,9 +307,16 @@ export function useSignaling(
     // one alongside it; the one in flight reschedules at the new rate anyway.
     let inFlight = false;
     let lastAnnouncedAt = 0;
+    const seenSignals = new Set<string>();
     closedRef.current = false;
 
     function handle(msg: SignalMessage) {
+      // A retried POST can deliver the same message twice; see OutboxEntry.
+      const sid = (msg as { sid?: unknown }).sid;
+      if (typeof sid === "string") {
+        if (seenSignals.has(sid)) return;
+        seenSignals.add(sid);
+      }
       switch (msg.kind) {
         case "join": {
           // Ignore our own echo and anything left over from an earlier sitting.

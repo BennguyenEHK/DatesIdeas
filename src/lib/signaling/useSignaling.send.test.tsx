@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useSignaling, type SignalMessage } from "./useSignaling";
+import { useSignaling, type SignalMessage, SEND_TIMEOUT_MS } from "./useSignaling";
 
 const handlers = {
   onPeer: () => {},
@@ -14,11 +14,19 @@ let fetchMock: ReturnType<typeof vi.fn>;
 const empty = () =>
   new Response(JSON.stringify({ signals: [], cursor: 0 }), { status: 200 });
 
-const sentMessages = () =>
+const sentPayloads = () =>
   fetchMock.mock.calls
     .filter(([, init]) => init?.method === "POST")
-    .map(([, init]) => JSON.parse(String(init?.body)).payload as SignalMessage)
+    .map(([, init]) => JSON.parse(String(init?.body)).payload as SignalMessage & { sid?: string })
     .filter((message) => message.kind !== "join");
+
+// The delivery id is checked on its own below; the other tests compare messages.
+const sentMessages = () =>
+  sentPayloads().map((payload) => {
+    const message: Record<string, unknown> = { ...payload };
+    delete message.sid;
+    return message as SignalMessage;
+  });
 
 async function settle() {
   await act(async () => {
@@ -72,6 +80,46 @@ describe("reliable signaling sends", () => {
       { kind: "rebuild", from: "peer" },
       { kind: "rebuild", from: "peer" },
     ]);
+  });
+
+  it("keeps one delivery id across retries, so a duplicate can be recognised", async () => {
+    let attempts = 0;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method !== "POST") return Promise.resolve(empty());
+      if (attempts++ === 1) return Promise.reject(new Error("offline"));
+      return Promise.resolve(new Response("{}", { status: 201 }));
+    });
+    const { result } = render();
+    await settle();
+    result.current.send({ kind: "rebuild", from: "peer" });
+    await settle();
+    await advance(500);
+    const [first, retry] = sentPayloads();
+    expect(typeof first.sid).toBe("string");
+    expect(retry.sid).toBe(first.sid);
+  });
+
+  it("abandons a POST that never answers and retries it", async () => {
+    let attempts = 0;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method !== "POST") return Promise.resolve(empty());
+      attempts += 1;
+      // The first message POST hangs until its signal aborts it.
+      if (attempts === 2) {
+        return new Promise((_, reject) =>
+          init.signal?.addEventListener("abort", () => reject(new Error("aborted"))),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 201 }));
+    });
+    const { result } = render();
+    await settle();
+    result.current.send({ kind: "rebuild", from: "peer" });
+    await settle();
+    expect(sentMessages()).toHaveLength(1);
+    await advance(SEND_TIMEOUT_MS);
+    await advance(500);
+    expect(sentMessages()).toHaveLength(2);
   });
 
   it("doubles retry backoff and caps it at 8 seconds", async () => {

@@ -213,6 +213,8 @@ const PATH_POLL_MS = 3000;
  * would poll twice a second for the whole call.
  */
 const ICE_SETTLE_GRACE_MS = 15_000;
+/** How long an offer waits for its answer before it is sent again. */
+const OFFER_RESEND_MS = 8_000;
 
 /** How coarsely a measured round trip is bucketed before it can change a decision. */
 const RTT_BUCKET_MS = 50;
@@ -342,6 +344,8 @@ export function usePeerConnection(
   // A lost restart offer produces no later state transition, so it needs its
   // own clock rather than relying on onconnectionstatechange to notice again.
   const restartWatchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Re-sends an unanswered offer; see armOfferResend.
+  const offerResendTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The answerer cannot restart ICE, but it must keep asking its offerer while
   // its own route stays down. This is deliberately separate from the offerer's
   // counter because either side can miss a different part of the outage.
@@ -415,6 +419,28 @@ export function usePeerConnection(
     return () => {
       if (onFileChunkRef.current === handler) onFileChunkRef.current = null;
     };
+  }, []);
+
+  /**
+   * Re-sends this side's offer until it is answered.
+   *
+   * An offer whose answer never arrives -- the answer's POST lost on bad wifi,
+   * or the offer's own -- leaves a fresh connection sitting in "connecting"
+   * forever: it never reaches "failed", so no restart is ever scheduled, and
+   * the call just reads "connecting" until someone reloads. Repeating the very
+   * same offer is safe: the answerer recognises it and answers it again.
+   */
+  const armOfferResend = useCallback((pc: RTCPeerConnection) => {
+    cancelRecovery(offerResendTimer);
+    const tick = () => {
+      offerResendTimer.current = null;
+      if (unmountingRef.current || pcRef.current !== pc) return;
+      const offer = pc.localDescription;
+      if (pc.signalingState !== "have-local-offer" || offer?.type !== "offer") return;
+      sendSignalRef.current({ kind: "offer", sdp: offer.sdp, from: getIdentity() });
+      offerResendTimer.current = setTimeout(tick, OFFER_RESEND_MS);
+    };
+    offerResendTimer.current = setTimeout(tick, OFFER_RESEND_MS);
   }, []);
 
   const reviveDataChannel = useCallback((label: "sync" | "files") => {
@@ -619,6 +645,7 @@ export function usePeerConnection(
      */
     const armRestartWatchdog = (reason: RestartReason) => {
       cancelRecovery(restartWatchdog);
+    cancelRecovery(offerResendTimer);
       restartWatchdog.current = setTimeout(() => {
         restartWatchdog.current = null;
         if (unmountingRef.current || pcRef.current !== pc) return;
@@ -686,7 +713,7 @@ export function usePeerConnection(
         }));
         restartPendingRef.current = true;
         setRestartPending(true);
-        void restartIce(pc, sendSignalRef.current);
+        void restartIce(pc, sendSignalRef.current).then(() => armOfferResend(pc));
         armRestartWatchdog(reason);
       }, Math.max(graceMs, waitMs));
     };
@@ -740,6 +767,7 @@ export function usePeerConnection(
           // restarts a connection that is now working perfectly well.
           cancelRecovery(recoveryTimer);
           cancelRecovery(restartWatchdog);
+    cancelRecovery(offerResendTimer);
           cancelRecovery(restartRequestTimer);
           const now = Date.now();
           // Kept from the FIRST connect, not refreshed on every recovery: the
@@ -822,7 +850,7 @@ export function usePeerConnection(
       }
     };
     return pc;
-  }, [localStream, reviveDataChannel, wireDataChannel, wireFileChannel]);
+  }, [armOfferResend, localStream, reviveDataChannel, wireDataChannel, wireFileChannel]);
 
   // The other side rebuilt the call: either restarted ICE on the connection
   // we share, or came back on a new one. Counted so this side's report shows
@@ -858,7 +886,8 @@ export function usePeerConnection(
     const offerSdp = preferMusicAudio(offer.sdp!);
     await pc.setLocalDescription({ type: "offer", sdp: offerSdp });
     sendSignalRef.current({ kind: "offer", sdp: offerSdp, from: getIdentity() });
-  }, [buildConnection, wireDataChannel, wireFileChannel]);
+    armOfferResend(pc);
+  }, [armOfferResend, buildConnection, wireDataChannel, wireFileChannel]);
 
   useEffect(() => {
     offerConnectionRef.current = offerConnection;
@@ -882,6 +911,21 @@ export function usePeerConnection(
     },
     onOffer: async (sdp) => {
       const existing = pcRef.current;
+      // The offer we have already answered, sent again because our answer
+      // never reached them (see armOfferResend). Answer it again, as it is:
+      // renegotiating an identical offer would count a restart that is not one.
+      if (
+        existing !== null &&
+        existing.remoteDescription?.sdp === sdp &&
+        existing.localDescription?.type === "answer"
+      ) {
+        sendSignalRef.current({
+          kind: "answer",
+          sdp: existing.localDescription.sdp,
+          from: getIdentity(),
+        });
+        return;
+      }
       if (existing === null) {
         setState("connecting");
       } else {
@@ -1088,6 +1132,7 @@ export function usePeerConnection(
   useEffect(() => {
     const pending = recoveryTimer;
     const watchdog = restartWatchdog;
+    const resend = offerResendTimer;
     const request = restartRequestTimer;
     const forgive = forgiveTimer;
     unmountingRef.current = false;
@@ -1095,6 +1140,7 @@ export function usePeerConnection(
       unmountingRef.current = true;
       cancelRecovery(pending);
       cancelRecovery(watchdog);
+      cancelRecovery(resend);
       cancelRecovery(request);
       cancelRecovery(forgive);
       clockRef.current?.stop();
@@ -1304,6 +1350,7 @@ export function usePeerConnection(
   const dropConnection = useCallback(() => {
     cancelRecovery(recoveryTimer);
     cancelRecovery(restartWatchdog);
+    cancelRecovery(offerResendTimer);
     cancelRecovery(restartRequestTimer);
     cancelRecovery(forgiveTimer);
     restartAttempt.current = 0;
@@ -1355,6 +1402,7 @@ export function usePeerConnection(
   const retry = useCallback(() => {
     cancelRecovery(recoveryTimer);
     cancelRecovery(restartWatchdog);
+    cancelRecovery(offerResendTimer);
     cancelRecovery(restartRequestTimer);
     cancelRecovery(forgiveTimer);
     restartAttempt.current = 0;
