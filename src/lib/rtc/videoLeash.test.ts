@@ -16,12 +16,18 @@ import {
   healthStep,
   INITIAL_LEASH_HEALTH,
   LEASH_MOVE_COOLDOWN_MS,
+  LEASH_LOOSEN_COOLDOWN_MS,
+  leashOnLinkLost,
+  carryLeashHealth,
   leashFor,
   leashSenders,
   RELAYED_FULL_VIDEO,
   sameSettings,
   SQUEEZED_FULL_VIDEO,
   SQUEEZED_LEAN_VIDEO,
+  TINY_FULL_VIDEO,
+  TINY_LEAN_VIDEO,
+  VOICE_ONLY_FULL_VIDEO,
   LEAN_VIDEO,
   type LeashHealthState,
   type LeashLevel,
@@ -167,6 +173,7 @@ describe("applyLeash", () => {
         maxBitrate: 500_000,
         scaleResolutionDownBy: 2,
         maxFramerate: 24,
+        active: true,
       },
     ]);
     expect(params.degradationPreference).toBe("maintain-resolution");
@@ -180,6 +187,7 @@ describe("applyLeash", () => {
         maxBitrate: 2_500_000,
         scaleResolutionDownBy: 1,
         maxFramerate: 30,
+        active: true,
       },
     ]);
   });
@@ -197,12 +205,14 @@ describe("applyLeash", () => {
         maxBitrate: 500_000,
         scaleResolutionDownBy: 2,
         maxFramerate: 24,
+        active: true,
       },
       {
         rid: "high",
         maxBitrate: 500_000,
         scaleResolutionDownBy: 2,
         maxFramerate: 24,
+        active: true,
       },
     ]);
   });
@@ -458,6 +468,7 @@ describe("squeezed budgets", () => {
       maxBitrateBps: 450_000,
       scaleResolutionDownBy: 2,
       maxFramerate: 20,
+      degradation: "balanced",
     });
   });
 
@@ -466,6 +477,7 @@ describe("squeezed budgets", () => {
       maxBitrateBps: 300_000,
       scaleResolutionDownBy: 2,
       maxFramerate: 15,
+      degradation: "balanced",
     });
   });
 
@@ -505,9 +517,9 @@ describe("healthStep", () => {
     expect(healthStep(1, { audioJitterMs: 60, audioLossPct: 0.7 })).toBe(1);
   });
 
-  it("never loosens below zero or tightens above two", () => {
+  it("never loosens below zero or tightens above the tiny rung", () => {
     expect(healthStep(0, { audioJitterMs: 60, audioLossPct: 0.1 })).toBe(0);
-    expect(healthStep(2, { audioJitterMs: 314, audioLossPct: 5 })).toBe(2);
+    expect(healthStep(3, { audioJitterMs: 314, audioLossPct: 5 })).toBe(3);
   });
 
   it("does not treat missing readings as health", () => {
@@ -525,7 +537,7 @@ describe("budgetFor with a health level", () => {
     { relayed: true, relayProtocol: "tcp", netRttMs: 100 },
     { relayed: true, relayProtocol: "udp", netRttMs: 300 },
   ];
-  const levels: LeashLevel[] = [0, 1, 2];
+  const levels: LeashLevel[] = [0, 1, 2, 3, 4];
 
   it("is never looser than the route alone allows", () => {
     for (const mode of ["full", "lean"] as const) {
@@ -547,6 +559,8 @@ describe("budgetFor with a health level", () => {
     expect(budgetFor("full", close, 0)).toBe(FULL_VIDEO);
     expect(budgetFor("full", close, 1)).toBe(CONSTRAINED_FULL_VIDEO);
     expect(budgetFor("full", close, 2)).toBe(SQUEEZED_FULL_VIDEO);
+    expect(budgetFor("full", close, 3)).toBe(TINY_FULL_VIDEO);
+    expect(budgetFor("full", close, 4)).toBe(VOICE_ONLY_FULL_VIDEO);
     expect(budgetFor("lean", close, 2)).toBe(SQUEEZED_LEAN_VIDEO);
   });
 
@@ -574,7 +588,7 @@ describe("budgetFor with a health level", () => {
 });
 
 describe("advanceLeashHealth", () => {
-  const bad = { audioJitterMs: 314, audioLossPct: 0.7 };
+  const bad = { audioJitterMs: 160, audioLossPct: 0.7 };
   const good = { audioJitterMs: 60, audioLossPct: 0.1 };
   const middling = { audioJitterMs: 100, audioLossPct: 0.7 };
 
@@ -603,7 +617,7 @@ describe("advanceLeashHealth", () => {
     expect(state.pending).toBe(1);
   });
 
-  it("never moves again within the cooldown", () => {
+  it("moves another ordinary struggling level without a cooldown", () => {
     let state: LeashHealthState = {
       level: 1,
       pending: 0,
@@ -612,10 +626,8 @@ describe("advanceLeashHealth", () => {
     };
     state = advanceLeashHealth(state, bad, 3_000);
     state = advanceLeashHealth(state, bad, 6_000);
-    expect(state.level).toBe(1);
-    state = advanceLeashHealth(state, bad, LEASH_MOVE_COOLDOWN_MS);
     expect(state.level).toBe(2);
-    expect(state.movedAtMs).toBe(LEASH_MOVE_COOLDOWN_MS);
+    expect(state.movedAtMs).toBe(6_000);
   });
 
   it("loosens only after two healthy polls and the cooldown", () => {
@@ -626,12 +638,13 @@ describe("advanceLeashHealth", () => {
       capKbps: null,
     };
     state = advanceLeashHealth(state, good, 12_000);
-    state = advanceLeashHealth(state, good, 15_000);
+    state = advanceLeashHealth(state, good, LEASH_LOOSEN_COOLDOWN_MS);
     expect(state.level).toBe(1);
     state = advanceLeashHealth(state, good, 18_000);
     state = advanceLeashHealth(state, good, 21_000);
     expect(state.level).toBe(1);
     state = advanceLeashHealth(state, good, 30_000);
+    state = advanceLeashHealth(state, good, 42_000);
     expect(state.level).toBe(0);
   });
 
@@ -640,14 +653,135 @@ describe("advanceLeashHealth", () => {
     state = advanceLeashHealth(state, good, 3_000);
     expect(state).toEqual(INITIAL_LEASH_HEALTH);
     let top: LeashHealthState = {
-      level: 2,
+      level: 3,
       pending: 0,
       movedAtMs: 0,
       capKbps: null,
     };
     top = advanceLeashHealth(top, bad, 30_000);
     top = advanceLeashHealth(top, bad, 33_000);
-    expect(top.level).toBe(2);
+    expect(top.level).toBe(3);
+  });
+});
+
+describe("the deeper video ladder", () => {
+  it("gives level 3 a tiny balanced full and lean budget", () => {
+    expect(profileFor("full", null, 3)).toEqual({
+      maxBitrateBps: 150_000,
+      scaleResolutionDownBy: 4,
+      maxFramerate: 12,
+      degradation: "balanced",
+    });
+    expect(profileFor("lean", null, 3)).toEqual({
+      maxBitrateBps: 120_000,
+      scaleResolutionDownBy: 4,
+      maxFramerate: 10,
+      degradation: "balanced",
+    });
+    expect(TINY_LEAN_VIDEO.maxBitrateBps).toBe(120_000);
+  });
+
+  it("pauses the camera only from level 3 with measured loss above 10%", () => {
+    expect(profileFor("full", null, 4).active).toBe(false);
+    expect(healthStep(2, { audioJitterMs: 200, audioLossPct: 12 })).toBe(3);
+    expect(healthStep(3, { audioJitterMs: 20, audioLossPct: 12 })).toBe(4);
+    expect(healthStep(4, { audioJitterMs: 200, audioLossPct: 12 })).toBe(4);
+  });
+
+  it("never pauses the camera on a stale report alone, which every outage produces", () => {
+    expect(healthStep(3, { audioJitterMs: null, audioLossPct: null, stale: true })).toBe(3);
+    expect(healthStep(1, { audioJitterMs: null, audioLossPct: null, stale: true })).toBe(2);
+  });
+
+  it("does not pause the camera for ordinary struggling at level 3", () => {
+    expect(healthStep(3, { audioJitterMs: 160, audioLossPct: 3 })).toBe(3);
+  });
+
+  it("tightens immediately on a severe poll despite cooldown and confirmation", () => {
+    const state: LeashHealthState = {
+      level: 1,
+      pending: 0,
+      movedAtMs: 19_999,
+      capKbps: null,
+    };
+    expect(advanceLeashHealth(state, { audioJitterMs: 400, audioLossPct: 0.1 }, 20_000))
+      .toMatchObject({ level: 2, pending: 0, movedAtMs: 20_000 });
+  });
+
+  it("tightens ordinary struggling after two polls without a cooldown", () => {
+    const state: LeashHealthState = {
+      level: 1,
+      pending: 0,
+      movedAtMs: 0,
+      capKbps: null,
+    };
+    const first = advanceLeashHealth(state, { audioJitterMs: 160, audioLossPct: 0.7 }, 3_000);
+    expect(advanceLeashHealth(first, { audioJitterMs: 160, audioLossPct: 0.7 }, 6_000))
+      .toMatchObject({ level: 2, movedAtMs: 6_000 });
+  });
+
+  it("loosens after two healthy polls only once twenty seconds have passed", () => {
+    const state: LeashHealthState = {
+      level: 2,
+      pending: 0,
+      movedAtMs: 0,
+      capKbps: null,
+    };
+    const first = advanceLeashHealth(state, { audioJitterMs: 60, audioLossPct: 0.1 }, 19_000);
+    expect(
+      advanceLeashHealth(
+        first,
+        { audioJitterMs: 60, audioLossPct: 0.1 },
+        19_500,
+      ).level,
+    ).toBe(2);
+    expect(
+      advanceLeashHealth(
+        first,
+        { audioJitterMs: 60, audioLossPct: 0.1 },
+        20_000,
+      ).level,
+    ).toBe(1);
+  });
+
+  it("writes paused and balanced settings to the sender", async () => {
+    const paused = fakeSender({ encodings: [{}] });
+    const tiny = fakeSender({ encodings: [{}] });
+    await applyLeash(paused.sender, VOICE_ONLY_FULL_VIDEO);
+    await applyLeash(tiny.sender, TINY_FULL_VIDEO);
+    expect(paused.params.encodings?.[0]?.active).toBe(false);
+    expect(tiny.params.degradationPreference).toBe("balanced");
+  });
+
+  it("keeps a paused budget paused when headroom caps it", () => {
+    expect(capToHeadroom(VOICE_ONLY_FULL_VIDEO, 80_000)).toMatchObject({
+      active: false,
+      degradation: "balanced",
+    });
+  });
+
+  it("treats active and degradation changes as encoder changes", () => {
+    expect(sameSettings(FULL_VIDEO, { ...FULL_VIDEO, active: false })).toBe(false);
+    expect(sameSettings(FULL_VIDEO, { ...FULL_VIDEO, degradation: "balanced" })).toBe(false);
+  });
+
+  it("jumps a lost link to level 3 and leaves level 3 and 4 unchanged", () => {
+    const state: LeashHealthState = { level: 1, pending: 1, movedAtMs: 0, capKbps: 150 };
+    expect(leashOnLinkLost(state, 5_000)).toEqual({
+      ...state,
+      level: 3,
+      pending: 0,
+      movedAtMs: 5_000,
+    });
+    const tiny: LeashHealthState = { ...state, level: 3 };
+    const paused: LeashHealthState = { ...state, level: 4 };
+    expect(leashOnLinkLost(tiny, 5_000)).toBe(tiny);
+    expect(leashOnLinkLost(paused, 5_000)).toBe(paused);
+  });
+
+  it("carries the level, clears the cap, and stamps the recovery cooldown", () => {
+    expect(carryLeashHealth({ level: 3, pending: 1, movedAtMs: 0, capKbps: 150 }, 5_000))
+      .toEqual({ level: 3, pending: 0, movedAtMs: 5_000, capKbps: null });
   });
 });
 
@@ -715,6 +849,8 @@ describe("capToHeadroom", () => {
       maxBitrateBps: 80_000,
       scaleResolutionDownBy: 4,
       maxFramerate: 12,
+      active: undefined,
+      degradation: "balanced",
     });
   });
 
@@ -740,6 +876,8 @@ describe("capToHeadroom", () => {
       maxBitrateBps: 80_000,
       scaleResolutionDownBy: 4,
       maxFramerate: 12,
+      active: undefined,
+      degradation: "balanced",
     });
     expect(budgetFor("full", far, 0, null)).toBe(CONSTRAINED_FULL_VIDEO);
   });
@@ -852,7 +990,7 @@ describe("advanceHeadroom", () => {
     const bad = { audioJitterMs: 314, audioLossPct: 0.7 };
     let next = advanceLeashHealth(state, bad, 0);
     next = advanceLeashHealth(next, bad, 3_000);
-    expect(next.level).toBe(1);
+    expect(next.level).toBe(2);
     expect(next.capKbps).toBe(150);
   });
 });

@@ -7,6 +7,17 @@ export interface LeashSettings {
   /** 1 = native resolution, 2 = half width and half height. */
   scaleResolutionDownBy: number;
   maxFramerate: number;
+  /**
+   * False pauses the camera on the wire (encoding.active) while the voice
+   * carries on. Absent means true. Only the last rung of the ladder sets it.
+   */
+  active?: boolean;
+  /**
+   * What the encoder gives up first under pressure. Absent means
+   * "maintain-resolution"; the low rungs ask for "balanced", because at a
+   * hundred-odd kbps holding the size only freezes the picture.
+   */
+  degradation?: "maintain-resolution" | "balanced";
 }
 
 /** Describes the selected ICE path well enough to choose a sender budget. */
@@ -89,7 +100,10 @@ export function sameSettings(a: LeashSettings, b: LeashSettings): boolean {
   return (
     a.maxBitrateBps === b.maxBitrateBps &&
     a.scaleResolutionDownBy === b.scaleResolutionDownBy &&
-    a.maxFramerate === b.maxFramerate
+    a.maxFramerate === b.maxFramerate &&
+    (a.active !== false) === (b.active !== false) &&
+    (a.degradation ?? "maintain-resolution") ===
+      (b.degradation ?? "maintain-resolution")
   );
 }
 
@@ -102,6 +116,7 @@ export const SQUEEZED_FULL_VIDEO: LeashSettings = {
   maxBitrateBps: 450_000,
   scaleResolutionDownBy: 2,
   maxFramerate: 20,
+  degradation: "balanced",
 };
 
 /** Karaoke remains leaner than full video even at the tightest level. */
@@ -109,13 +124,48 @@ export const SQUEEZED_LEAN_VIDEO: LeashSettings = {
   maxBitrateBps: 300_000,
   scaleResolutionDownBy: 2,
   maxFramerate: 15,
+  degradation: "balanced",
+};
+
+/** A small, slow picture leaves most of the link for the voice. */
+export const TINY_FULL_VIDEO: LeashSettings = {
+  maxBitrateBps: 150_000,
+  scaleResolutionDownBy: 4,
+  maxFramerate: 12,
+  degradation: "balanced",
+};
+
+/** Karaoke keeps the tiny picture a little leaner still. */
+export const TINY_LEAN_VIDEO: LeashSettings = {
+  maxBitrateBps: 120_000,
+  scaleResolutionDownBy: 4,
+  maxFramerate: 10,
+  degradation: "balanced",
+};
+
+/** The final rung pauses the camera while retaining its last usable shape. */
+export const VOICE_ONLY_FULL_VIDEO: LeashSettings = {
+  ...TINY_FULL_VIDEO,
+  active: false,
+};
+
+/** Karaoke uses its tiny budget when voice must have the whole link. */
+export const VOICE_ONLY_LEAN_VIDEO: LeashSettings = {
+  ...TINY_LEAN_VIDEO,
+  active: false,
 };
 
 /**
  * How hard the camera is being held back: 0 is whatever the route allows,
- * 1 is the constrained budget, 2 is the squeezed one.
+ * 1 is the constrained budget, 2 is the squeezed one, 3 is the tiny one (a
+ * small, slow but live face), and 4 pauses the camera so the voice alone gets
+ * the link. 4 is reached only from evidence that the voice is failing even at
+ * 3 -- never from a lost link alone, which stops at LOST_LINK_LEVEL.
  */
-export type LeashLevel = 0 | 1 | 2;
+export type LeashLevel = 0 | 1 | 2 | 3 | 4;
+
+/** The rung a call drops to the moment its link is reported lost. */
+export const LOST_LINK_LEVEL: LeashLevel = 3;
 
 /**
  * What the voice is actually experiencing, as measured on the last poll.
@@ -137,6 +187,11 @@ export interface LinkHealth {
   audioLossPct: number | null;
   /** Where the numbers came from. Absent means our own jitter buffer. */
   source?: "their-report" | "our-buffer";
+  /**
+   * True when the other side's receiver report has not moved since the last
+   * poll: they have stopped hearing us. Counts as struggling, not as health.
+   */
+  stale?: boolean;
 }
 
 /** Buffering beyond this is a voice that is audibly behind the conversation. */
@@ -162,9 +217,10 @@ const LOSS_DOWN_PCT = 0.5;
  * correction made from evidence -- ideally from what the other side hears of
  * our voice. A call can sit on a perfectly good-looking route and still have
  * our voice arriving late and clipped at their end, because our camera is
- * filling an uplink nobody can see from the route alone. The gap between the thresholds is deliberate: a level is only given
- * back once the voice is clearly well, so the call does not oscillate between
- * a budget that hurts and one that barely stops hurting.
+ * filling an uplink nobody can see from the route alone. The gap between the
+ * thresholds is deliberate: a level is only given back once the voice is
+ * clearly well, so the call does not oscillate between a budget that hurts and
+ * one that barely stops hurting.
  */
 export function healthStep(
   previous: LeashLevel,
@@ -175,13 +231,24 @@ export function healthStep(
   const upMs = reported ? REPORTED_UP_MS : BUFFER_UP_MS;
   const downMs = reported ? REPORTED_DOWN_MS : BUFFER_DOWN_MS;
   const struggling =
-    (jitter !== null && jitter > upMs) || (loss !== null && loss > LOSS_UP_PCT);
-  if (struggling) return previous === 0 ? 1 : 2;
+    health.stale === true ||
+    (jitter !== null && jitter > upMs) ||
+    (loss !== null && loss > LOSS_UP_PCT);
+  if (struggling) {
+    // Only measured voice loss may pause the camera. A stale report is what
+    // every outage looks like, and treating it as proof would turn each
+    // reconnect into a voice-only call that then takes a minute to climb back.
+    if (previous === 3 && loss !== null && loss > 10) {
+      return 4;
+    }
+    if (previous === 4) return 4;
+    return Math.min(previous + 1, 3) as LeashLevel;
+  }
 
   // Missing readings are not evidence of health, so they cannot loosen it.
   const healthy =
     jitter !== null && jitter < downMs && loss !== null && loss < LOSS_DOWN_PCT;
-  if (healthy) return previous === 2 ? 1 : 0;
+  if (healthy) return Math.max(previous - 1, 0) as LeashLevel;
 
   return previous;
 }
@@ -244,6 +311,10 @@ export function profileFor(
   const effective = Math.max(routeLevel(route), level);
   const lean = mode === "lean";
 
+  if (effective === 4) {
+    return lean ? VOICE_ONLY_LEAN_VIDEO : VOICE_ONLY_FULL_VIDEO;
+  }
+  if (effective === 3) return lean ? TINY_LEAN_VIDEO : TINY_FULL_VIDEO;
   if (effective === 2) return lean ? SQUEEZED_LEAN_VIDEO : SQUEEZED_FULL_VIDEO;
   if (effective === 1) {
     return lean ? CONSTRAINED_LEAN_VIDEO : CONSTRAINED_FULL_VIDEO;
@@ -306,6 +377,8 @@ export function capToHeadroom(
     maxFramerate: tiny
       ? Math.min(budget.maxFramerate, 12)
       : budget.maxFramerate,
+    active: budget.active,
+    degradation: tiny ? "balanced" : budget.degradation,
   };
 }
 
@@ -359,6 +432,7 @@ export interface EncodingLike {
   maxBitrate?: number;
   scaleResolutionDownBy?: number;
   maxFramerate?: number;
+  active?: boolean;
   networkPriority?: string;
   priority?: string;
 }
@@ -378,6 +452,7 @@ const encodingFor = (settings: LeashSettings): EncodingLike => ({
   maxBitrate: settings.maxBitrateBps,
   scaleResolutionDownBy: settings.scaleResolutionDownBy,
   maxFramerate: settings.maxFramerate,
+  active: settings.active !== false,
 });
 
 /**
@@ -436,16 +511,16 @@ export async function applyLeash(
       encoding.maxBitrate = settings.maxBitrateBps;
       encoding.scaleResolutionDownBy = settings.scaleResolutionDownBy;
       encoding.maxFramerate = settings.maxFramerate;
+      encoding.active = settings.active !== false;
     }
   }
 
-  // Asks the encoder to sacrifice framerate before resolution. A call between
-  // two faces and a film wants one steady picture far more than it wants the
-  // extra frames, and the reported symptom was exactly the opposite trade:
-  // bitrate being poured into a picture that kept collapsing to 360p.
+  // The low rungs allow the encoder to trade picture size for motion, because
+  // holding source resolution around 100 kbps leaves a frozen picture instead.
   let preferenceSet = false;
   try {
-    params.degradationPreference = "maintain-resolution";
+    params.degradationPreference =
+      settings.degradation ?? "maintain-resolution";
     preferenceSet = true;
   } catch {
     // This build will not accept the hint. Only the hint is lost.
@@ -538,18 +613,22 @@ export const INITIAL_LEASH_HEALTH: LeashHealthState = {
   capKbps: null,
 };
 
-/** A change of level costs a keyframe, so it may not happen more often than this. */
-export const LEASH_MOVE_COOLDOWN_MS = 15_000;
+/** Loosening waits for sustained health so a recovering link does not oscillate. */
+export const LEASH_LOOSEN_COOLDOWN_MS = 20_000;
+/**
+ * Backwards-compatible name for the cooldown that now applies only to loosening.
+ * Tightening bypasses it so a struggling voice receives relief on the next poll.
+ */
+export const LEASH_MOVE_COOLDOWN_MS = LEASH_LOOSEN_COOLDOWN_MS;
 
 /**
  * Advances the health reaction by one stats poll.
  *
  * A single poll is a three-second window, and one bad window is as likely to
  * be a microwave or a neighbour's download as a real change in the link. So a
- * move needs two consecutive polls asking for it in the same direction, and
- * even then the level may shift only one step per cooldown: each shift is a
- * reconfiguration and a keyframe, and a leash that jerks back and forth is its
- * own source of the congestion it is meant to relieve.
+ * Severe evidence tightens at once, while ordinary trouble needs two polls but
+ * never waits for a cooldown. Loosening remains deliberately slow: it needs
+ * two healthy polls and the shared cooldown after the last change.
  */
 export function advanceLeashHealth(
   state: LeashHealthState,
@@ -562,11 +641,21 @@ export function advanceLeashHealth(
     return state.pending === 0 ? state : { ...state, pending: 0 };
   }
 
+  const reported = health.source === "their-report";
+  const upMs = reported ? REPORTED_UP_MS : BUFFER_UP_MS;
+  const severe =
+    health.stale === true ||
+    (health.audioLossPct !== null && health.audioLossPct > 5) ||
+    (health.audioJitterMs !== null && health.audioJitterMs > upMs * 2);
+  if (direction === 1 && severe) {
+    return { ...state, level: proposed, pending: 0, movedAtMs: nowMs };
+  }
+
   const confirmed = state.pending === direction;
   const cooledDown =
     state.movedAtMs === null ||
-    nowMs - state.movedAtMs >= LEASH_MOVE_COOLDOWN_MS;
-  if (confirmed && cooledDown) {
+    nowMs - state.movedAtMs >= LEASH_LOOSEN_COOLDOWN_MS;
+  if (confirmed && (direction === 1 || cooledDown)) {
     return { ...state, level: proposed, pending: 0, movedAtMs: nowMs };
   }
   return { ...state, pending: direction };
@@ -596,7 +685,7 @@ export function advanceHeadroom(
   if (rising) {
     const cooledDown =
       state.movedAtMs === null ||
-      nowMs - state.movedAtMs >= LEASH_MOVE_COOLDOWN_MS;
+      nowMs - state.movedAtMs >= LEASH_LOOSEN_COOLDOWN_MS;
     if (!cooledDown) return state;
   }
   // The very first estimate is adopted without stamping the cooldown: it is
@@ -606,5 +695,35 @@ export function advanceHeadroom(
     ...state,
     capKbps: bucket,
     movedAtMs: first ? state.movedAtMs : nowMs,
+  };
+}
+
+/**
+ * The leash the moment the browser reports the link lost ("disconnected" or
+ * "failed"): straight to at least LOST_LINK_LEVEL, skipping the confirmation
+ * and the cooldown, so the route comes back carrying a picture it can afford.
+ */
+export function leashOnLinkLost(
+  state: LeashHealthState,
+  nowMs: number,
+): LeashHealthState {
+  if (state.level >= LOST_LINK_LEVEL) return state;
+  return { ...state, level: LOST_LINK_LEVEL, pending: 0, movedAtMs: nowMs };
+}
+
+/**
+ * The leash a rebuilt connection starts from: the level the old one had
+ * reached, never the full budget, with the cooldown stamped so it climbs back
+ * slowly. The upload estimate belonged to the old connection and is dropped.
+ */
+export function carryLeashHealth(
+  state: LeashHealthState,
+  nowMs: number,
+): LeashHealthState {
+  return {
+    level: state.level,
+    pending: 0,
+    movedAtMs: state.level > 0 ? nowMs : null,
+    capKbps: null,
   };
 }
