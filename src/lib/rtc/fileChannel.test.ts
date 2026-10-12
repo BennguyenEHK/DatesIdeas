@@ -116,6 +116,27 @@ describe("file channel assembler", () => {
     expect(progress.every((value, index) => index === 0 || value >= progress[index - 1])).toBe(true);
   });
 
+  it("counts the chunks it holds, and takes the ones that follow after a gap", () => {
+    // The channel dropped with two of four chunks in. The assembler keeps them,
+    // says the next index it needs, and the sender continues from there.
+    const source = randomBuffer(CHUNK_BYTES * 3 + 5);
+    const chunks = chunkTrack(source);
+    const assembler = createAssembler(chunks.length, source.byteLength);
+    expect(assembler.receivedChunks).toBe(0);
+
+    assembler.push(chunks[0]);
+    assembler.push(chunks[1]);
+    expect(assembler.receivedChunks).toBe(2);
+
+    for (const chunk of chunks.slice(assembler.receivedChunks)) assembler.push(chunk);
+
+    expect(assembler.receivedChunks).toBe(chunks.length);
+    const state = assembler.state;
+    expect(state.status).toBe("complete");
+    if (state.status !== "complete") return;
+    expect([...new Uint8Array(state.bytes)]).toEqual([...new Uint8Array(source)]);
+  });
+
   it("keeps its terminal state when pushed again", () => {
     const assembler = createAssembler(1, 1);
     const complete = assembler.push(bufferOf(1));

@@ -147,6 +147,25 @@ export type PeerMessage =
   // the other person does not have yet.
   | { t: "track-ready"; requestId: string }
   | { t: "track-error"; requestId: string; message: string }
+  // The song through the storage bucket rather than through the call. The
+  // sender uploads it and reports progress; once it is up, track-url says where
+  // it is. The receiver downloads it straight from the bucket, which neither
+  // crosses the ocean on the call's own link nor competes with the voice.
+  | { t: "track-progress"; requestId: string; sentBytes: number; bytes: number }
+  | {
+      t: "track-url";
+      requestId: string;
+      url: string;
+      title: string;
+      durationSec: number;
+      bytes: number;
+    }
+  // The receiver could not fetch track-url: the sender falls back to sending
+  // the song over the call's file channel instead.
+  | { t: "track-url-failed"; requestId: string }
+  // The file channel came back after a rebuild with part of a song already
+  // here: carry on from this chunk instead of starting again.
+  | { t: "track-resume"; requestId: string; fromChunk: number }
   // CreateSpace. One drawing operation, applied by both sides to the same
   // scene. The scene itself never crosses -- only the edits do, and ops.ts is
   // what guarantees two screens holding the same edits hold the same picture.
@@ -378,6 +397,33 @@ export function decode(raw: string): PeerMessage | null {
     case "track-error":
       return isStr(m.requestId) && isStr(m.message)
         ? { t: "track-error", requestId: m.requestId, message: m.message }
+        : null;
+    case "track-progress":
+      return isStr(m.requestId) && isNum(m.sentBytes) && isNum(m.bytes) && m.sentBytes >= 0 && m.bytes >= 0
+        ? { t: "track-progress", requestId: m.requestId, sentBytes: m.sentBytes, bytes: m.bytes }
+        : null;
+    case "track-url":
+      return isStr(m.requestId) &&
+        isStr(m.url) &&
+        m.url.startsWith("https://") &&
+        isStr(m.title) &&
+        isNum(m.durationSec) &&
+        isNum(m.bytes) &&
+        m.bytes > 0
+        ? {
+            t: "track-url",
+            requestId: m.requestId,
+            url: m.url,
+            title: m.title,
+            durationSec: m.durationSec,
+            bytes: m.bytes,
+          }
+        : null;
+    case "track-url-failed":
+      return isStr(m.requestId) ? { t: "track-url-failed", requestId: m.requestId } : null;
+    case "track-resume":
+      return isStr(m.requestId) && isNum(m.fromChunk) && Number.isInteger(m.fromChunk) && m.fromChunk >= 0
+        ? { t: "track-resume", requestId: m.requestId, fromChunk: m.fromChunk }
         : null;
     case "canvas":
       return isCanvasOp(m.op) ? { t: "canvas", op: m.op } : null;

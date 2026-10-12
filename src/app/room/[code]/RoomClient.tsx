@@ -410,6 +410,10 @@ export function RoomClient({ code }: { code: string }) {
       }
       if (
         msg.t === "track-meta" ||
+        msg.t === "track-progress" ||
+        msg.t === "track-url" ||
+        msg.t === "track-url-failed" ||
+        msg.t === "track-resume" ||
         msg.t === "track-done" ||
         msg.t === "track-error"
       ) {
@@ -986,6 +990,12 @@ export function RoomClient({ code }: { code: string }) {
   );
 
   const transfer = useTrackTransfer({
+    // The song goes up to this room's folder in the bucket and comes down the
+    // other side from there, instead of across the call.
+    roomCode: code,
+    // Held while a song is going out: the picture's share of the upload goes
+    // to the song, and the voice carries on.
+    holdCamera: peer.holdCamera,
     sendMessage: peer.send,
     sendFileChunk: peer.sendFileChunk,
     fileChannelOpen: peer.fileChannelOpen,

@@ -4,6 +4,7 @@ import {
   TRANSFER_MAX_KBPS,
   TRANSFER_MIN_KBPS,
   TRANSFER_SHARE,
+  TRANSFER_SHARE_CAMERA_PAUSED,
   TRANSFER_UNKNOWN_KBPS,
   delayForChunkMs,
   nextSendAt,
@@ -20,6 +21,25 @@ describe("paceKbps", () => {
     // The relay from the field report: ~700 kbps, of which the song gets 30%.
     expect(TRANSFER_SHARE).toBe(0.3);
     expect(paceKbps(link({ outgoingKbps: 700 }))).toBeCloseTo(210);
+  });
+
+  it("paceKbps uses 0.7 of the estimate while the camera is paused", () => {
+    expect(TRANSFER_SHARE_CAMERA_PAUSED).toBe(0.7);
+    expect(paceKbps(link({ outgoingKbps: 700, cameraPaused: true }))).toBeCloseTo(
+      490,
+    );
+    // Absent or false is the ordinary share.
+    expect(paceKbps(link({ outgoingKbps: 700, cameraPaused: false }))).toBeCloseTo(
+      210,
+    );
+    // The same floor, ceiling and unknown-link guess apply to the larger share.
+    expect(paceKbps(link({ outgoingKbps: 10, cameraPaused: true }))).toBe(
+      TRANSFER_MIN_KBPS,
+    );
+    expect(paceKbps(link({ outgoingKbps: 50_000, cameraPaused: true }))).toBe(
+      TRANSFER_MAX_KBPS,
+    );
+    expect(paceKbps(link({ cameraPaused: true }))).toBe(TRANSFER_UNKNOWN_KBPS);
   });
 
   it("uses a relay-sized guess, never unlimited, before anything is measured", () => {
@@ -50,9 +70,16 @@ describe("shouldHold", () => {
     expect(shouldHold(EMPTY_LINK)).toBe(false);
   });
 
-  it("holds when the other side reports losing our voice", () => {
-    expect(shouldHold(link({ theirLossPct: 3.1 }))).toBe(true);
-    expect(shouldHold(link({ theirLossPct: 3 }))).toBe(false);
+  it("loss alone never holds; jitter over 400 ms does", () => {
+    // Random Wi-Fi loss is not caused by the song. Holding on it starved the
+    // song: 7% -> 10% in three minutes.
+    expect(shouldHold(link({ theirLossPct: 3.1 }))).toBe(false);
+    expect(shouldHold(link({ theirLossPct: 40 }))).toBe(false);
+    expect(shouldHold(link({ audioLossPct: 60 }))).toBe(false);
+    expect(shouldHold(link({ theirLossPct: 40, theirJitterMs: 20 }))).toBe(false);
+    expect(shouldHold(link({ theirLossPct: 40, theirJitterMs: 401 }))).toBe(true);
+    expect(shouldHold(link({ theirJitterMs: 401 }))).toBe(true);
+    expect(shouldHold(link({ theirJitterMs: 400 }))).toBe(false);
   });
 
   it("holds when the other side reports our voice jittering", () => {
@@ -61,7 +88,7 @@ describe("shouldHold", () => {
   });
 
   it("falls back on our own reception only when they have reported nothing", () => {
-    expect(shouldHold(link({ audioLossPct: 5.3 }))).toBe(true);
+    expect(shouldHold(link({ audioLossPct: 5.3 }))).toBe(false);
     expect(shouldHold(link({ audioJitterMs: 1813 }))).toBe(true);
     expect(shouldHold(link({ audioLossPct: 3, audioJitterMs: 400 }))).toBe(
       false,
@@ -69,7 +96,7 @@ describe("shouldHold", () => {
   });
 
   it("trusts a healthy report from them over our own bad reception", () => {
-    expect(shouldHold(link({ theirLossPct: 0, audioLossPct: 10 }))).toBe(false);
+    expect(shouldHold(link({ theirLossPct: 0, audioJitterMs: 2000 }))).toBe(false);
     expect(shouldHold(link({ theirJitterMs: 20, audioJitterMs: 2000 }))).toBe(
       false,
     );

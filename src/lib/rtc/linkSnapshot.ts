@@ -23,6 +23,11 @@ export interface LinkSnapshot {
   theirLossPct: number | null;
   /** Whether media is crossing a TURN relay. */
   relayed: boolean | null;
+  /**
+   * True while the camera is held off for a song being sent, so the song may
+   * take the share of the link the picture would otherwise use. Absent = false.
+   */
+  cameraPaused?: boolean;
 }
 
 export const EMPTY_LINK: LinkSnapshot = {

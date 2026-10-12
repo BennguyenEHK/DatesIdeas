@@ -55,13 +55,13 @@ import {
   advanceHeadroom,
   advanceLeashHealth,
   applyAudioPriority,
+  applyLeash,
   budgetFor,
   headroomCapBps,
   INITIAL_LEASH_HEALTH,
   carryLeashHealth,
   leashOnLinkLost,
   leashChanged,
-  leashSenders,
   profileFor,
   type AppliedLeash,
   type LeashHealthState,
@@ -194,6 +194,8 @@ export interface PeerApi {
    */
   setMicOn: (on: boolean) => void;
   setCamOn: (on: boolean) => void;
+  /** Pauses the camera on the wire while a song is being sent; the voice carries on. */
+  holdCamera: (on: boolean) => void;
   retry: () => void;
   /** How often this call has had to be rebuilt, and how long it was gone. */
   resilience: Resilience;
@@ -321,6 +323,10 @@ export function usePeerConnection(
   // people try to sing in time with each other, so it doubles as the answer to
   // "is anyone duetting" that the buffer policy needs.
   const modeRef = useRef<VideoMode>("full");
+  // Whether a karaoke song is being sent and the camera is held off the wire.
+  // Kept as a ref so every re-application, including one for a rebuilt
+  // connection, sees the hold without it being threaded through the hook.
+  const cameraHeld = useRef(false);
   // What the encoder and the buffers were last actually told. The route is
   // recomputed from a wobbling measurement every three seconds; these are what
   // stop that wobble from being handed to a running encoder as if it were news.
@@ -818,6 +824,7 @@ export function usePeerConnection(
             appliedLeash,
             appliedTargets,
             leashHealth.current,
+            cameraHeld.current,
           );
           // A rescue already on its way is left alone; re-arming it on every
           // flicker would keep pushing the restart further out.
@@ -841,6 +848,7 @@ export function usePeerConnection(
             appliedLeash,
             appliedTargets,
             leashHealth.current,
+            cameraHeld.current,
           );
           // "failed" does not heal by itself, so there is no grace to wait
           // out -- only the backoff, which replaces any pending grace timer.
@@ -1117,6 +1125,7 @@ export function usePeerConnection(
           appliedLeash,
           appliedTargets,
           health,
+          cameraHeld.current,
         );
       }
     };
@@ -1202,13 +1211,15 @@ export function usePeerConnection(
   );
 
   const readLink = useCallback(
-    () =>
-      linkFrom(
+    (): LinkSnapshot => ({
+      ...linkFrom(
         topologyRef.current,
         ratesRef.current,
         lastAudioJitterRef.current,
         theirAudioRef.current,
       ),
+      cameraPaused: cameraHeld.current,
+    }),
     [],
   );
 
@@ -1281,6 +1292,25 @@ export function usePeerConnection(
     for (const track of streamRef.current?.getVideoTracks() ?? []) track.enabled = on;
   }, []);
 
+  // Re-applies at once rather than waiting for the next stats poll, so the
+  // picture stops on the wire as the song starts. With no connection yet the
+  // flag is simply kept, and the first application picks it up.
+  const holdCamera = useCallback((on: boolean) => {
+    cameraHeld.current = on;
+    const pc = pcRef.current;
+    if (!pc) return;
+    applyRouteDecisions(
+      pc,
+      routeRef.current,
+      modeRef.current,
+      receiversRef.current,
+      appliedLeash,
+      appliedTargets,
+      leashHealth.current,
+      cameraHeld.current,
+    );
+  }, []);
+
   const setVideoMode = useCallback((mode: VideoMode) => {
     modeRef.current = mode;
     const pc = pcRef.current;
@@ -1297,6 +1327,7 @@ export function usePeerConnection(
       appliedLeash,
       appliedTargets,
       leashHealth.current,
+      cameraHeld.current,
     );
   }, []);
 
@@ -1320,6 +1351,7 @@ export function usePeerConnection(
       appliedLeash,
       appliedTargets,
       leashHealth.current,
+      cameraHeld.current,
     );
   }, [route]);
 
@@ -1479,6 +1511,7 @@ export function usePeerConnection(
     camOn,
     setMicOn,
     setCamOn,
+    holdCamera,
     retry,
     resilience,
     readLink,
@@ -1536,17 +1569,29 @@ function applyRouteDecisions(
   appliedLeash: { current: AppliedLeash | null },
   appliedTargets: { current: string | null },
   health: LeashHealthState,
+  held: boolean,
 ): void {
   const capBps = headroomCapBps(health.capKbps);
-  const next: AppliedLeash = {
-    profile: profileFor(mode, route, health.level),
-    settings: budgetFor(mode, route, health.level, capBps),
-  };
+  const named = profileFor(mode, route, health.level);
+  const budget = budgetFor(mode, route, health.level, capBps);
+  // A held camera keeps its budget and switches the encoder off. The profile
+  // carries the switch as well, because leashChanged compares only the
+  // profile's active flag; without it, toggling the hold would never register.
+  const next: AppliedLeash = held
+    ? {
+        profile: { ...named, active: false },
+        settings: { ...budget, active: false },
+      }
+    : { profile: named, settings: budget };
   // leashChanged is sameSettings plus a tolerance for the cap: a bitrate
   // that moved less than a fifth because the estimate wobbled is not news.
   if (leashChanged(appliedLeash.current, next)) {
     appliedLeash.current = next;
-    void leashSenders(pc.getSenders(), mode, route, health.level, capBps);
+    // leashSenders would recompute the budget without the hold, so the
+    // settings decided here are handed to each sender directly.
+    void Promise.all(
+      pc.getSenders().map((sender) => applyLeash(sender, next.settings)),
+    );
   }
 
   // The buffers get the same treatment, keyed on the two targets they resolve

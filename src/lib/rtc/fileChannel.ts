@@ -28,6 +28,15 @@ export type AssemblerState =
 export interface Assembler {
   push(chunk: ArrayBuffer): AssemblerState;
   readonly state: AssemblerState;
+  /**
+   * How many chunks are held, in order from the first.
+   *
+   * Chunks are sent and received in order on one ordered stream, so this is
+   * also the index of the next chunk needed. After the channel drops and comes
+   * back, it is what the receiver asks the sender to carry on from: the
+   * assembler keeps what it has and simply takes the chunks that follow.
+   */
+  readonly receivedChunks: number;
 }
 
 function nonNegativeInteger(value: number): number {
@@ -126,6 +135,9 @@ export function createAssembler(expectedChunks: number, expectedBytes: number): 
     },
     get state(): AssemblerState {
       return state;
+    },
+    get receivedChunks(): number {
+      return chunks.length;
     },
   };
 }
