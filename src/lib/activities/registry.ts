@@ -78,13 +78,15 @@ export function activityKey(id: ActivityId): number {
 }
 
 /**
- * Where tonight's music bar shows: the plain call, the cards and CreateSpace.
+ * Where tonight's music bar shows: everywhere except the two films.
  *
- * Absent only where the two films take the shared player. Anywhere else the
- * bar has to stay mounted -- it holds the YouTube player the music plays
- * through, so hiding it in an activity cut the song off there even though
- * nothing had stopped it.
+ * Karaoke and the movie take the shared player, so the bar gives way to them.
+ * Anywhere else the bar has to stay mounted -- it holds the YouTube player the
+ * music plays through, so hiding it in an activity cut the song off there even
+ * though nothing had stopped it. It used to be a list of the activities that
+ * kept it, and every activity added since (the Lookbook, GameWord) silently
+ * stopped the music by not being on that list.
  */
 export function showsMusicBar(id: ActivityId | null): boolean {
-  return id === null || id === "cards" || id === "createspace";
+  return id !== "karaoke" && id !== "movie";
 }

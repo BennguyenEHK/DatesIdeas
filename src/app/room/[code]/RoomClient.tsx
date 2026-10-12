@@ -776,7 +776,7 @@ export function RoomClient({ code }: { code: string }) {
     resyncMusic.current = resyncMusicNow;
     stopMusic.current = stopMusicNow;
   }, [acceptMusicNow, resyncMusicNow, stopMusicNow]);
-  // The bar lives under the plain call, the cards and CreateSpace; see
+  // The bar lives under everything except the two films; see
   // showsMusicBar for why it cannot simply hide inside an activity.
   const musicBarShowing = showsMusicBar(current);
 

@@ -92,6 +92,13 @@ describe("showsMusicBar", () => {
     expect(showsMusicBar("createspace")).toBe(true);
   });
 
+  it("keeps the music playing in the Lookbook, GameWord and every other activity", () => {
+    for (const id of ACTIVITY_IDS) {
+      if (id === "karaoke" || id === "movie") continue;
+      expect(showsMusicBar(id)).toBe(true);
+    }
+  });
+
   it("gives way to the two films, which own the player", () => {
     expect(showsMusicBar("karaoke")).toBe(false);
     expect(showsMusicBar("movie")).toBe(false);
