@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { isValidRoomCode } from "@/lib/room/code";
 import { karaokeKey } from "@/lib/karaoke/keys";
-import { presignKeepsake } from "@/lib/storage/objects";
+import { deleteKeys, listKeys, presignKeepsake } from "@/lib/storage/objects";
+import { KARAOKE_MAX_AGE_MS } from "@/lib/storage/cleanup";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,6 +66,17 @@ export async function POST(request: Request) {
     // is over, and the caller can do nothing different about the two.
     return NextResponse.json({ error: "this room is not open" }, { status: 404 });
   }
+
+  // Songs this room has finished with make space for the new one. The cron only
+  // runs nightly, so this is what keeps the bucket clear during an evening; a
+  // failed sweep must never stop the song, and the nightly cleanup catches it.
+  try {
+    const now = Date.now();
+    const finished = (await listKeys(`karaoke/${room}/`))
+      .filter((o) => o.lastModified !== null && now - o.lastModified.getTime() > KARAOKE_MAX_AGE_MS)
+      .map((o) => o.key);
+    await deleteKeys(finished);
+  } catch {}
 
   // The key is built HERE, never accepted from the caller: a signed PUT is
   // permission to write to exactly one path.

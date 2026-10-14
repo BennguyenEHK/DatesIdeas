@@ -53,7 +53,8 @@ leash application keeps the camera paused; release re-applies the normal leash.
     404 room unknown/expired; 503 storage not configured or signing failed.
 - Keys: `karaoke/<ROOM>/<32 lowercase hex>.mp4` (src/lib/karaoke/keys.ts).
 - Cleanup (src/lib/storage/cleanup.ts): delete `karaoke/` objects whose room is
-  no longer open, or whose lastModified is more than 24 h old. `mayDelete`
+  no longer open, or whose lastModified is more than 30 min old (the upload
+  route also sweeps its own room on each new song). `mayDelete`
   accepts only well-formed karaoke keys. Report `karaokeFilesDeleted`.
 - The bucket's CORS already allows PUT and GET with Range from any origin
   (verified with preflights on 2026-10-12). No manual bucket setup.

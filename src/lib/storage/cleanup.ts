@@ -20,10 +20,10 @@ import type { StoredObject } from "./objects";
  *      is never deleted because a room closed.
  *   3. An album file that no album entry uses goes -- but only once it is more
  *      than a day old, so an upload still in progress can never be caught.
- *   4. A karaoke song goes once its room has closed, or once it is more than a
- *      day old, whichever comes first. A song is only ever needed while the two
- *      of them are singing, and a room lives for a day at most, so a song older
- *      than that belongs to a room that is over or was never closed properly.
+ *   4. A karaoke song goes once its room has closed, or once it is more than
+ *      half an hour old, whichever comes first. A song lasts a few minutes and
+ *      is only needed while the two of them are singing it, so after half an
+ *      hour it is finished with. The next upload in the room clears these too.
  *      A key the cleanup cannot place in a room is never deleted.
  *
  * The room itself is never deleted. The home page's "past evenings" reads it.
@@ -32,7 +32,7 @@ import type { StoredObject } from "./objects";
 /** How long an album file with no entry is left alone before it counts as stuck. */
 export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 /** How long a karaoke song may sit in the bucket, even for a room that is still open. */
-export const KARAOKE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const KARAOKE_MAX_AGE_MS = 30 * 60 * 1000;
 
 export interface CleanupDeps {
   now: Date;
@@ -121,7 +121,7 @@ export async function runCleanup(deps: CleanupDeps): Promise<CleanupReport> {
     albumOrphansDeleted = await deps.deleteKeys(orphans);
   }
 
-  // ---- 4. karaoke songs from closed rooms, or older than a day
+  // ---- 4. karaoke songs from closed rooms, or older than half an hour
   const karaokeObjects = (await deps.listKeys("karaoke/")).flatMap((object) => {
     const room = karaokeRoom(object.key);
     return room === null ? [] : [{ ...object, room }];

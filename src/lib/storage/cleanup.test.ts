@@ -178,7 +178,7 @@ describe("karaoke songs", () => {
     expect(report.karaokeFilesDeleted).toBe(0);
   });
 
-  it("deletes a song more than a day old even if its room is still listed open", async () => {
+  it("deletes a song more than half an hour old even if its room is still listed open", async () => {
     const stale = new Date(NOW.getTime() - KARAOKE_MAX_AGE_MS - 60_000);
     const { deps: d, deleted } = deps({
       bucket: { [song("OPEN12")]: stale },

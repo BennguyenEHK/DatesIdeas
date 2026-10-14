@@ -15,7 +15,10 @@ vi.mock("@/lib/db", () => ({
     return Promise.resolve(results.shift() ?? []);
   },
 }));
-vi.mock("@/lib/storage/objects", () => ({ presignKeepsake: presign }));
+let bucket: { key: string; lastModified: Date | null }[] = [];
+const listKeys = vi.fn(async (prefix: string) => bucket.filter((o) => o.key.startsWith(prefix)));
+const deleteKeys = vi.fn(async (keys: readonly string[]) => keys.length);
+vi.mock("@/lib/storage/objects", () => ({ presignKeepsake: presign, listKeys, deleteKeys }));
 
 const { POST } = await import("./route");
 const { isKaraokeKey } = await import("@/lib/karaoke/keys");
@@ -35,6 +38,9 @@ beforeEach(() => {
   queries.length = 0;
   results = [[{ "?column?": 1 }]];
   presign.mockClear();
+  bucket = [];
+  listKeys.mockClear();
+  deleteKeys.mockClear();
 });
 
 describe("POST /api/karaoke/track", () => {
@@ -106,5 +112,37 @@ describe("POST /api/karaoke/track", () => {
     const response = await POST(request(valid));
     expect(response.status).toBe(503);
     expect((await response.json()).error).toMatch(/not set up/);
+  });
+});
+
+describe("clearing the room's finished songs on the next upload", () => {
+  const song = (room: string, n: number) => `karaoke/${room}/${String(n).padStart(32, "0")}.mp4`;
+  const ago = (ms: number) => new Date(Date.now() - ms);
+  const MIN = 60 * 1000;
+
+  it("deletes this room's songs over half an hour old and keeps the rest", async () => {
+    bucket = [
+      { key: song("KW3KDD", 1), lastModified: ago(31 * MIN) },
+      { key: song("KW3KDD", 2), lastModified: ago(5 * MIN) },
+      { key: song("KW3KDD", 3), lastModified: null },
+      { key: song("OTHER1", 4), lastModified: ago(60 * MIN) },
+    ];
+    const response = await POST(request(valid));
+    expect(response.status).toBe(200);
+    expect(listKeys).toHaveBeenCalledWith("karaoke/KW3KDD/");
+    expect(deleteKeys).toHaveBeenCalledWith([song("KW3KDD", 1)]);
+  });
+
+  it("still signs the new song when the sweep fails", async () => {
+    listKeys.mockRejectedValueOnce(new Error("bucket down"));
+    const response = await POST(request(valid));
+    expect(response.status).toBe(200);
+    expect(presign).toHaveBeenCalledOnce();
+  });
+
+  it("sweeps nothing for a room that is not open", async () => {
+    results = [[]];
+    await POST(request(valid));
+    expect(listKeys).not.toHaveBeenCalled();
   });
 });
